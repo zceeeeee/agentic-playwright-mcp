@@ -21,3 +21,5 @@ site/
 workflows/*.log
 scripts/
 *.png
+test_cycle_report.json
+test_report.json
