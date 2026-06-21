@@ -97,6 +97,7 @@ nav:
   - 快速开始: quickstart.md
   - 架构: architecture.md
   - 技能库: skills.md
+  - 站点目录: site-catalog.md
   - 技能开发: skill-development-guide.md
   - API 参考: api.md
   - 决策记录:
