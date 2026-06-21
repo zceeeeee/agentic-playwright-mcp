@@ -499,8 +499,8 @@ def gui(host: str, port: int, debug: bool) -> None:
         )
         sys.exit(1)
 
-    click.echo(f"🚀 Starting GUI at http://{host}:{port}")
-    click.echo(f"   Press Ctrl+C to stop")
+    click.echo(f"Starting GUI at http://{host}:{port}")
+    click.echo(f"Press Ctrl+C to stop")
 
     app.run(host=host, port=port, debug=debug)
 
