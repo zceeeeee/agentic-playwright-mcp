@@ -1,1 +1,0 @@
-goto("https://github.com")

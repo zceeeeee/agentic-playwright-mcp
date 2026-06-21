@@ -1,1 +1,0 @@
-screenshot("page.png")
