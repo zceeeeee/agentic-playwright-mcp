@@ -28,7 +28,7 @@ if _ENV_FILE.is_file():
 _DEFAULTS: dict[str, str] = {
     "PLAYWRIGHT_DOWNLOAD_HOST": "",
     "BROWSER_HEADLESS": "false",
-    "USE_CLOAKBROWSER": "false",
+    "USE_CLOAKBROWSER": "true",
     "DOMAIN_DIR": str(_PROJECT_ROOT / "domains"),
     "LOG_LEVEL": "INFO",
     "LOG_FORMAT": "text",

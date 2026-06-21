@@ -31,7 +31,7 @@ _instance: "BrowserManager | None" = None
 
 def _is_cloak_enabled() -> bool:
     """Check if CloakBrowser engine is enabled via env var."""
-    return os.getenv("USE_CLOAKBROWSER", "false").strip().lower() == "true"
+    return os.getenv("USE_CLOAKBROWSER", "true").strip().lower() == "true"
 
 
 def _import_cloakbrowser():

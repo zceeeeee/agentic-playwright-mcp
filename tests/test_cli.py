@@ -401,13 +401,16 @@ class TestDoctorCommand:
 
     def test_cloakbrowser_enabled_missing(self, runner: CliRunner):
         """USE_CLOAKBROWSER=true without the package causes an error."""
-        def fake_import(name):
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
             if name == "cloakbrowser":
                 raise ImportError("no cloakbrowser")
-            return MagicMock()
+            return real_import(name, *args, **kwargs)
 
         with patch("src.cli._check_playwright_browsers", return_value=True), \
-             patch("importlib.import_module", side_effect=fake_import), \
+             patch("builtins.__import__", side_effect=fake_import), \
              patch("src.cli._get_package_version", return_value="1.0.0"), \
              patch.object(Path, "is_file", return_value=False), \
              patch.object(Path, "is_dir", return_value=True), \

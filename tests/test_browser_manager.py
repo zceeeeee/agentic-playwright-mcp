@@ -23,11 +23,11 @@ from src.core.browser_manager import (
 class TestIsCloakEnabled:
     """Tests for the _is_cloak_enabled helper."""
 
-    def test_default_false(self):
-        """Should return False when USE_CLOAKBROWSER is not set."""
+    def test_default_true(self):
+        """Should return True when USE_CLOAKBROWSER is not set (default)."""
         with patch.dict("os.environ", {}, clear=False):
             os.environ.pop("USE_CLOAKBROWSER", None)
-            assert _is_cloak_enabled() is False
+            assert _is_cloak_enabled() is True
 
     @pytest.mark.parametrize(
         "value, expected",
@@ -63,9 +63,10 @@ class TestBrowserManagerPlaywright:
     def teardown_method(self):
         reset_browser_manager()
 
+    @patch.dict("os.environ", {"USE_CLOAKBROWSER": "false"})
     @patch("src.core.browser_manager.sync_playwright")
     def test_launch_playwright(self, mock_pw):
-        """Should launch via Playwright by default."""
+        """Should launch via Playwright when explicitly set."""
         # sync_playwright() returns context, .start() returns the actual pw instance
         mock_context = MagicMock()
         mock_pw.return_value = mock_context
@@ -89,6 +90,7 @@ class TestBrowserManagerPlaywright:
         with pytest.raises(RuntimeError, match="尚未启动"):
             bm.get_page()
 
+    @patch.dict("os.environ", {"USE_CLOAKBROWSER": "false"})
     @patch("src.core.browser_manager.sync_playwright")
     def test_close(self, mock_pw):
         """Should close browser and stop playwright."""
@@ -107,6 +109,7 @@ class TestBrowserManagerPlaywright:
         mock_browser.close.assert_called_once()
         mock_pw_instance.stop.assert_called_once()
 
+    @patch.dict("os.environ", {"USE_CLOAKBROWSER": "false"})
     @patch("src.core.browser_manager.sync_playwright")
     def test_is_alive(self, mock_pw):
         """Should report alive after launch, dead after close."""
@@ -179,8 +182,10 @@ class TestBrowserManagerCloak:
         )
 
     @patch.dict("os.environ", {"USE_CLOAKBROWSER": "true"})
-    def test_launch_cloakbrowser_not_installed(self):
+    @patch("src.core.browser_manager._import_cloakbrowser")
+    def test_launch_cloakbrowser_not_installed(self, mock_import):
         """Should raise ImportError when cloakbrowser is not installed."""
+        mock_import.side_effect = ImportError("CloakBrowser 未安装")
         bm = BrowserManager()
         with pytest.raises(ImportError, match="未安装"):
             bm.launch()

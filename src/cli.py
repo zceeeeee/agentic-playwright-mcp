@@ -380,7 +380,7 @@ def doctor(fix: bool) -> None:
     # 7. Optional: CloakBrowser
     # ------------------------------------------------------------------
     click.echo("\n[7/7] Optional: CloakBrowser (stealth)")
-    use_cloak = os.getenv("USE_CLOAKBROWSER", "false").strip().lower() == "true"
+    use_cloak = os.getenv("USE_CLOAKBROWSER", "true").strip().lower() == "true"
     if use_cloak:
         try:
             import cloakbrowser  # noqa: F401

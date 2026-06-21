@@ -289,7 +289,7 @@ HTML_TEMPLATE = """
                     无头模式
                 </label>
                 <label>
-                    <input type="checkbox" id="useCloak" />
+                    <input type="checkbox" id="useCloak" checked />
                     CloakBrowser 反检测
                 </label>
                 <label>
