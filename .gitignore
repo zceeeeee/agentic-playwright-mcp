@@ -18,8 +18,22 @@ node_modules/
 .mypy_cache/
 site/
 .ruff_cache/
-workflows/*.log
+
+# Workflow artifacts
+workflows/
 scripts/
+
+# Test reports
+*_report.json
+*_cycle_report.json
+
+# Screenshots and images
 *.png
-test_cycle_report.json
-test_report.json
+*.jpg
+
+# Experience workspace (user-specific)
+workspace/
+
+# OS files
+.DS_Store
+Thumbs.db
