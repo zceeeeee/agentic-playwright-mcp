@@ -523,13 +523,12 @@ browser-agent doctor
 |------|--------|------|
 | **Web GUI** | `browser-agent gui` | 网页可视化操作，输入任务直接执行 |
 | **MCP Server** | Claude Desktop 连接 | 8 个工具直接可用 |
-| **简单搜索** | `run_task("帮我在百度搜索 Python 教程")` | 自动打开百度、输入、点击、返回结果 |
-| **简单导航** | `run_task("打开 https://example.com 并截图")` | 自动导航、截图保存 |
+| **自主任务** | `run_task("帮我在百度搜索 Python 教程")` | Agent 自动：截图→查技能→执行→返回结果 |
 | **脚本执行** | `run_script(code="goto('https://baidu.com')")` | 沙箱执行，返回结果 |
+| **经验复用** | 自动 | 相同任务第二次执行时自动复用已保存脚本 |
 | **技能查找** | `browse_skills(query="百度")` | 返回匹配的 16 个技能 |
 | **页面分析** | `analyze_page(question="登录按钮在哪？")` | 截图 + LLM 分析页面 |
 | **CLI 调试** | `browser-agent run "截图"` | 单次执行，查看结果 |
-| **环境检查** | `browser-agent doctor` | 检查 Python/Playwright/API Key |
 | **Python SDK** | `from src.sdk import AgentLoop` | 代码集成 |
 
 ### 能用但有限制的 ⚠️
@@ -537,9 +536,8 @@ browser-agent doctor
 | 场景 | 限制 |
 |------|------|
 | **复杂任务**（登录→搜索→翻页→提取数据） | Agent 循环的脚本生成是规则匹配，不能处理复杂逻辑 |
-| **未适配的网站** | 12 个站点适配器，其他网站靠通用模板或视觉 fallback |
+| **未适配的网站** | 13 个站点适配器，其他网站靠通用模板或视觉 fallback |
 | **视觉 fallback** | 需要 API Key，有延迟，坐标精度有限 |
-| **自愈机制** | 只在同一个域配置内生效，跨网站不行 |
 | **Agent 循环** | 最大步数限制（默认 10 步），超长任务会中断 |
 
 ### 还不能做的 ❌
