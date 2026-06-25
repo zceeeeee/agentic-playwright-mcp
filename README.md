@@ -55,6 +55,50 @@ browser-agent gui --port 8081
 
 打开浏览器访问 **http://localhost:8081**
 
+## Docker 部署
+
+```bash
+# 克隆
+git clone https://github.com/zceeeeee/agentic-playwright-mcp.git
+cd agentic-playwright-mcp
+
+# 构建镜像
+docker compose build
+
+# 启动服务（后台运行）
+docker compose up -d
+
+# 查看日志
+docker compose logs -f
+```
+
+服务启动后，MCP 客户端可通过 `http://localhost:8000` 连接。
+
+**环境变量**：在项目根目录创建 `.env` 文件配置 API Key：
+
+```env
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+OPENAI_API_KEY=sk-your-key-here
+```
+
+**MCP 配置（Claude Desktop）**：
+
+```json
+{
+  "mcpServers": {
+    "browser": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+**停止服务**：
+
+```bash
+docker compose down
+```
+
 ## 使用方式
 
 ### Web GUI

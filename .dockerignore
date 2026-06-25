@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist/
+build/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+
+# Tests
+tests/
+
+# Docs
+docs/
+site/
+
+# Reference projects (not needed in image)
+可参考项目/
+
+# OS
+.DS_Store
+Thumbs.db
