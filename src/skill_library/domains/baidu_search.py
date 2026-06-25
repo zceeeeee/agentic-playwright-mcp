@@ -8,15 +8,11 @@ def run(keyword: str):
         keyword: 搜索关键词。
 
     流程:
-        1. 导航到百度首页
-        2. 在搜索框输入关键词
-        3. 点击搜索按钮
-        4. 等待搜索结果加载
+        1. 构造百度搜索结果页 URL
+        2. 直接导航到结果页
     """
-    goto("https://www.baidu.com")
-    fill("#kw", keyword)  # L1 选择器: #kw → input[name='wd'] → .s_ipt
-    click("#su")  # L1 选择器: #su → input[type='submit'] → .btn-search
-    wait_for_navigation()
+    query = url_quote(keyword)
+    goto(f"https://www.baidu.com/s?wd={query}")
     log(f"百度搜索完成: {keyword}")
 
 

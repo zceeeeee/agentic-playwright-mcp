@@ -21,10 +21,11 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
+from typing import Any, Callable
 
 from src.core.browser_manager import get_browser_manager
 from src.core.event_bus import (
@@ -417,7 +418,7 @@ class AgentLoop:
 
         if skills:
             # 命中技能库
-            skill = skills[0]
+            skill = self._select_best_skill(skills, task)
             detail = self._registry.get_detail(skill.id)
 
             if detail and detail.source_code:
@@ -513,9 +514,6 @@ class AgentLoop:
         if not keyword:
             keyword = task  # 降级：用整个任务描述作为关键词
 
-        # 转义引号
-        keyword_escaped = keyword.replace('"', '\\"')
-
         # 检查源码是否已经有独立的 run() 调用（不是 def run 定义）
         # 去掉 def 语句后，检查是否还有 run( 调用
         code_without_defs = re.sub(r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code)
@@ -524,8 +522,26 @@ class AgentLoop:
             return source_code
 
         # 追加调用语句
-        call_script = f'{source_code}\n\n# 自动调用\nrun("{keyword_escaped}")'
+        call_script = f"{source_code}\n\n# 自动调用\nrun({json.dumps(keyword, ensure_ascii=False)})"
         return call_script
+
+    def _select_best_skill(self, skills: list[Any], task: str) -> Any:
+        """选择与任务最具体匹配的技能。
+
+        registry 会返回所有触发词命中的技能。这里避免“搜索/search”
+        这类宽泛触发词抢走“知乎搜索”“GitHub 搜索”等站点技能。
+        """
+        task_lower = task.lower()
+        broad_triggers = {"搜索", "search", "查找", "find", "找"}
+
+        def score(skill: Any) -> tuple[int, int, int]:
+            triggers = getattr(skill, "triggers", []) or []
+            matched = [t for t in triggers if t.lower() in task_lower]
+            specific = [t for t in matched if t.lower() not in broad_triggers]
+            url_patterns = getattr(skill, "url_patterns", []) or []
+            return (len(specific), len(matched), len(url_patterns))
+
+        return max(skills, key=score)
 
     def _extract_site(self, url: str) -> str:
         """从 URL 中提取站点名称。"""

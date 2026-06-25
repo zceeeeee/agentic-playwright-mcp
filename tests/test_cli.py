@@ -359,6 +359,28 @@ class TestRunCommand:
         runner.invoke(main, ["run", "--slow-mo", "500", "test task"])
         bm.launch.assert_called_once_with(headless=True, slow_mo=500)
 
+    @patch("src.cli._load_config")
+    @patch("src.core.agent_loop.run_task")
+    @patch("src.core.browser_manager.get_browser_manager")
+    def test_keep_open_waits_for_enter(
+        self, mock_get_bm, mock_run_task, mock_config, runner: CliRunner
+    ):
+        """--keep-open waits for Enter before closing the browser."""
+        from src.core.agent_loop import AgentTaskResult
+
+        bm = MagicMock()
+        bm.engine = "playwright"
+        mock_get_bm.return_value = bm
+
+        mock_run_task.return_value = AgentTaskResult(
+            success=True, task="t", steps=[], output="ok"
+        )
+
+        result = runner.invoke(main, ["run", "--keep-open", "test task"], input="\n")
+        assert result.exit_code == 0
+        assert "Browser kept open" in result.output
+        bm.close.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # doctor

@@ -6,12 +6,13 @@ def run(keyword: str):
 
     Args:
         keyword: 搜索关键词。
+
+    流程:
+        1. 构造知乎搜索结果页 URL
+        2. 直接导航到结果页
     """
-    goto("https://www.zhihu.com/search")
-    wait_for_navigation()
-    fill(".Input-wrapper input", keyword)
-    click(".SearchBar-searchButton")
-    wait_for_navigation()
+    query = url_quote(keyword)
+    goto(f"https://www.zhihu.com/search?type=content&q={query}")
     log(f"知乎搜索完成: {keyword}")
 
 

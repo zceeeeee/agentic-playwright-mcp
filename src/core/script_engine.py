@@ -14,6 +14,7 @@ import sys
 import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import quote_plus
 
 from src.core.browser_manager import get_browser_manager
 from src.core.event_bus import EVENT_SCRIPT_EXECUTE, Event, Phase, get_event_bus
@@ -231,6 +232,7 @@ class ScriptEngine:
         # 注入工具函数
         ns["print"] = safe_print
         ns["log"] = log
+        ns["url_quote"] = quote_plus
 
         # 注入页面状态函数
         ns["get_url"] = lambda: get_browser_manager().get_page().url

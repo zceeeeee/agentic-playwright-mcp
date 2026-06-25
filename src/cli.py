@@ -176,7 +176,13 @@ def serve(transport: str, host: str, port: int, debug: bool) -> None:
     show_default=True,
     help="Slow-down between actions (ms). Useful for headed debugging.",
 )
-def run(task: str, max_steps: int, headless: bool, slow_mo: int) -> None:
+@click.option(
+    "--keep-open",
+    is_flag=True,
+    default=False,
+    help="Keep the browser open until Enter is pressed.",
+)
+def run(task: str, max_steps: int, headless: bool, slow_mo: int, keep_open: bool) -> None:
     """Execute a natural-language TASK and print the result.
 
     Launches a browser, runs the agent loop, prints output, and exits.
@@ -243,6 +249,10 @@ def run(task: str, max_steps: int, headless: bool, slow_mo: int) -> None:
         click.secho(f"Agent loop error: {exc}", fg="red", err=True)
         sys.exit(1)
     finally:
+        if keep_open:
+            click.echo()
+            click.echo("Browser kept open. Press Enter here to close it.")
+            input()
         bm.close()
 
 
