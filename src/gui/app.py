@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 # 添加项目根目录到路径
@@ -31,6 +32,10 @@ from src.core.script_store import get_script_store  # noqa: E402
 from src.skill_library.registry import get_skill_registry  # noqa: E402
 
 app = Flask(__name__)
+
+# 保存当前活跃的 BrowserManager 引用，供 /api/close-browser 使用
+_active_bm = None
+_close_requested = False
 
 # HTML 模板
 HTML_TEMPLATE = """
@@ -292,6 +297,10 @@ HTML_TEMPLATE = """
                     最大步数:
                     <input type="number" id="maxSteps" value="10" min="1" max="50" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;" />
                 </label>
+                <label>
+                    <input type="checkbox" id="keepOpen" checked />
+                    保持浏览器开启
+                </label>
             </div>
         </div>
 
@@ -300,6 +309,9 @@ HTML_TEMPLATE = """
             <h2>
                 📊 执行结果
                 <span class="status" id="status" style="display:none;"></span>
+                <button class="btn btn-primary" id="closeBtn" onclick="closeBrowser()" style="display:none;float:right;font-size:14px;padding:6px 16px;">
+                    关闭浏览器
+                </button>
             </h2>
             <div class="output" id="output">
                 等待执行...
@@ -348,11 +360,13 @@ HTML_TEMPLATE = """
             status.textContent = '执行中';
             output.innerHTML = '';
 
+            const keepOpen = document.getElementById('keepOpen').checked;
             const options = {
                 task: task,
                 headless: document.getElementById('headless').checked,
                 use_cloak: document.getElementById('useCloak').checked,
                 max_steps: parseInt(document.getElementById('maxSteps').value) || 10,
+                keep_open: keepOpen,
             };
 
             try {
@@ -380,6 +394,13 @@ HTML_TEMPLATE = """
             } finally {
                 runBtn.disabled = false;
                 runBtn.innerHTML = '执行';
+                // keep_open 模式下显示"关闭浏览器"按钮
+                const closeBtn = document.getElementById('closeBtn');
+                if (document.getElementById('keepOpen').checked) {
+                    closeBtn.style.display = 'inline-block';
+                } else {
+                    closeBtn.style.display = 'none';
+                }
             }
         }
 
@@ -417,6 +438,25 @@ HTML_TEMPLATE = """
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // 关闭保持开启的浏览器
+        async function closeBrowser() {
+            const closeBtn = document.getElementById('closeBtn');
+            closeBtn.disabled = true;
+            closeBtn.innerHTML = '关闭中...';
+            try {
+                await fetch('/api/close-browser', { method: 'POST' });
+                closeBtn.style.display = 'none';
+                const status = document.getElementById('status');
+                status.className = 'status success';
+                status.textContent = '浏览器已关闭';
+            } catch (error) {
+                alert('关闭失败: ' + error.message);
+            } finally {
+                closeBtn.disabled = false;
+                closeBtn.innerHTML = '关闭浏览器';
+            }
         }
 
         // 标签页切换
@@ -518,9 +558,13 @@ def api_run():
     headless = data.get("headless", False)
     use_cloak = data.get("use_cloak", False)
     max_steps = data.get("max_steps", 10)
+    keep_open = data.get("keep_open", False)
 
     if not task:
         return jsonify({"success": False, "error": "任务描述不能为空"})
+
+    global _active_bm, _close_requested
+    _close_requested = False
 
     try:
         # 设置环境变量
@@ -535,6 +579,7 @@ def api_run():
 
         # 在当前线程启动浏览器
         bm = get_browser_manager()
+        _active_bm = bm
         bm.launch(headless=headless)
 
         # 执行任务
@@ -544,8 +589,11 @@ def api_run():
         # 保存最终 URL
         final_url = result.final_url or ""
 
-        # 关闭浏览器
-        bm.close()
+        # 关闭浏览器（keep_open 模式下保留浏览器供用户查看）
+        if not keep_open or _close_requested:
+            bm.close()
+            _active_bm = None
+            _close_requested = False
 
         return jsonify(
             {
@@ -572,6 +620,8 @@ def api_run():
 
     except Exception as exc:
         # 尝试清理浏览器
+        _active_bm = None
+        _close_requested = False
         try:
             reset_browser_manager()
         except Exception:
@@ -582,6 +632,36 @@ def api_run():
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
+
+
+@app.route("/api/close-browser", methods=["POST"])
+def api_close_browser():
+    """关闭 keep-open 模式下保持开启的浏览器。
+
+    如果任务仍在运行，设置标志让任务结束后自动关闭；
+    如果任务已完成，直接关闭浏览器。
+    """
+    global _active_bm, _close_requested
+
+    try:
+        # 设置标志：任务结束后自动关闭
+        _close_requested = True
+
+        # 尝试直接关闭（任务已完成时有效）
+        if _active_bm is not None:
+            try:
+                _active_bm.close()
+                _active_bm = None
+                _close_requested = False
+                from src.core.browser_manager import reset_browser_manager
+                reset_browser_manager()
+            except Exception:
+                # 任务仍在运行，close 会失败，靠标志位在任务结束后关闭
+                pass
+
+        return jsonify({"success": True})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)})
 
 
 @app.route("/api/skills")
@@ -704,7 +784,7 @@ def main():
     print(f"Starting GUI: http://{args.host}:{args.port}")
     print("Press Ctrl+C to stop")
 
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=False)
 
 
 if __name__ == "__main__":

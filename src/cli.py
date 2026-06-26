@@ -566,7 +566,7 @@ def gui(host: str, port: int, debug: bool) -> None:
     click.echo(f"Starting GUI at http://{host}:{port}")
     click.echo("Press Ctrl+C to stop")
 
-    app.run(host=host, port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug, threaded=False)
 
 
 if __name__ == "__main__":
