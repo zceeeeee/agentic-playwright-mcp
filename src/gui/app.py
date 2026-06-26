@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 # 添加项目根目录到路径
 _project_root = Path(__file__).resolve().parent.parent.parent
@@ -27,6 +29,7 @@ sys.path.insert(0, str(_project_root))
 from flask import Flask, jsonify, render_template_string, request  # noqa: E402
 
 from src.core.agent_loop import AgentLoop  # noqa: E402
+from src.core.auth_manager import get_auth_manager  # noqa: E402
 from src.core.browser_manager import get_browser_manager  # noqa: E402
 from src.core.script_store import get_script_store  # noqa: E402
 from src.skill_library.registry import get_skill_registry  # noqa: E402
@@ -36,6 +39,118 @@ app = Flask(__name__)
 # 保存当前活跃的 BrowserManager 引用，供 /api/close-browser 使用
 _active_bm = None
 _close_requested = False
+
+
+def _load_domain_hosts() -> dict[str, str]:
+    """Return domain-name -> hostname mapping from domains/*.yaml."""
+    import yaml
+
+    domains_dir = _project_root / "domains"
+    hosts: dict[str, str] = {}
+    if not domains_dir.is_dir():
+        return hosts
+
+    for path in domains_dir.glob("*.yaml"):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            data = {}
+
+        domain = data.get("name") or path.stem
+        base_url = data.get("base_url") or ""
+        host = urlparse(base_url).hostname or ""
+        if domain and host:
+            hosts[str(domain)] = host.removeprefix("www.")
+
+    return hosts
+
+
+def _domain_from_url(url: str) -> str | None:
+    """Map a browser URL back to a configured domain name."""
+    host = (urlparse(url).hostname or "").removeprefix("www.")
+    if not host:
+        return None
+
+    for domain, domain_host in _load_domain_hosts().items():
+        if host == domain_host or host.endswith(f".{domain_host}"):
+            return domain
+        if domain in host:
+            return domain
+
+    return _domain_from_host(host)
+
+
+def _domain_from_host(host: str) -> str | None:
+    """Fallback domain name for sites without domains/*.yaml entries."""
+    parts = [part for part in host.removeprefix("www.").split(".") if part]
+    if not parts:
+        return None
+    if len(parts) >= 2 and parts[-2] in {"com", "net", "org", "gov", "edu"}:
+        return parts[-3] if len(parts) >= 3 else parts[0]
+    return parts[-2] if len(parts) >= 2 else parts[0]
+
+
+def _domain_from_task(task: str) -> str | None:
+    """Best-effort domain detection before running a GUI task."""
+    task_lower = task.lower()
+    aliases = {
+        "zhihu": ("知乎",),
+        "weibo": ("微博",),
+        "xiaohongshu": ("小红书",),
+    }
+
+    for domain, names in aliases.items():
+        if any(name in task for name in names):
+            return domain
+
+    for domain, host in _load_domain_hosts().items():
+        if domain.lower() in task_lower or host.lower() in task_lower:
+            return domain
+
+    match = re.search(r"https?://([^/\s，,]+)", task_lower)
+    if match:
+        host = match.group(1).split(":")[0]
+        return _domain_from_host(host)
+
+    return None
+
+
+SITE_LOGIN_COOKIES = {
+    "zhihu": {"z_c0"},
+}
+
+
+def _storage_state_has_session(state: dict, domain: str | None = None) -> bool:
+    """Heuristic: decide whether current context contains save-worthy state."""
+    cookie_names = {str(cookie.get("name", "")).lower() for cookie in state.get("cookies", [])}
+    site_cookie_names = SITE_LOGIN_COOKIES.get((domain or "").lower())
+    if site_cookie_names is not None:
+        return any(name.lower() in cookie_names for name in site_cookie_names)
+
+    auth_words = (
+        "auth",
+        "login",
+        "session",
+        "token",
+        "uid",
+        "user",
+        "account",
+        "passport",
+        "sub",
+        "sso",
+    )
+
+    for name in cookie_names:
+        if any(word in name for word in auth_words):
+            return True
+
+    for origin in state.get("origins", []):
+        for item in origin.get("localStorage", []):
+            name = str(item.get("name", "")).lower()
+            if any(word in name for word in auth_words):
+                return True
+
+    return False
 
 # HTML 模板
 HTML_TEMPLATE = """
@@ -340,6 +455,69 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        const promptedSaveDomains = new Set();
+        let authPollTimer = null;
+
+        async function maybeLoadSavedAuth(task, options) {
+            const response = await fetch('/api/auth/suggest-load', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task }),
+            });
+            const result = await response.json();
+            if (result.domain && result.has_auth) {
+                const ok = confirm(`检测到 ${result.domain} 已有保存的登录信息，是否本次先加载？`);
+                if (ok) {
+                    options.load_auth_domain = result.domain;
+                }
+            }
+        }
+
+        function startAuthPolling() {
+            if (authPollTimer) {
+                clearInterval(authPollTimer);
+            }
+            authPollTimer = setInterval(checkCurrentAuthState, 3000);
+        }
+
+        function stopAuthPolling() {
+            if (authPollTimer) {
+                clearInterval(authPollTimer);
+                authPollTimer = null;
+            }
+        }
+
+        async function checkCurrentAuthState() {
+            try {
+                const response = await fetch('/api/auth/current');
+                const result = await response.json();
+                if (!result.browser_running || !result.domain || !result.has_session) {
+                    return;
+                }
+                if (promptedSaveDomains.has(result.domain)) {
+                    return;
+                }
+                promptedSaveDomains.add(result.domain);
+                const action = result.has_auth ? '更新保存' : '保存';
+                const ok = confirm(`检测到当前 ${result.domain} 页面可能已有登录状态，是否${action}登录信息？`);
+                if (!ok) {
+                    return;
+                }
+                const saveResponse = await fetch('/api/auth/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain: result.domain }),
+                });
+                const saved = await saveResponse.json();
+                if (saved.success) {
+                    alert(`已保存 ${result.domain} 登录信息：${saved.path}`);
+                } else {
+                    alert(`保存失败：${saved.error || '未知错误'}`);
+                }
+            } catch (error) {
+                console.warn('Auth polling failed:', error);
+            }
+        }
         // 任务执行
         async function runTask() {
             const task = document.getElementById('taskInput').value.trim();
@@ -370,6 +548,7 @@ HTML_TEMPLATE = """
             };
 
             try {
+                await maybeLoadSavedAuth(task, options);
                 const response = await fetch('/api/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -398,8 +577,10 @@ HTML_TEMPLATE = """
                 const closeBtn = document.getElementById('closeBtn');
                 if (document.getElementById('keepOpen').checked) {
                     closeBtn.style.display = 'inline-block';
+                    startAuthPolling();
                 } else {
                     closeBtn.style.display = 'none';
+                    stopAuthPolling();
                 }
             }
         }
@@ -431,6 +612,10 @@ HTML_TEMPLATE = """
                 html += `<div class="step info"><strong>最终 URL:</strong> ${result.final_url}</div>`;
             }
 
+            if (result.auth_domain) {
+                html += `<div class="step info"><strong>已加载登录信息:</strong> ${escapeHtml(result.auth_domain)}</div>`;
+            }
+
             return html || '无输出';
         }
 
@@ -450,6 +635,7 @@ HTML_TEMPLATE = """
                 closeBtn.style.display = 'none';
                 const status = document.getElementById('status');
                 status.className = 'status success';
+                stopAuthPolling();
                 status.textContent = '浏览器已关闭';
             } catch (error) {
                 alert('关闭失败: ' + error.message);
@@ -559,6 +745,7 @@ def api_run():
     use_cloak = data.get("use_cloak", False)
     max_steps = data.get("max_steps", 10)
     keep_open = data.get("keep_open", False)
+    load_auth_domain = data.get("load_auth_domain")
 
     if not task:
         return jsonify({"success": False, "error": "任务描述不能为空"})
@@ -580,7 +767,10 @@ def api_run():
         # 在当前线程启动浏览器
         bm = get_browser_manager()
         _active_bm = bm
-        bm.launch(headless=headless)
+        if load_auth_domain:
+            bm.launch_with_domain(domain=load_auth_domain, headless=headless)
+        else:
+            bm.launch(headless=headless)
 
         # 执行任务
         agent = AgentLoop(max_steps=max_steps)
@@ -615,6 +805,7 @@ def api_run():
                 "output": result.output,
                 "final_url": final_url,
                 "error": result.error,
+                "auth_domain": load_auth_domain,
             }
         )
 
@@ -632,6 +823,72 @@ def api_run():
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
+
+
+@app.route("/api/auth/suggest-load", methods=["POST"])
+def api_auth_suggest_load():
+    """Suggest loading saved auth before a GUI task starts."""
+    data = request.json or {}
+    task = data.get("task", "")
+    domain = _domain_from_task(task)
+    if not domain:
+        return jsonify({"domain": None, "has_auth": False})
+
+    am = get_auth_manager()
+    return jsonify({"domain": domain, "has_auth": am.has_auth(domain)})
+
+
+@app.route("/api/auth/current")
+def api_auth_current():
+    """Inspect the keep-open browser and report whether auth can be saved."""
+    bm = _active_bm or get_browser_manager()
+    if not bm.is_alive():
+        return jsonify({"browser_running": False})
+
+    try:
+        page = bm.get_page()
+        current_url = page.url
+        domain = bm.current_domain or _domain_from_url(current_url)
+        has_session = False
+
+        if bm._context is not None:
+            state = bm._context.storage_state()
+            has_session = _storage_state_has_session(state, domain)
+
+        am = get_auth_manager()
+        return jsonify(
+            {
+                "browser_running": True,
+                "url": current_url,
+                "domain": domain,
+                "has_auth": am.has_auth(domain) if domain else False,
+                "has_session": has_session,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"browser_running": False, "error": str(exc)})
+
+
+@app.route("/api/auth/save", methods=["POST"])
+def api_auth_save():
+    """Save the active browser context auth for a domain."""
+    data = request.json or {}
+    bm = _active_bm or get_browser_manager()
+
+    if not bm.is_alive() or bm._context is None:
+        return jsonify({"success": False, "error": "浏览器未启动或没有可保存的上下文"})
+
+    try:
+        page = bm.get_page()
+        domain = data.get("domain") or bm.current_domain or _domain_from_url(page.url)
+        if not domain:
+            return jsonify({"success": False, "error": "无法识别当前站点"})
+
+        am = get_auth_manager()
+        path = am.save_auth(domain, bm._context)
+        return jsonify({"success": True, "domain": domain, "path": str(path)})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)})
 
 
 @app.route("/api/close-browser", methods=["POST"])
