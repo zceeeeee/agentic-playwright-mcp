@@ -146,23 +146,36 @@ class AgentLoop:
 
 ### 阶段详解
 
-#### 1. 任务分析
+#### 1. 任务分析（规则优先 + LLM 兜底）
+
+任务理解采用**混合策略**，优先用硬编码规则（零延迟、零成本），失败时降级到 LLM：
 
 ```python
 async def _analyze_task(self, task: str) -> TaskAnalysis:
     """分析用户任务，提取关键信息"""
-    prompt = f"""
-    分析以下任务，提取：
-    1. 目标网站/域名
-    2. 主要操作（搜索、登录、填写表单等）
-    3. 关键参数（关键词、用户名等）
-    4. 预期结果
 
-    任务：{task}
-    """
-    response = await self.llm.generate(prompt)
-    return TaskAnalysis.parse(response)
+    # 第一步：硬编码规则（关键词匹配 + 正则）
+    intent = script_generator.parse_intent(task)
+    if intent:
+        return TaskAnalysis.from_intent(intent)
+
+    # 第二步：技能库触发词匹配
+    skills = skill_registry.search(query=task)
+    if skills:
+        best = select_best_skill(skills, task)
+        return TaskAnalysis.from_skill(best, task)
+
+    # 第三步：LLM 兜底（需要 OPENAI_API_KEY）
+    if llm_parser.available:
+        intent = llm_parser.parse(task)  # 返回 TaskIntent
+        if intent:
+            return TaskAnalysis.from_intent(intent)
+
+    return TaskAnalysis.failed("无法理解任务")
 ```
+
+LLM 返回结构化 JSON（`{action, target, engine, confidence}`），由现有模板拼装脚本。
+置信度低于 0.5 时视为失败，避免错误理解导致误操作。
 
 #### 2. 技能查找
 
@@ -396,6 +409,7 @@ class AgentLoop:
 2. **截图记录**：关键步骤截图，便于回溯
 3. **超时控制**：防止无限循环
 4. **最大步数**：限制执行步数，防止失控
+5. **LLM 兜底**：规则无法覆盖时自动降级到 LLM 意图解析，未配置 API Key 时静默跳过
 
 ## 未来演进
 
@@ -410,6 +424,7 @@ class AgentLoop:
 1. 支持多轮对话，逐步完善任务
 2. 添加任务分解能力
 3. 支持技能组合
+4. ~~规则失败时 LLM 兜底~~ ✅ 已实现（`intent_parser.py`）
 
 ### 长期
 

@@ -9,9 +9,10 @@
 **AI 不是逐个调用工具，而是编写 Python 脚本。** 用得越多，系统越聪明。
 
 ```
-用户意图 → AI 查找技能 → 参考范例生成脚本 → 脚本引擎执行 → 浏览器操作
-   ↳ 若未命中 → 查经验库 → 生成临时脚本 → 沙箱执行 → 保存经验
-   ↳ 若失败 → 自愈机制 → 视觉 fallback → 记录新知识
+用户意图 → 技能库触发词匹配 → 命中 → 生成脚本 → 脚本引擎执行 → 浏览器操作
+   ↳ 若未命中 → 经验库查找 → 生成临时脚本 → 沙箱执行 → 保存经验
+   ↳ 若规则失败 → LLM 意图解析（兜底） → 结构化意图 → 生成脚本
+   ↳ 若执行失败 → 自愈机制 → 视觉 fallback → 记录新知识
 ```
 
 ## 三层进化架构
@@ -79,6 +80,10 @@ docker compose logs -f
 ```env
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 OPENAI_API_KEY=sk-your-key-here
+
+# LLM 意图解析兜底（可选，规则失败时自动调用）
+# OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_MODEL=gpt-4o-mini
 ```
 
 **MCP 配置（Claude Desktop）**：
@@ -257,7 +262,8 @@ agentic-playwright-mcp/
 │   │   ├── agent_loop.py          # Agent 循环引擎
 │   │   ├── auth_manager.py        # Cookie 持久化管理
 │   │   ├── script_engine.py       # 脚本执行引擎
-│   │   ├── script_generator.py    # 任务意图解析
+│   │   ├── script_generator.py    # 任务意图解析（规则）
+│   │   ├── intent_parser.py       # LLM 意图解析（兜底）
 │   │   ├── experience.py          # 经验进化系统
 │   │   ├── browser_manager.py     # 双引擎浏览器管理
 │   │   ├── event_bus.py           # 事件钩子系统

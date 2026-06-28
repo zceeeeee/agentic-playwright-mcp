@@ -238,6 +238,55 @@ graph TD
     J --> K[返回结果 + 截图]
 ```
 
+### 意图解析：规则优先 + LLM 兜底
+
+Agent 循环的任务理解采用**混合策略**，兼顾速度和覆盖率：
+
+```mermaid
+graph TD
+    A[用户指令] --> B[技能库触发词匹配]
+    B --> C{命中?}
+    C -->|是| D{多个候选?}
+    D -->|无歧义| E[使用最佳技能]
+    D -->|歧义| F[LLM 仲裁选技能]
+    C -->|否| G[ScriptGenerator 规则解析]
+    G --> H{规则命中?}
+    H -->|是| I[生成脚本]
+    H -->|否| J[LLM 意图解析]
+    J --> K{置信度 >= 0.5?}
+    K -->|是| I
+    K -->|否| L[报告失败]
+```
+
+**触发条件**：
+
+| 情况 | 处理方式 |
+|------|---------|
+| 规则完全匹配 | 直接用规则结果，不调 LLM |
+| 多个技能评分打平（歧义） | LLM 从候选中仲裁 |
+| 规则无匹配 | LLM 解析意图返回结构化 JSON |
+
+**LLM 返回格式**：
+
+```json
+{
+  "action": "search",
+  "target": "python教程",
+  "engine": "baidu",
+  "confidence": 0.95
+}
+```
+
+返回的 `TaskIntent` 走现有的 `_intent_to_script()` 模板拼装路径，LLM 只负责理解意图，不生成脚本代码。
+
+**配置**（`.env`）：
+
+```env
+OPENAI_API_KEY=sk-your-key          # 必填，未设置时降级到纯规则
+OPENAI_BASE_URL=https://api.openai.com/v1  # 可选，兼容任意 OpenAI API
+OPENAI_MODEL=gpt-4o-mini            # 可选，默认 gpt-4o-mini
+```
+
 ## 浏览器管理
 
 ### 双引擎支持
