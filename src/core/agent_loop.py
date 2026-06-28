@@ -41,8 +41,9 @@ from src.core.event_bus import (
     get_event_bus,
 )
 from src.core.experience import ExperienceManager, get_experience_manager
+from src.core.intent_parser import LLMIntentParser, get_llm_intent_parser
 from src.core.script_engine import get_script_engine
-from src.core.script_generator import ScriptGenerator
+from src.core.script_generator import ScriptGenerator, TaskIntent
 from src.core.vision import VisionModule, get_vision_module
 from src.layer_2.controls import get_controls_exports
 from src.logging import bind_context, get_logger, log_timing
@@ -133,6 +134,7 @@ class AgentLoop:
         self._script_engine = None
         self._script_generator = ScriptGenerator()
         self._experience: ExperienceManager | None = None
+        self._llm_parser: LLMIntentParser | None = None
 
     def run(self, task: str) -> AgentTaskResult:
         """执行一个自然语言任务。
@@ -274,6 +276,9 @@ class AgentLoop:
 
         if self._experience is None:
             self._experience = get_experience_manager()
+
+        if self._llm_parser is None:
+            self._llm_parser = get_llm_intent_parser()
 
     # -------------------------------------------------------------------
     # Event emission helpers
@@ -417,8 +422,16 @@ class AgentLoop:
             meta["matches"] = len(skills)
 
         if skills:
-            # 命中技能库
+            # 检查是否有歧义（多个技能评分打平）
             skill = self._select_best_skill(skills, task)
+
+            # 歧义仲裁：如果 LLM 可用，让它决定用哪个技能
+            if self._has_ambiguity(skills, task) and self._llm_parser and self._llm_parser.available:
+                logger.info("PLAN: 技能库歧义 (%d 个候选)，尝试 LLM 仲裁", len(skills))
+                resolved = self._resolve_skill_with_llm(task, skills)
+                if resolved:
+                    skill = resolved
+
             detail = self._registry.get_detail(skill.id)
 
             if detail and detail.source_code:
@@ -464,7 +477,7 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        # 3. 未命中 → 生成脚本
+        # 3. 未命中 → 规则生成脚本
         script = self._generate_script(task, step.page_summary)
         if script:
             step.action = "生成临时脚本"
@@ -481,7 +494,26 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        # 3. 无法生成脚本
+        # 4. 规则失败 → LLM 兜底
+        if self._llm_parser and self._llm_parser.available:
+            logger.info("PLAN: 规则未命中，尝试 LLM 意图解析")
+            script = self._generate_script_via_llm(task)
+            if script:
+                step.action = "LLM 意图解析"
+                step.script = script
+                step.result = "LLM 兜底生成脚本"
+                logger.info("PLAN: LLM fallback succeeded")
+                self._bus.emit(
+                    Event(
+                        name=EVENT_AGENT_PLAN,
+                        phase=Phase.AFTER,
+                        data={"step_number": step.step_number, "source": "llm_fallback"},
+                        result=step.result,
+                    )
+                )
+                return AgentState.ACT
+
+        # 5. 无法生成脚本
         step.result = "无法规划行动"
         logger.warning("PLAN: no action could be planned")
         self._bus.emit(
@@ -581,6 +613,99 @@ class AgentLoop:
             return (len(specific), len(matched), len(url_patterns))
 
         return max(skills, key=score)
+
+    def _skill_score(self, skill: Any, task: str) -> tuple[int, int, int]:
+        """计算技能评分（与 _select_best_skill 相同逻辑，供歧义检测复用）。"""
+        task_lower = task.lower()
+        broad_triggers = {"搜索", "search", "查找", "find", "找"}
+        triggers = getattr(skill, "triggers", []) or []
+        matched = [t for t in triggers if t.lower() in task_lower]
+        specific = [t for t in matched if t.lower() not in broad_triggers]
+        url_patterns = getattr(skill, "url_patterns", []) or []
+        return (len(specific), len(matched), len(url_patterns))
+
+    def _has_ambiguity(self, skills: list[Any], task: str) -> bool:
+        """检查多个候选技能是否评分打平（歧义）。
+
+        当第一名和第二名的专属词数相同时，视为歧义。
+        """
+        if len(skills) < 2:
+            return False
+        scored = sorted(skills, key=lambda s: self._skill_score(s, task), reverse=True)
+        top1 = self._skill_score(scored[0], task)
+        top2 = self._skill_score(scored[1], task)
+        # 专属词数相同 → 歧义
+        return top1[0] == top2[0]
+
+    def _resolve_skill_with_llm(self, task: str, skills: list[Any]) -> Any | None:
+        """用 LLM 仲裁技能歧义。
+
+        让 LLM 从候选技能中选择最匹配的一个，返回选中的技能或 None。
+        """
+        if not self._llm_parser:
+            return None
+
+        candidates = []
+        for s in skills:
+            name = getattr(s, "name", "")
+            sid = getattr(s, "id", "")
+            desc = getattr(s, "description", "")
+            candidates.append({"id": sid, "name": name, "description": desc})
+
+        # 构造仲裁 prompt（直接调 LLM，不走 intent_parser 的完整流程）
+        import json as _json
+
+        candidates_text = _json.dumps(candidates, ensure_ascii=False, indent=2)
+        prompt = (
+            f"用户指令: {task}\n\n"
+            f"候选技能列表:\n{candidates_text}\n\n"
+            "请选出最匹配用户指令的技能，返回 JSON: {\"skill_id\": \"选中的技能id\", \"confidence\": 0.9}\n"
+            "只返回 JSON，不要其他文字。"
+        )
+
+        try:
+            raw = self._llm_parser._call_llm(prompt)
+            # 提取 JSON
+            text = raw.strip()
+            if "```" in text:
+                start = text.find("{")
+                end = text.rfind("}") + 1
+                text = text[start:end] if start != -1 and end > 0 else text
+
+            data = _json.loads(text)
+            chosen_id = data.get("skill_id", "")
+            confidence = data.get("confidence", 0)
+
+            if confidence < 0.5:
+                logger.info("LLM 仲裁置信度过低 (%.2f)，使用规则结果", confidence)
+                return None
+
+            # 找到对应的技能
+            for s in skills:
+                if getattr(s, "id", "") == chosen_id:
+                    logger.info("LLM 仲裁选择: %s", chosen_id)
+                    return s
+
+            logger.warning("LLM 仲裁返回未知技能 ID: %s", chosen_id)
+        except Exception as exc:
+            logger.warning("LLM 仲裁失败: %s", exc)
+
+        return None
+
+    def _generate_script_via_llm(self, task: str) -> str | None:
+        """用 LLM 解析意图，再由 ScriptGenerator 生成脚本。
+
+        流程: LLM → TaskIntent → _intent_to_script()
+        """
+        if not self._llm_parser:
+            return None
+
+        intent = self._llm_parser.parse(task)
+        if not intent:
+            return None
+
+        # 用 ScriptGenerator 的模板拼装脚本
+        return self._script_generator._intent_to_script(intent)
 
     def _extract_site(self, url: str) -> str:
         """从 URL 中提取站点名称。"""

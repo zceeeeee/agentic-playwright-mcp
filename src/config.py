@@ -32,6 +32,8 @@ _DEFAULTS: dict[str, str] = {
     "DOMAIN_DIR": str(_PROJECT_ROOT / "domains"),
     "LOG_LEVEL": "INFO",
     "LOG_FORMAT": "text",
+    "OPENAI_BASE_URL": "https://api.openai.com/v1",
+    "OPENAI_MODEL": "gpt-4o-mini",
 }
 
 
