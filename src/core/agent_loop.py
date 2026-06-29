@@ -441,24 +441,30 @@ class AgentLoop:
             if detail and detail.source_code:
                 # 从任务中提取关键词，生成可执行脚本
                 script = self._build_skill_script(detail.source_code, task, skill.id)
-                step.action = f"使用技能: {skill.name}"
-                step.script = script
-                step.result = f"找到技能: {skill.name}"
-                logger.info("PLAN: matched skill '%s'", skill.name)
-                self._bus.emit(
-                    Event(
-                        name=EVENT_AGENT_PLAN,
-                        phase=Phase.AFTER,
-                        data={
-                            "step_number": step.step_number,
-                            "source": "skill_library",
-                            "skill_id": skill.id,
-                            "skill_name": skill.name,
-                        },
-                        result=step.result,
+                if script:
+                    step.action = f"使用技能: {skill.name}"
+                    step.script = script
+                    step.result = f"找到技能: {skill.name}"
+                    logger.info("PLAN: matched skill '%s'", skill.name)
+                    self._bus.emit(
+                        Event(
+                            name=EVENT_AGENT_PLAN,
+                            phase=Phase.AFTER,
+                            data={
+                                "step_number": step.step_number,
+                                "source": "skill_library",
+                                "skill_id": skill.id,
+                                "skill_name": skill.name,
+                            },
+                            result=step.result,
+                        )
                     )
-                )
-                return AgentState.ACT
+                    return AgentState.ACT
+                else:
+                    logger.info(
+                        "PLAN: 技能 '%s' 匹配但关键词提取失败，跳过",
+                        skill.name,
+                    )
 
         # 2. 查找已保存的脚本（经验复用）
         saved_script = self._experience.find_script(task)
@@ -582,7 +588,9 @@ class AgentLoop:
         # 提取关键词
         keyword = self._script_generator._extract_keyword(task)
         if not keyword:
-            keyword = task  # 降级：用整个任务描述作为关键词
+            # 关键词提取失败，不降级使用整句话（会导致搜索整个指令文本）
+            # 返回空字符串让 agent loop 走 LLM 兜底路径
+            return ""
 
         # 检查源码是否已经有独立的 run() 调用（不是 def run 定义）
         # 去掉 def 语句后，检查是否还有 run( 调用
