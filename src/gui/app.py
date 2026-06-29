@@ -97,6 +97,7 @@ def _domain_from_task(task: str) -> str | None:
         "weibo": ("微博",),
         "douyin": ("抖音",),
         "xiaohongshu": ("小红书",),
+        "bilibili": ("B站", "b站", "哔哩哔哩", "哔哩", "bilibili"),
     }
 
     for domain, names in aliases.items():

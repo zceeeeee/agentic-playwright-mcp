@@ -1,0 +1,60 @@
+id: bilibili_login
+name: Bilibili 短信登录
+type: domain
+description: 打开 Bilibili 首页，点击右上角登录图标，切换短信登录，填写手机号并点击发送验证码；真人认证和验证码由用户手动完成。
+version: "1.0.0"
+
+triggers:
+  - bilibili
+  - B站
+  - b站
+  - 哔哩哔哩
+  - 哔哩
+  - 登录
+  - login
+  - 短信登录
+  - 验证码
+
+url_patterns:
+  - bilibili.com
+  - "*.bilibili.com"
+
+domain: bilibili
+
+parameters:
+  phone_number:
+    type: string
+    required: true
+    description: 用户手机号，例如 13574133406。
+  login_url:
+    type: string
+    required: false
+    default: "https://www.bilibili.com"
+    description: Bilibili 登录入口 URL。
+
+steps:
+  - action: goto
+    args:
+      url: "{{login_url}}"
+    comment: 打开 Bilibili 首页
+
+  - action: smart_click
+    target: login_button
+    comment: 点击右上角蓝色圆圈“登录”图标，打开登录弹窗
+    on_error: stop
+
+  - action: smart_click
+    target: sms_login
+    comment: 弹窗中出现“短信登录”后点击切换
+    on_error: stop
+
+  - action: smart_fill
+    target: phone
+    value: "{{phone_number}}"
+    comment: 填写手机号
+    on_error: stop
+
+  - action: smart_click
+    target: get_code
+    comment: 点击右侧发送验证码，后续由用户在弹窗中完成人真认证和验证码输入
+    on_error: stop

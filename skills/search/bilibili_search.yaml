@@ -1,0 +1,47 @@
+id: bilibili_search
+name: Bilibili 搜索
+type: domain
+description: 在 Bilibili 搜索视频、番剧、用户和相关内容
+version: "1.0.0"
+
+triggers:
+  - bilibili
+  - b站
+  - B站
+  - 哔哩哔哩
+  - 哔哩
+  - 视频
+  - 搜索
+  - search
+
+url_patterns:
+  - "*.bilibili.com"
+  - "search.bilibili.com"
+
+domain: bilibili
+
+parameters:
+  keyword:
+    type: string
+    required: true
+    description: 搜索关键词
+
+steps:
+  - action: goto
+    args:
+      url: "https://www.bilibili.com"
+    comment: 导航到 Bilibili 首页
+
+  - action: smart_fill
+    target: search_input
+    value: "{{keyword}}"
+    comment: 输入搜索关键词
+
+  - action: smart_click
+    target: search_button
+    comment: 点击搜索按钮
+
+  - action: wait_for_navigation
+    args:
+      timeout: 10
+    comment: 等待搜索结果页加载

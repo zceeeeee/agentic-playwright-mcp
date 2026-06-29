@@ -236,6 +236,52 @@ class TestGitHubLoginScript:
 
         assert 'run("13574133406")' in script
 
+    def test_build_bilibili_login_script_passes_phone_number(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(phone_number):\n    log(phone_number)"
+
+        script = agent._build_skill_script(
+            source,
+            "B站登录，电话号码是13574133406",
+            "domain/bilibili_login",
+        )
+
+        assert 'run("13574133406")' in script
+
+    def test_select_bilibili_login_beats_bilibili_search_and_generic_login(self):
+        from src.skill_library.skill_base import SkillMeta
+
+        agent = AgentLoop(max_steps=3)
+        skills = [
+            SkillMeta(
+                id="domain/bilibili_search",
+                name="Bilibili 搜索",
+                type="domain",
+                triggers=["bilibili", "B站", "搜索"],
+                url_patterns=["bilibili.com", "search.bilibili.com"],
+            ),
+            SkillMeta(
+                id="domain/bilibili_login",
+                name="Bilibili 短信登录",
+                type="domain",
+                triggers=["bilibili", "B站", "登录", "验证码"],
+                url_patterns=["bilibili.com", "*.bilibili.com"],
+            ),
+            SkillMeta(
+                id="interaction/login_flow",
+                name="通用登录",
+                type="interaction",
+                triggers=["登录", "login"],
+                url_patterns=[],
+            ),
+        ]
+
+        selected = agent._select_best_skill(
+            skills,
+            "B站登录，电话号码是13574133406",
+        )
+
+        assert selected.id == "domain/bilibili_login"
 
 # ---------------------------------------------------------------------------
 # Full loop

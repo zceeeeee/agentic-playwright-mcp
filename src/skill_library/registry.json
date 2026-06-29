@@ -11,6 +11,26 @@
       "description": "在百度搜索关键词并返回结果"
     },
     {
+      "id": "bilibili_search",
+      "name": "Bilibili 搜索",
+      "type": "domain",
+      "triggers": ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "视频", "搜索", "search"],
+      "url_patterns": ["bilibili.com", "search.bilibili.com"],
+      "file": "search/bilibili_search.py",
+      "function": "run",
+      "description": "在 Bilibili 搜索视频、番剧、用户和相关内容"
+    },
+    {
+      "id": "bilibili_login",
+      "name": "Bilibili 短信登录",
+      "type": "domain",
+      "triggers": ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "登录", "login", "短信登录", "验证码"],
+      "url_patterns": ["bilibili.com", "*.bilibili.com"],
+      "file": "others/bilibili_login.py",
+      "function": "run",
+      "description": "打开 Bilibili 登录弹窗，切换短信登录，填写手机号并发送验证码"
+    },
+    {
       "id": "github_login",
       "name": "GitHub 登录",
       "type": "domain",

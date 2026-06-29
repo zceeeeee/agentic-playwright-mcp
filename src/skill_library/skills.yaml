@@ -93,6 +93,22 @@ skills:
     description: "在 YouTube 搜索视频"
     version: "1.0.0"
 
+  - id: "domain/bilibili_search"
+    name: "Bilibili 搜索"
+    type: "domain"
+    triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "视频", "搜索", "search"]
+    url_patterns: ["bilibili.com", "search.bilibili.com"]
+    description: "在 Bilibili 搜索视频、番剧、用户和相关内容"
+    version: "1.0.0"
+
+  - id: "domain/bilibili_login"
+    name: "Bilibili 短信登录"
+    type: "domain"
+    triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "登录", "login", "短信登录", "验证码"]
+    url_patterns: ["bilibili.com", "*.bilibili.com"]
+    description: "打开 Bilibili 登录弹窗，切换短信登录，填写手机号并发送验证码，真人认证和验证码由用户手动完成"
+    version: "1.0.0"
+
   # 社交媒体
   - id: "domain/douyin_login"
     name: "抖音验证码登录"
@@ -200,6 +216,14 @@ sources:
 
   - id: "domain/youtube_search"
     file: "search/youtube_search.py"
+    entry: "run"
+
+  - id: "domain/bilibili_search"
+    file: "search/bilibili_search.py"
+    entry: "run"
+
+  - id: "domain/bilibili_login"
+    file: "others/bilibili_login.py"
     entry: "run"
 
   - id: "domain/douyin_login"

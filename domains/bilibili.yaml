@@ -1,11 +1,46 @@
+name: bilibili
 base_url: https://www.bilibili.com
 locators:
   search_button:
     css:
-    - .nav-search-btn
-    - .search-btn
+      - ".nav-search-btn"
+      - ".center-search__bar button"
+      - ".search-btn"
+      - "button[type='submit']"
+      - "[role='button']:has-text('搜索')"
   search_input:
     css:
-    - .nav-search-input
-    - input[placeholder*='搜索']
-name: bilibili
+      - ".nav-search-input"
+      - ".center-search__bar input"
+      - "input[name='keyword']"
+      - "input[placeholder*='搜索']"
+  login_button:
+    css:
+      - ".header-login-entry"
+      - ".right-entry__outside .header-login-entry"
+      - ".right-entry .header-login-entry"
+      - ".bili-header .header-login-entry"
+      - "[class*='header-login-entry']"
+      - "[class*='login-entry']"
+  sms_login:
+    css:
+      - "text=短信登录"
+      - "[role='button']:has-text('短信登录')"
+      - "button:has-text('短信登录')"
+      - "div:has-text('短信登录')"
+      - "span:has-text('短信登录')"
+  phone:
+    css:
+      - "input[placeholder*='手机号']"
+      - "input[placeholder*='手机']"
+      - "input[type='tel']"
+      - "input[name*='phone' i]"
+      - "input[autocomplete='tel']"
+  get_code:
+    css:
+      - "button:has-text('发送验证码')"
+      - "[role='button']:has-text('发送验证码')"
+      - "span:has-text('发送验证码')"
+      - "button:has-text('获取验证码')"
+      - "[role='button']:has-text('获取验证码')"
+      - "span:has-text('获取验证码')"
