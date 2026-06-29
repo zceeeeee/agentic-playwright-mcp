@@ -226,6 +226,14 @@ class ScriptEngine:
             selector_list = [selector] + list(fallbacks)
             return do_fill(page, selector_list, value)
 
+        def safe_press(key: str) -> str:
+            page = self._get_browser_manager().get_page()
+            try:
+                page.keyboard.press(key)
+                return f"Pressed key: {key}"
+            except Exception as exc:
+                return f"Press key failed: {exc}"
+
         # 构建命名空间
         ns: dict[str, Any] = {"__builtins__": _SAFE_BUILTINS}
 
@@ -233,6 +241,7 @@ class ScriptEngine:
         ns["goto"] = safe_goto
         ns["click"] = safe_click
         ns["fill"] = safe_fill
+        ns["press"] = safe_press
         ns["screenshot"] = safe_screenshot
 
         # 注入工具函数

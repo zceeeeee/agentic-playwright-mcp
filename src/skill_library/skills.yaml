@@ -126,6 +126,31 @@ skills:
     description: "在知乎搜索"
     version: "1.0.0"
 
+  - id: "domain/bilibili_search"
+    name: "b站搜索"
+    type: "domain"
+    triggers: ["b站", "bilibili", "搜索", "问答"]
+    url_patterns: ["bilibili.com"]
+    description: "在b站搜索"
+    version: "1.0.0"
+
+  - id: "domain/taobao_search"
+    name: "淘宝搜索"
+    type: "domain"
+    triggers: ["淘宝", "taobao", "搜索", "问答"]
+    url_patterns: ["taobao.com"]
+    description: "在淘宝搜索"
+    version: "1.0.0"
+
+  - id: "domain/doubao_search"
+    name: "豆包搜索"
+    type: "domain"
+    triggers: ["豆包", "doubao", "搜索", "问答"]
+    url_patterns: ["doubao.com"]
+    description: "在豆包搜索"
+    version: "1.0.0"
+
+
   # 通用交互模板
   - id: "interaction/login_flow"
     name: "通用登录"
@@ -232,4 +257,16 @@ sources:
 
   - id: "interaction/pagination"
     file: "others/pagination.py"
+    entry: "run"
+
+  - id: "domain/bilibili_search"
+    file: "search/bilibili_search.py"
+    entry: "run"
+
+  - id: "domain/taobao_search"
+    file: "search/taobao_search.py"
+    entry: "run"
+
+  - id: "domain/doubao_search"
+    file: "search/doubao_search.py"
     entry: "run"
