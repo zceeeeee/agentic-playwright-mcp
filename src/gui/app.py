@@ -156,7 +156,7 @@ def _storage_state_has_session(state: dict, domain: str | None = None) -> bool:
     return False
 
 
-# HTML 模板
+# HTML 模板 — Mistral AI 设计系统
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh">
@@ -164,218 +164,457 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agentic Playwright MCP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            /* Brand & Accent */
+            --primary: #fa520f;
+            --primary-deep: #cc3a05;
+            --on-primary: #ffffff;
+            --sunshine-300: #ffd06a;
+            --sunshine-500: #ffb83e;
+            --sunshine-700: #ffa110;
+            --sunshine-800: #ff8105;
+            --sunshine-900: #ff8a00;
+            --yellow-saturated: #ffd900;
+            /* Cream / Neutral Warm */
+            --cream: #fff8e0;
+            --cream-light: #fffaeb;
+            --cream-deeper: #fff0c2;
+            --beige-deep: #e6d5a8;
+            /* Surface */
+            --canvas: #ffffff;
+            --surface: #fafafa;
+            --surface-code: #1c1c1e;
+            --hairline: #e5e5e5;
+            --hairline-soft: #ededed;
+            --hairline-strong: #c7c7c7;
+            /* Text */
+            --ink: #1f1f1f;
+            --ink-tint: #3d3d3d;
+            --charcoal: #2c2c2c;
+            --slate: #4a4a4a;
+            --steel: #6a6a6a;
+            --stone: #8a8a8a;
+            --muted: #a8a8a8;
+            --on-dark: #ffffff;
+            --on-dark-muted: #a8a8a8;
+            --footer-cream: #fff8e0;
+            --link: #fa520f;
+            /* Radius */
+            --radius-xs: 4px;
+            --radius-sm: 6px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+            --radius-xl: 16px;
+            --radius-full: 9999px;
+            /* Spacing */
+            --sp-xxs: 4px;
+            --sp-xs: 8px;
+            --sp-sm: 12px;
+            --sp-md: 16px;
+            --sp-lg: 20px;
+            --sp-xl: 24px;
+            --sp-xxl: 32px;
+            --sp-section: 64px;
+            --sp-hero: 120px;
+            /* Typography */
+            --font-display: 'Times New Roman', Georgia, serif;
+            --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+            --font-code: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f5f5;
-            color: #333;
+            font-family: var(--font-body);
+            font-size: 16px;
+            line-height: 1.55;
+            color: var(--ink);
+            background: var(--canvas);
+            -webkit-font-smoothing: antialiased;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px 0;
-            margin-bottom: 30px;
-        }
-        header h1 {
-            text-align: center;
-            font-size: 2em;
-        }
-        header p {
-            text-align: center;
-            opacity: 0.9;
-            margin-top: 10px;
-        }
-        .card {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        .card h2 {
-            color: #667eea;
-            margin-bottom: 16px;
-            font-size: 1.2em;
-        }
-        .task-input {
+
+        /* ── Top Navigation ── */
+        .topnav {
+            position: sticky;
+            top: 0;
+            z-index: 100;
             display: flex;
-            gap: 12px;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+            padding: 0 var(--sp-xxl);
+            background: var(--canvas);
+            border-bottom: 1px solid var(--hairline-soft);
         }
-        .task-input input {
+        .topnav-brand {
+            display: flex;
+            align-items: center;
+            gap: var(--sp-sm);
+            font-weight: 600;
+            font-size: 18px;
+            color: var(--ink);
+            text-decoration: none;
+        }
+        .topnav-brand .logo {
+            width: 28px;
+            height: 28px;
+            background: var(--primary);
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--on-primary);
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .topnav-status {
+            display: flex;
+            align-items: center;
+            gap: var(--sp-xs);
+            font-size: 13px;
+            color: var(--steel);
+        }
+        .topnav-status .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--muted);
+        }
+        .topnav-status .dot.active {
+            background: #34a853;
+        }
+
+        /* ── Hero Band ── */
+        .hero-band {
+            background: linear-gradient(135deg, var(--sunshine-700) 0%, var(--sunshine-900) 50%, var(--primary) 100%);
+            padding: var(--sp-hero) var(--sp-xxl) var(--sp-section);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero-band::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 60% at 70% 80%, rgba(255,165,0,0.25) 0%, transparent 70%),
+                radial-gradient(ellipse 60% 50% at 30% 90%, rgba(255,69,0,0.15) 0%, transparent 60%);
+            pointer-events: none;
+        }
+        .hero-band h1 {
+            font-family: var(--font-display);
+            font-size: 84px;
+            font-weight: 400;
+            line-height: 1.05;
+            letter-spacing: -1.5px;
+            color: var(--ink);
+            position: relative;
+        }
+        .hero-band .subtitle {
+            font-family: var(--font-body);
+            font-size: 18px;
+            font-weight: 400;
+            line-height: 1.50;
+            color: var(--ink-tint);
+            margin-top: var(--sp-md);
+            position: relative;
+        }
+
+        /* ── Layout ── */
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 0 var(--sp-xxl);
+        }
+        .section {
+            padding: var(--sp-section) 0;
+        }
+        .section-heading {
+            font-family: var(--font-display);
+            font-size: 52px;
+            font-weight: 400;
+            line-height: 1.15;
+            letter-spacing: -0.5px;
+            color: var(--ink);
+            margin-bottom: var(--sp-xxl);
+        }
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 1.40;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--primary);
+            margin-bottom: var(--sp-sm);
+        }
+
+        /* ── Cards ── */
+        .card {
+            background: var(--canvas);
+            border-radius: var(--radius-lg);
+            padding: var(--sp-xxl);
+            border: 1px solid var(--hairline-soft);
+            box-shadow: rgba(0,0,0,0.04) 0px 4px 12px 0px;
+        }
+        .card-cream {
+            background: var(--cream);
+            border: 1px solid var(--beige-deep);
+            border-radius: var(--radius-lg);
+            padding: var(--sp-xxl);
+        }
+        .card-title {
+            font-family: var(--font-body);
+            font-size: 28px;
+            font-weight: 500;
+            line-height: 1.25;
+            color: var(--ink);
+            margin-bottom: var(--sp-lg);
+        }
+        .card-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: var(--sp-lg);
+        }
+
+        /* ── Inputs ── */
+        .input-row {
+            display: flex;
+            gap: var(--sp-sm);
+        }
+        .text-input {
             flex: 1;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
+            height: 44px;
+            padding: var(--sp-sm) var(--sp-md);
+            border: 1px solid var(--hairline-strong);
+            border-radius: var(--radius-md);
+            font-family: var(--font-body);
             font-size: 16px;
-            transition: border-color 0.3s;
+            line-height: 1.55;
+            color: var(--ink);
+            background: var(--canvas);
+            transition: border-color 150ms ease;
         }
-        .task-input input:focus {
+        .text-input::placeholder {
+            color: var(--muted);
+        }
+        .text-input:focus {
             outline: none;
-            border-color: #667eea;
+            border: 2px solid var(--primary);
+            padding: calc(var(--sp-sm) - 1px) calc(var(--sp-md) - 1px);
         }
+
+        /* ── Buttons ── */
         .btn {
-            padding: 12px 24px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--sp-xs);
+            padding: 10px 20px;
             border: none;
-            border-radius: 8px;
-            font-size: 16px;
+            border-radius: var(--radius-md);
+            font-family: var(--font-body);
+            font-size: 14px;
+            font-weight: 500;
+            line-height: 1.30;
             cursor: pointer;
-            transition: all 0.3s;
+            transition: background 150ms ease, box-shadow 150ms ease;
+            white-space: nowrap;
         }
         .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: var(--primary);
+            color: var(--on-primary);
         }
         .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            background: var(--primary-deep);
         }
         .btn-primary:disabled {
-            opacity: 0.6;
+            background: var(--hairline);
+            color: var(--muted);
             cursor: not-allowed;
-            transform: none;
+        }
+        .btn-dark {
+            background: var(--ink);
+            color: var(--on-dark);
+        }
+        .btn-dark:hover {
+            background: var(--charcoal);
         }
         .btn-secondary {
-            background: #f0f0f0;
-            color: #333;
+            background: transparent;
+            color: var(--ink);
+            border: 1px solid var(--hairline-strong);
         }
         .btn-secondary:hover {
-            background: #e0e0e0;
+            background: var(--surface);
         }
-        .output {
-            background: #1e1e1e;
-            color: #d4d4d4;
-            padding: 16px;
-            border-radius: 8px;
-            font-family: 'Monaco', 'Menlo', monospace;
-            font-size: 14px;
-            line-height: 1.6;
-            max-height: 400px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-        }
-        .output .step {
-            margin-bottom: 8px;
-            padding: 8px;
-            border-radius: 4px;
-        }
-        .output .step.success {
-            background: rgba(76, 175, 80, 0.2);
-            border-left: 3px solid #4caf50;
-        }
-        .output .step.error {
-            background: rgba(244, 67, 54, 0.2);
-            border-left: 3px solid #f44336;
-        }
-        .output .step.info {
-            background: rgba(33, 150, 243, 0.2);
-            border-left: 3px solid #2196f3;
-        }
-        .status {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
+        .btn-link {
+            background: transparent;
+            color: var(--primary);
+            padding: 0;
             font-size: 14px;
             font-weight: 500;
         }
+        .btn-link:hover {
+            text-decoration: underline;
+        }
+        .btn-close-browser {
+            background: var(--ink);
+            color: var(--on-dark);
+            padding: 6px 16px;
+            font-size: 13px;
+        }
+        .btn-close-browser:hover {
+            background: var(--charcoal);
+        }
+
+        /* ── Spinner ── */
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--on-primary);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        .spinner-dark {
+            border-color: var(--muted);
+            border-top-color: transparent;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* ── Status Badge ── */
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: var(--radius-full);
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.40;
+        }
         .status.running {
-            background: #fff3e0;
-            color: #e65100;
+            background: var(--cream-deeper);
+            color: var(--ink);
             animation: pulse 1.5s infinite;
         }
         .status.success {
-            background: #e8f5e9;
-            color: #2e7d32;
+            background: #e6f4ea;
+            color: #137333;
         }
         .status.error {
-            background: #ffebee;
-            color: #c62828;
+            background: #fce8e6;
+            color: #c5221f;
         }
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
         }
-        .skills-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 12px;
-        }
-        .skill-item {
-            padding: 12px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            border: 1px solid #e0e0e0;
-        }
-        .skill-item h3 {
-            color: #667eea;
-            font-size: 1em;
-            margin-bottom: 4px;
-        }
-        .skill-item p {
-            font-size: 0.85em;
-            color: #666;
-        }
-        .skill-item .triggers {
-            margin-top: 8px;
-        }
-        .skill-item .trigger {
-            display: inline-block;
-            padding: 2px 8px;
-            background: #e8eaf6;
-            border-radius: 12px;
-            font-size: 0.75em;
-            color: #3f51b5;
-            margin-right: 4px;
-            margin-bottom: 4px;
-        }
+
+        /* ── Options Row ── */
         .options {
             display: flex;
-            gap: 16px;
-            margin-top: 12px;
+            flex-wrap: wrap;
+            gap: var(--sp-lg);
+            margin-top: var(--sp-md);
         }
         .options label {
             display: flex;
             align-items: center;
             gap: 6px;
             cursor: pointer;
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 1.50;
+            color: var(--slate);
         }
-        .spinner {
-            display: inline-block;
+        .options input[type="checkbox"] {
             width: 16px;
             height: 16px;
-            border: 2px solid #fff;
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
+            accent-color: var(--primary);
+            cursor: pointer;
         }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+        .options input[type="number"] {
+            width: 60px;
+            height: 32px;
+            padding: 4px 8px;
+            border: 1px solid var(--hairline-strong);
+            border-radius: var(--radius-sm);
+            font-family: var(--font-body);
+            font-size: 14px;
+            color: var(--ink);
+            background: var(--canvas);
         }
+        .options input[type="number"]:focus {
+            outline: none;
+            border: 2px solid var(--primary);
+        }
+
+        /* ── Output Terminal ── */
+        .output {
+            background: var(--surface-code);
+            color: #d4d4d4;
+            padding: var(--sp-md);
+            border-radius: var(--radius-md);
+            font-family: var(--font-code);
+            font-size: 14px;
+            line-height: 1.50;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .output .step {
+            margin-bottom: var(--sp-xs);
+            padding: var(--sp-xs);
+            border-radius: var(--radius-xs);
+        }
+        .output .step.success {
+            background: rgba(52,168,83,0.15);
+            border-left: 3px solid #34a853;
+        }
+        .output .step.error {
+            background: rgba(197,34,31,0.15);
+            border-left: 3px solid #c5221f;
+        }
+        .output .step.info {
+            background: rgba(250,82,15,0.10);
+            border-left: 3px solid var(--primary);
+        }
+
+        /* ── Segmented Tabs ── */
         .tabs {
             display: flex;
-            gap: 4px;
-            margin-bottom: 16px;
+            gap: 0;
+            border-bottom: 1px solid var(--hairline);
+            margin-bottom: var(--sp-xl);
         }
         .tab {
-            padding: 8px 16px;
-            background: #f0f0f0;
+            padding: var(--sp-sm) var(--sp-md);
+            background: transparent;
             border: none;
-            border-radius: 8px 8px 0 0;
+            border-bottom: 2px solid transparent;
             cursor: pointer;
+            font-family: var(--font-body);
             font-size: 14px;
+            font-weight: 500;
+            line-height: 1.50;
+            color: var(--steel);
+            transition: color 150ms ease, border-color 150ms ease;
+        }
+        .tab:hover {
+            color: var(--ink);
         }
         .tab.active {
-            background: #667eea;
-            color: white;
+            color: var(--primary);
+            border-bottom-color: var(--primary);
         }
         .tab-content {
             display: none;
@@ -383,23 +622,201 @@ HTML_TEMPLATE = """
         .tab-content.active {
             display: block;
         }
+
+        /* ── Skills Grid ── */
+        .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: var(--sp-md);
+        }
+        .skill-item {
+            padding: var(--sp-xl);
+            background: var(--canvas);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--hairline-soft);
+            transition: box-shadow 150ms ease;
+        }
+        .skill-item:hover {
+            box-shadow: rgba(0,0,0,0.04) 0px 4px 12px 0px;
+        }
+        .skill-item h3 {
+            font-family: var(--font-body);
+            font-size: 18px;
+            font-weight: 500;
+            line-height: 1.40;
+            color: var(--ink);
+            margin-bottom: var(--sp-xxs);
+        }
+        .skill-item p {
+            font-size: 14px;
+            color: var(--steel);
+            line-height: 1.50;
+        }
+        .skill-item .triggers {
+            margin-top: var(--sp-xs);
+        }
+        .skill-item .trigger {
+            display: inline-block;
+            padding: 4px 10px;
+            background: var(--cream-deeper);
+            border-radius: var(--radius-full);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--ink);
+            margin-right: var(--sp-xxs);
+            margin-bottom: var(--sp-xxs);
+        }
+
+        /* ── Script Item ── */
+        .script-item {
+            padding: var(--sp-xl);
+            background: var(--canvas);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--hairline-soft);
+            margin-bottom: var(--sp-sm);
+        }
+        .script-item h3 {
+            font-size: 18px;
+            font-weight: 500;
+            color: var(--ink);
+            margin-bottom: var(--sp-xxs);
+        }
+        .script-item p {
+            font-size: 14px;
+            color: var(--steel);
+        }
+        .script-item details {
+            margin-top: var(--sp-xs);
+        }
+        .script-item summary {
+            cursor: pointer;
+            color: var(--primary);
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .script-item summary:hover {
+            text-decoration: underline;
+        }
+        .script-item pre {
+            background: var(--surface-code);
+            color: #d4d4d4;
+            padding: var(--sp-md);
+            border-radius: var(--radius-md);
+            margin-top: var(--sp-xs);
+            overflow-x: auto;
+            font-family: var(--font-code);
+            font-size: 13px;
+            line-height: 1.50;
+        }
+
+        /* ── Empty State ── */
+        .empty-state {
+            text-align: center;
+            padding: var(--sp-xxl);
+            color: var(--stone);
+            font-size: 14px;
+        }
+
+        /* ── Sunset Stripe Band (Signature) ── */
+        .sunset-stripe {
+            height: 6px;
+            background: linear-gradient(90deg,
+                var(--primary) 0%,
+                var(--sunshine-700) 25%,
+                var(--sunshine-500) 50%,
+                var(--yellow-saturated) 75%,
+                var(--cream) 100%
+            );
+            margin-top: var(--sp-section);
+        }
+
+        /* ── Footer ── */
+        .footer {
+            background: var(--footer-cream);
+            padding: var(--sp-section) var(--sp-xxl);
+            color: var(--steel);
+            font-size: 13px;
+            line-height: 1.40;
+        }
+        .footer-inner {
+            max-width: 1280px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: var(--sp-md);
+        }
+        .footer-brand {
+            font-weight: 600;
+            color: var(--ink);
+            font-size: 14px;
+        }
+        .footer-links {
+            display: flex;
+            gap: var(--sp-lg);
+        }
+        .footer-links a {
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .footer-links a:hover {
+            text-decoration: underline;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 1023px) {
+            .hero-band h1 { font-size: 64px; }
+            .hero-band { padding: var(--sp-section) var(--sp-xxl) var(--sp-xxxl); }
+            .section-heading { font-size: 36px; }
+        }
+        @media (max-width: 767px) {
+            .hero-band h1 { font-size: 52px; letter-spacing: -0.5px; }
+            .hero-band .subtitle { font-size: 16px; }
+            .topnav { padding: 0 var(--sp-md); }
+            .container { padding: 0 var(--sp-md); }
+            .card, .card-cream { padding: var(--sp-xl); }
+            .options { gap: var(--sp-sm); }
+            .input-row { flex-direction: column; }
+            .footer-inner { flex-direction: column; text-align: center; }
+        }
+        @media (max-width: 479px) {
+            .hero-band h1 { font-size: 40px; }
+            .section-heading { font-size: 28px; }
+            .skills-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
-    <header>
-        <div class="container">
-            <h1>🤖 Agentic Playwright MCP</h1>
-            <p>AI 驱动的浏览器自动化框架 — 输入任务，AI 自动执行</p>
-        </div>
-    </header>
 
-    <div class="container">
-        <!-- 任务输入 -->
-        <div class="card">
-            <h2>📝 执行任务</h2>
-            <div class="task-input">
-                <input type="text" id="taskInput" placeholder="输入任务描述，例如：帮我在百度搜索 Python 教程" />
-                <button class="btn btn-primary" id="runBtn" onclick="runTask()">
+    <!-- Top Navigation -->
+    <nav class="topnav">
+        <a class="topnav-brand" href="/">
+            <span class="logo">A</span>
+            Agentic Playwright
+        </a>
+        <div class="topnav-status">
+            <span class="dot" id="navDot"></span>
+            <span id="navStatusText">就绪</span>
+        </div>
+    </nav>
+
+    <!-- Hero Band -->
+    <div class="hero-band">
+        <h1>Browser Automation.</h1>
+        <p class="subtitle">AI 驱动的浏览器自动化框架 — 输入任务，Agent 自动执行</p>
+    </div>
+
+    <!-- Task Input Section -->
+    <div class="container section">
+        <p class="section-label">EXECUTE</p>
+        <h2 class="section-heading">执行任务</h2>
+
+        <div class="card-cream">
+            <div class="input-row">
+                <input class="text-input" type="text" id="taskInput" placeholder="输入任务描述，例如：帮我在百度搜索 Python 教程" />
+                <button class="btn btn-dark" id="runBtn" onclick="runTask()">
                     执行
                 </button>
             </div>
@@ -413,8 +830,8 @@ HTML_TEMPLATE = """
                     CloakBrowser 反检测
                 </label>
                 <label>
-                    最大步数:
-                    <input type="number" id="maxSteps" value="10" min="1" max="50" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;" />
+                    最大步数
+                    <input type="number" id="maxSteps" value="10" min="1" max="50" />
                 </label>
                 <label>
                     <input type="checkbox" id="keepOpen" checked />
@@ -422,41 +839,63 @@ HTML_TEMPLATE = """
                 </label>
             </div>
         </div>
+    </div>
 
-        <!-- 执行结果 -->
+    <!-- Execution Results -->
+    <div class="container" style="padding-bottom: var(--sp-section);">
+        <p class="section-label">RESULT</p>
         <div class="card">
-            <h2>
-                📊 执行结果
-                <span class="status" id="status" style="display:none;"></span>
-                <button class="btn btn-primary" id="closeBtn" onclick="closeBrowser()" style="display:none;float:right;font-size:14px;padding:6px 16px;">
+            <div class="card-title-row">
+                <h2 class="card-title" style="margin-bottom:0;">
+                    执行结果
+                    <span class="status" id="status" style="display:none;margin-left:12px;"></span>
+                </h2>
+                <button class="btn btn-close-browser" id="closeBtn" onclick="closeBrowser()" style="display:none;">
                     关闭浏览器
                 </button>
-            </h2>
-            <div class="output" id="output">
-                等待执行...
             </div>
+            <div class="output" id="output">等待执行...</div>
         </div>
+    </div>
 
-        <!-- 标签页: 技能库 / 脚本历史 -->
+    <!-- Skills & Scripts -->
+    <div class="container" style="padding-bottom: var(--sp-section);">
+        <p class="section-label">LIBRARY</p>
+        <h2 class="section-heading">技能库 & 脚本</h2>
+
         <div class="card">
             <div class="tabs">
-                <button class="tab active" onclick="switchTab('skills')">📚 技能库</button>
-                <button class="tab" onclick="switchTab('scripts')">📜 脚本历史</button>
+                <button class="tab active" onclick="switchTab('skills', this)">技能库</button>
+                <button class="tab" onclick="switchTab('scripts', this)">脚本历史</button>
             </div>
 
             <div class="tab-content active" id="tab-skills">
                 <div class="skills-grid" id="skillsGrid">
-                    加载中...
+                    <div class="empty-state">加载中...</div>
                 </div>
             </div>
 
             <div class="tab-content" id="tab-scripts">
                 <div id="scriptsList">
-                    加载中...
+                    <div class="empty-state">加载中...</div>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- Sunset Stripe Band (Signature) -->
+    <div class="sunset-stripe"></div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-inner">
+            <span class="footer-brand">Agentic Playwright MCP</span>
+            <div class="footer-links">
+                <a href="https://github.com/zceeeeee/agentic-playwright-mcp" target="_blank">GitHub</a>
+                <a href="/api/status" target="_blank">API Status</a>
+            </div>
+        </div>
+    </footer>
 
     <script>
         const promptedSaveDomains = new Set();
@@ -496,10 +935,10 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/auth/current');
                 const result = await response.json();
                 if (!result.browser_running) {
-                    // 浏览器已关闭，更新 UI 状态
                     const closeBtn = document.getElementById('closeBtn');
                     if (closeBtn) closeBtn.style.display = 'none';
                     stopAuthPolling();
+                    updateNavStatus(false);
                     return;
                 }
                 if (!result.domain || !result.has_session) {
@@ -529,7 +968,19 @@ HTML_TEMPLATE = """
                 console.warn('Auth polling failed:', error);
             }
         }
-        // 任务执行
+
+        function updateNavStatus(running) {
+            const dot = document.getElementById('navDot');
+            const text = document.getElementById('navStatusText');
+            if (running) {
+                dot.classList.add('active');
+                text.textContent = '运行中';
+            } else {
+                dot.classList.remove('active');
+                text.textContent = '就绪';
+            }
+        }
+
         async function runTask() {
             const task = document.getElementById('taskInput').value.trim();
             if (!task) {
@@ -541,13 +992,13 @@ HTML_TEMPLATE = """
             const status = document.getElementById('status');
             const output = document.getElementById('output');
 
-            // 禁用按钮，显示状态
             runBtn.disabled = true;
             runBtn.innerHTML = '<span class="spinner"></span> 执行中...';
-            status.style.display = 'inline-block';
+            status.style.display = 'inline-flex';
             status.className = 'status running';
             status.textContent = '执行中';
             output.innerHTML = '';
+            updateNavStatus(true);
 
             const keepOpen = document.getElementById('keepOpen').checked;
             const options = {
@@ -586,14 +1037,14 @@ HTML_TEMPLATE = """
             } finally {
                 runBtn.disabled = false;
                 runBtn.innerHTML = '执行';
-                // 仅在任务成功且 keep_open 时显示"关闭浏览器"按钮和启动轮询
                 const closeBtn = document.getElementById('closeBtn');
                 if (keepOpen && taskSuccess) {
-                    closeBtn.style.display = 'inline-block';
+                    closeBtn.style.display = 'inline-flex';
                     startAuthPolling();
                 } else {
                     closeBtn.style.display = 'none';
                     stopAuthPolling();
+                    updateNavStatus(false);
                 }
             }
         }
@@ -607,7 +1058,7 @@ HTML_TEMPLATE = """
                     html += `<div class="step ${cls}">`;
                     html += `<strong>Step ${step.step_number} [${step.state}]</strong>: ${step.result || ''}`;
                     if (step.error) {
-                        html += `<br><span style="color:#f44336">${step.error}</span>`;
+                        html += `<br><span style="color:#c5221f">${step.error}</span>`;
                     }
                     html += `</div>`;
                 });
@@ -629,7 +1080,7 @@ HTML_TEMPLATE = """
                 html += `<div class="step info"><strong>已加载登录信息:</strong> ${escapeHtml(result.auth_domain)}</div>`;
             }
 
-            return html || '无输出';
+            return html || '<div class="empty-state">无输出</div>';
         }
 
         function escapeHtml(text) {
@@ -638,11 +1089,10 @@ HTML_TEMPLATE = """
             return div.innerHTML;
         }
 
-        // 关闭保持开启的浏览器
         async function closeBrowser() {
             const closeBtn = document.getElementById('closeBtn');
             closeBtn.disabled = true;
-            closeBtn.innerHTML = '关闭中...';
+            closeBtn.innerHTML = '<span class="spinner spinner-dark" style="width:14px;height:14px;"></span> 关闭中...';
             try {
                 await fetch('/api/close-browser', { method: 'POST' });
                 closeBtn.style.display = 'none';
@@ -650,6 +1100,7 @@ HTML_TEMPLATE = """
                 status.className = 'status success';
                 stopAuthPolling();
                 status.textContent = '浏览器已关闭';
+                updateNavStatus(false);
             } catch (error) {
                 alert('关闭失败: ' + error.message);
             } finally {
@@ -658,27 +1109,22 @@ HTML_TEMPLATE = """
             }
         }
 
-        // 标签页切换
-        function switchTab(name) {
+        function switchTab(name, el) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-
-            event.target.classList.add('active');
+            el.classList.add('active');
             document.getElementById(`tab-${name}`).classList.add('active');
         }
 
-        // 加载技能库
         async function loadSkills() {
             try {
                 const response = await fetch('/api/skills');
                 const skills = await response.json();
-
                 const grid = document.getElementById('skillsGrid');
                 if (skills.length === 0) {
-                    grid.innerHTML = '<p>暂无技能</p>';
+                    grid.innerHTML = '<div class="empty-state">暂无技能</div>';
                     return;
                 }
-
                 grid.innerHTML = skills.map(skill => `
                     <div class="skill-item">
                         <h3>${escapeHtml(skill.name)}</h3>
@@ -691,43 +1137,38 @@ HTML_TEMPLATE = """
                     </div>
                 `).join('');
             } catch (error) {
-                document.getElementById('skillsGrid').innerHTML = `<p>加载失败: ${error.message}</p>`;
+                document.getElementById('skillsGrid').innerHTML = `<div class="empty-state">加载失败: ${error.message}</div>`;
             }
         }
 
-        // 加载脚本历史
         async function loadScripts() {
             try {
                 const response = await fetch('/api/scripts');
                 const scripts = await response.json();
-
                 const list = document.getElementById('scriptsList');
                 if (scripts.length === 0) {
-                    list.innerHTML = '<p>暂无脚本</p>';
+                    list.innerHTML = '<div class="empty-state">暂无脚本</div>';
                     return;
                 }
-
                 list.innerHTML = scripts.map(script => `
-                    <div class="skill-item">
+                    <div class="script-item">
                         <h3>${escapeHtml(script.task)}</h3>
                         <p>使用 ${script.use_count} 次，成功率 ${(script.success_rate * 100).toFixed(0)}%</p>
                         <details>
-                            <summary style="cursor:pointer;color:#667eea;margin-top:8px;">查看脚本</summary>
-                            <pre style="background:#f5f5f5;padding:8px;border-radius:4px;margin-top:8px;overflow-x:auto;">${escapeHtml(script.script)}</pre>
+                            <summary>查看脚本</summary>
+                            <pre>${escapeHtml(script.script)}</pre>
                         </details>
                     </div>
                 `).join('');
             } catch (error) {
-                document.getElementById('scriptsList').innerHTML = `<p>加载失败: ${error.message}</p>`;
+                document.getElementById('scriptsList').innerHTML = `<div class="empty-state">加载失败: ${error.message}</div>`;
             }
         }
 
-        // 回车执行
         document.getElementById('taskInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') runTask();
         });
 
-        // 页面加载
         loadSkills();
         loadScripts();
     </script>
