@@ -547,17 +547,6 @@ def wait(seconds: float) -> str:
 # 页面信息类
 # ---------------------------------------------------------------------------
 
-
-def press(key: str) -> str:
-    """按下页面中的键盘按键。"""
-    page = get_browser_manager().get_page()
-    try:
-        page.keyboard.press(key)
-        return f"已按下按键: {key}"
-    except Exception as exc:
-        return f"按键失败: {exc}"
-
-
 def run_js(code: str) -> Any:
     """在页面中执行 JavaScript 代码。
 
@@ -683,7 +672,6 @@ def get_controls_exports() -> Dict[str, Any]:
         "wait_for_navigation": wait_for_navigation,
         "wait_for_element": wait_for_element,
         "wait": wait,
-        "press": press,
         # 页面信息
         "get_url": get_page_url,
         "get_title": get_page_title,
