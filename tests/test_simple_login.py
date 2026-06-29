@@ -1,4 +1,4 @@
-﻿"""Simple GitHub login test."""
+"""Simple GitHub login test."""
 
 import os
 

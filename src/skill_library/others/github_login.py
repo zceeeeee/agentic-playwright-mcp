@@ -86,11 +86,11 @@ def _detect_login_status(get_url_fn, get_text_fn, run_js_fn):
             False,
             (
                 "Boolean(document.querySelector("
-                "'meta[name=\"user-login\"][content]:not([content=\"\"]), "
-                "a[href=\"/notifications\"], "
-                "button[aria-label*=\"user navigation\"], "
-                "summary[aria-label*=\"View profile\"], "
-                "button[data-testid=\"avatar-button\"]'"
+                '\'meta[name="user-login"][content]:not([content=""]), '
+                'a[href="/notifications"], '
+                'button[aria-label*="user navigation"], '
+                'summary[aria-label*="View profile"], '
+                'button[data-testid="avatar-button"]\''
                 "))"
             ),
         )
@@ -104,7 +104,7 @@ def _detect_login_status(get_url_fn, get_text_fn, run_js_fn):
             False,
             (
                 "Boolean(document.querySelector("
-                "'#login_field, input[name=\"login\"], input[type=\"password\"]'"
+                '\'#login_field, input[name="login"], input[type="password"]\''
                 "))"
             ),
         )
@@ -158,7 +158,9 @@ def run(
     if run_js_fn is None:
         run_js_fn = _controls.run_js if _controls is not None else run_js
     if save_cookies_fn is None:
-        save_cookies_fn = _controls.save_cookies if _controls is not None else save_cookies
+        save_cookies_fn = (
+            _controls.save_cookies if _controls is not None else save_cookies
+        )
 
     log_fn = _resolve_log(log_fn)
     steps = []

@@ -456,7 +456,11 @@ def browser_launch_with_domain(domain: str) -> str:
         page = bm.launch_with_domain(domain=domain)
         from src.core.auth_manager import get_auth_manager
 
-        has = "with saved auth" if get_auth_manager().has_auth(domain) else "no saved auth"
+        has = (
+            "with saved auth"
+            if get_auth_manager().has_auth(domain)
+            else "no saved auth"
+        )
         return f"Browser ready for '{domain}' ({has}). Current page: {page.url}"
     except Exception as exc:
         return f"Launch failed: {exc}"

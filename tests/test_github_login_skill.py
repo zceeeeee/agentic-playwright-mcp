@@ -1,4 +1,4 @@
-﻿"""Tests for the GitHub login skill adapter."""
+"""Tests for the GitHub login skill adapter."""
 
 from __future__ import annotations
 

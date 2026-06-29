@@ -1,4 +1,4 @@
-﻿"""Direct GitHub login skill test using ScriptEngine."""
+"""Direct GitHub login skill test using ScriptEngine."""
 
 import os
 

@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.core.auth_manager import AuthManager, get_auth_manager, reset_auth_manager
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

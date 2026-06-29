@@ -118,7 +118,9 @@ class BrowserManager:
         # 安全兜底：如果旧 _playwright 实例还在（比如 close() 因断开未完全清理），
         # 先停掉再启动新的，避免 asyncio loop 冲突
         if self._playwright is not None:
-            logger.warning("Stale _playwright instance found before launch, stopping it")
+            logger.warning(
+                "Stale _playwright instance found before launch, stopping it"
+            )
             try:
                 self._playwright.stop()
             except Exception:
@@ -289,7 +291,9 @@ class BrowserManager:
                 if self._browser is not None:
                     self._browser.close()
             except Exception as exc:
-                logger.warning("Error closing disconnected browser", extra={"error": str(exc)})
+                logger.warning(
+                    "Error closing disconnected browser", extra={"error": str(exc)}
+                )
 
         # 无论是否已断开，都清理引用
         self._browser = None
@@ -307,7 +311,9 @@ class BrowserManager:
                 if self._playwright is not None:
                     self._playwright.stop()
             except Exception as exc:
-                logger.warning("Error stopping Playwright, force-resetting asyncio loop: %s", exc)
+                logger.warning(
+                    "Error stopping Playwright, force-resetting asyncio loop: %s", exc
+                )
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():

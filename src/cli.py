@@ -195,7 +195,9 @@ def serve(transport: str, host: str, port: int, debug: bool) -> None:
     default=False,
     help="Keep the browser open until Enter is pressed.",
 )
-def run(task: str, max_steps: int, headless: bool, slow_mo: int, keep_open: bool) -> None:
+def run(
+    task: str, max_steps: int, headless: bool, slow_mo: int, keep_open: bool
+) -> None:
     """Execute a natural-language TASK and print the result.
 
     Launches a browser, runs the agent loop, prints output, and exits.
@@ -571,7 +573,9 @@ def gui(host: str, port: int, debug: bool) -> None:
         click.secho("⚙  未检测到 OPENAI_API_KEY，LLM 兜底功能需要配置。", fg="yellow")
         click.echo("   （直接回车跳过，将使用纯规则模式）\n")
 
-        api_key = click.prompt("  OPENAI_API_KEY", default="", show_default=False).strip()
+        api_key = click.prompt(
+            "  OPENAI_API_KEY", default="", show_default=False
+        ).strip()
         if api_key:
             base_url = click.prompt(
                 "  OPENAI_BASE_URL", default="https://api.openai.com/v1"

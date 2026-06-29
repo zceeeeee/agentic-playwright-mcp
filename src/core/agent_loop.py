@@ -43,7 +43,7 @@ from src.core.event_bus import (
 from src.core.experience import ExperienceManager, get_experience_manager
 from src.core.intent_parser import LLMIntentParser, get_llm_intent_parser
 from src.core.script_engine import get_script_engine
-from src.core.script_generator import ScriptGenerator, TaskIntent
+from src.core.script_generator import ScriptGenerator
 from src.core.vision import VisionModule, get_vision_module
 from src.layer_2.controls import get_controls_exports
 from src.logging import bind_context, get_logger, log_timing
@@ -426,7 +426,11 @@ class AgentLoop:
             skill = self._select_best_skill(skills, task)
 
             # 歧义仲裁：如果 LLM 可用，让它决定用哪个技能
-            if self._has_ambiguity(skills, task) and self._llm_parser and self._llm_parser.available:
+            if (
+                self._has_ambiguity(skills, task)
+                and self._llm_parser
+                and self._llm_parser.available
+            ):
                 logger.info("PLAN: 技能库歧义 (%d 个候选)，尝试 LLM 仲裁", len(skills))
                 resolved = self._resolve_skill_with_llm(task, skills)
                 if resolved:
@@ -507,7 +511,10 @@ class AgentLoop:
                     Event(
                         name=EVENT_AGENT_PLAN,
                         phase=Phase.AFTER,
-                        data={"step_number": step.step_number, "source": "llm_fallback"},
+                        data={
+                            "step_number": step.step_number,
+                            "source": "llm_fallback",
+                        },
                         result=step.result,
                     )
                 )
@@ -689,7 +696,7 @@ class AgentLoop:
         prompt = (
             f"用户指令: {task}\n\n"
             f"候选技能列表:\n{candidates_text}\n\n"
-            "请选出最匹配用户指令的技能，返回 JSON: {\"skill_id\": \"选中的技能id\", \"confidence\": 0.9}\n"
+            '请选出最匹配用户指令的技能，返回 JSON: {"skill_id": "选中的技能id", "confidence": 0.9}\n'
             "只返回 JSON，不要其他文字。"
         )
 

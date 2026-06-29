@@ -396,7 +396,9 @@ def smart_login(
         if bm._context is not None:
             am = get_auth_manager()
             am.save_auth(domain, bm._context)
-            steps.append({"step": "save_cookies", "result": f"已保存 {domain} 的登录状态"})
+            steps.append(
+                {"step": "save_cookies", "result": f"已保存 {domain} 的登录状态"}
+            )
     except Exception as exc:
         steps.append({"step": "save_cookies", "result": f"保存失败: {exc}"})
 

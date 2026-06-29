@@ -13,9 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
 
-from src.core.script_generator import ScriptGenerator, TaskIntent
+from src.core.script_generator import TaskIntent
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +23,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _ACTIONS = [
-    "search",      # 搜索
-    "navigate",    # 导航到 URL
+    "search",  # 搜索
+    "navigate",  # 导航到 URL
     "screenshot",  # 截图
-    "extract",     # 提取页面文本
-    "fill",        # 填写表单
-    "paginate",    # 翻页遍历
-    "login",       # 登录
-    "click",       # 点击元素
-    "scroll",      # 滚动页面
-    "wait",        # 等待
+    "extract",  # 提取页面文本
+    "fill",  # 填写表单
+    "paginate",  # 翻页遍历
+    "login",  # 登录
+    "click",  # 点击元素
+    "scroll",  # 滚动页面
+    "wait",  # 等待
     "hot_search",  # 查看热搜
 ]
 
@@ -68,9 +67,7 @@ _KNOWN_SITES = {
 
 def _build_system_prompt() -> str:
     """构造 system prompt，告知 LLM 可用的 action 和网站。"""
-    sites_desc = "\n".join(
-        f"  - {key}: {name}" for key, name in _KNOWN_SITES.items()
-    )
+    sites_desc = "\n".join(f"  - {key}: {name}" for key, name in _KNOWN_SITES.items())
     actions_desc = ", ".join(_ACTIONS)
 
     return f"""你是一个自然语言意图解析器。用户会给你一句中文或英文的浏览器操作指令，你需要解析出结构化的意图。
@@ -116,8 +113,7 @@ class LLMIntentParser:
     ) -> None:
         self._api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self._base_url = (
-            base_url
-            or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         ).rstrip("/")
         self._model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 

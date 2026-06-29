@@ -1,4 +1,4 @@
-﻿"""Tests for skill_library.registry -- SkillRegistry, SkillFileMapping, SkillDetail, YAML loading."""
+"""Tests for skill_library.registry -- SkillRegistry, SkillFileMapping, SkillDetail, YAML loading."""
 
 from __future__ import annotations
 
