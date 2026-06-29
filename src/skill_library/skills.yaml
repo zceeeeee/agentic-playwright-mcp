@@ -76,6 +76,14 @@ skills:
     description: "打开 Gmail 收件箱"
     version: "1.0.0"
 
+  - id: "domain/gmail_login"
+    name: "Gmail 登录"
+    type: "domain"
+    triggers: ["gmail", "Gmail", "谷歌邮箱", "Google Mail", "邮箱登录", "登录", "login", "账号", "邮箱", "密码", "验证码"]
+    url_patterns: ["mail.google.com", "accounts.google.com"]
+    description: "打开 Gmail 中文登录页，填写邮箱和密码，选择第一种登录方式，等待用户输入验证码后完成登录"
+    version: "1.0.0"
+
   - id: "domain/outlook_inbox"
     name: "Outlook 收件箱"
     type: "domain"
@@ -248,6 +256,10 @@ sources:
 
   - id: "domain/gmail_inbox"
     file: "send/gmail_inbox.py"
+    entry: "run"
+
+  - id: "domain/gmail_login"
+    file: "others/gmail_login.py"
     entry: "run"
 
   - id: "domain/outlook_inbox"

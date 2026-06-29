@@ -51,6 +51,16 @@
       "description": "完成 Bilibili 短信登录后进入视频页面，填写评论内容并点击发送"
     },
     {
+      "id": "gmail_login",
+      "name": "Gmail 登录",
+      "type": "domain",
+      "triggers": ["gmail", "Gmail", "谷歌邮箱", "Google Mail", "邮箱登录", "登录", "login", "账号", "邮箱", "密码", "验证码"],
+      "url_patterns": ["mail.google.com", "accounts.google.com"],
+      "file": "others/gmail_login.py",
+      "function": "run",
+      "description": "打开 Gmail 中文登录页，填写邮箱和密码，选择第一种登录方式，等待用户输入验证码后完成登录"
+    },
+    {
       "id": "github_login",
       "name": "GitHub 登录",
       "type": "domain",

@@ -198,6 +198,25 @@ class TestGitHubLoginScript:
 
         assert 'run("alice", "s3cr3t")' in script
 
+    def test_extract_gmail_credentials_from_example_text(self):
+        credentials = AgentLoop._extract_gmail_credentials(
+            "完成登录gmail功能，账号邮箱（测试用例che53438@gmail.com），密码(测试用例8105432a)"
+        )
+
+        assert credentials == ("che53438@gmail.com", "8105432a")
+
+    def test_build_gmail_login_script_passes_email_and_password(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(email, password):\n    log(email)"
+
+        script = agent._build_skill_script(
+            source,
+            "Gmail登录，邮箱是che53438@gmail.com，密码是8105432a",
+            "domain/gmail_login",
+        )
+
+        assert 'run("che53438@gmail.com", "8105432a")' in script
+
     def test_extract_phone_number_chinese(self):
         phone_number = AgentLoop._extract_phone_number(
             "登录小红书，手机号 13800138000"
@@ -268,6 +287,40 @@ class TestGitHubLoginScript:
 
         assert 'run("13574133406", "测试标题", "测试正文")' in script
 
+    def test_extract_bilibili_comment_example_fields(self):
+        task = (
+            "bilibili账号，电话号码是13574133406，在在视频"
+            "https://www.bilibili.com/video/BV1oh7b6xE4R/"
+            "?spm_id_from=333.1387.homepage.video_card.click"
+            "&vd_source=6b653d6392c3b7bb0e204e07b9d93d96 下发布评论“test”。"
+        )
+
+        assert AgentLoop._extract_phone_number(task) == "13574133406"
+        assert AgentLoop._extract_comment_text(task) == "test"
+        assert AgentLoop._extract_video_url(task) == (
+            "https://www.bilibili.com/video/BV1oh7b6xE4R/"
+            "?spm_id_from=333.1387.homepage.video_card.click"
+            "&vd_source=6b653d6392c3b7bb0e204e07b9d93d96"
+        )
+
+    def test_build_bilibili_comment_script_passes_phone_comment_and_url(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(phone_number, comment_text, video_url=None):\n    log(comment_text)"
+
+        script = agent._build_skill_script(
+            source,
+            (
+                "bilibili账号，电话号码是13574133406，在视频"
+                "https://www.bilibili.com/video/BV1oh7b6xE4R/ 下发布评论“test”。"
+            ),
+            "domain/bilibili_comment",
+        )
+
+        assert (
+            'run("13574133406", "test", '
+            'video_url="https://www.bilibili.com/video/BV1oh7b6xE4R/")'
+        ) in script
+
     def test_select_bilibili_login_beats_bilibili_search_and_generic_login(self):
         from src.skill_library.skill_base import SkillMeta
 
@@ -303,6 +356,41 @@ class TestGitHubLoginScript:
 
         assert selected.id == "domain/bilibili_login"
 
+    def test_select_gmail_login_beats_gmail_inbox_and_generic_login(self):
+        from src.skill_library.skill_base import SkillMeta
+
+        agent = AgentLoop(max_steps=3)
+        skills = [
+            SkillMeta(
+                id="domain/gmail_inbox",
+                name="Gmail 收件箱",
+                type="domain",
+                triggers=["gmail", "谷歌邮箱", "邮件", "收件箱"],
+                url_patterns=["mail.google.com"],
+            ),
+            SkillMeta(
+                id="domain/gmail_login",
+                name="Gmail 登录",
+                type="domain",
+                triggers=["gmail", "谷歌邮箱", "登录", "账号", "邮箱", "密码", "验证码"],
+                url_patterns=["mail.google.com", "accounts.google.com"],
+            ),
+            SkillMeta(
+                id="interaction/login_flow",
+                name="通用登录",
+                type="interaction",
+                triggers=["登录", "login"],
+                url_patterns=[],
+            ),
+        ]
+
+        selected = agent._select_best_skill(
+            skills,
+            "Gmail登录，邮箱是che53438@gmail.com，密码是8105432a",
+        )
+
+        assert selected.id == "domain/gmail_login"
+
     def test_select_bilibili_publish_beats_login_and_search(self):
         from src.skill_library.skill_base import SkillMeta
 
@@ -337,6 +425,48 @@ class TestGitHubLoginScript:
         )
 
         assert selected.id == "domain/bilibili_publish"
+
+    def test_select_bilibili_comment_beats_login_search_and_publish(self):
+        from src.skill_library.skill_base import SkillMeta
+
+        agent = AgentLoop(max_steps=3)
+        skills = [
+            SkillMeta(
+                id="domain/bilibili_search",
+                name="Bilibili 搜索",
+                type="domain",
+                triggers=["bilibili", "B站", "视频", "搜索"],
+                url_patterns=["bilibili.com", "search.bilibili.com"],
+            ),
+            SkillMeta(
+                id="domain/bilibili_login",
+                name="Bilibili 短信登录",
+                type="domain",
+                triggers=["bilibili", "B站", "登录", "验证码"],
+                url_patterns=["bilibili.com", "*.bilibili.com"],
+            ),
+            SkillMeta(
+                id="domain/bilibili_publish",
+                name="Bilibili 文章投稿",
+                type="domain",
+                triggers=["bilibili", "B站", "投稿", "文章", "标题", "正文"],
+                url_patterns=["bilibili.com", "*.bilibili.com", "member.bilibili.com"],
+            ),
+            SkillMeta(
+                id="domain/bilibili_comment",
+                name="Bilibili 视频评论",
+                type="domain",
+                triggers=["bilibili", "B站", "评论", "发布评论", "视频评论"],
+                url_patterns=["bilibili.com", "*.bilibili.com", "bilibili.com/video/"],
+            ),
+        ]
+
+        selected = agent._select_best_skill(
+            skills,
+            "bilibili账号，电话号码是13574133406，在视频链接下发布评论“test”。",
+        )
+
+        assert selected.id == "domain/bilibili_comment"
 
 # ---------------------------------------------------------------------------
 # Full loop

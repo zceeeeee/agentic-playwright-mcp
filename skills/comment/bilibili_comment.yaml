@@ -1,7 +1,7 @@
 id: bilibili_comment
 name: Bilibili 视频评论
 type: domain
-description: 完成 Bilibili 短信登录后进入视频页面，填写评论内容并点击发送。
+description: 进入 Bilibili 视频页后完成短信登录，登录完成后等待 20 秒，再下滑填写评论内容并点击评论框右下方蓝色发布按钮。
 version: "1.0.0"
 
 triggers:
@@ -46,31 +46,40 @@ parameters:
 steps:
   - action: goto
     args:
-      url: "https://www.bilibili.com"
-    comment: 打开 Bilibili 首页并完成短信登录
+      url: "{{video_url}}"
+    comment: 进入指定 Bilibili 视频页面
 
   - action: smart_click
     target: login_button
-    comment: 点击右上角“登录”图标
+    comment: 点击右上角蓝色“登录”按钮
     on_error: continue
 
   - action: smart_click
     target: sms_login
-    comment: 切换到短信登录并等待用户完成人机认证和短信登录
+    comment: 识别到“短信登录”后点击弹窗中的短信登录
     on_error: continue
 
-  - action: goto
+  - action: smart_fill
+    target: phone
+    value: "{{phone_number}}"
+    comment: 填写手机号
+
+  - action: smart_click
+    target: get_code
+    comment: 点击发送验证码
+
+  - action: wait
     args:
-      url: "{{video_url}}"
-    comment: 进入 Bilibili 视频页面
+      seconds: 20
+    comment: 登录完成后等待页面稳定
 
   - action: smart_fill
     target: comment_input
     value: "{{comment_text}}"
-    comment: 填写评论内容
+    comment: 下滑找到评论框并填写评论内容
     on_error: stop
 
   - action: smart_click
     target: send_comment_button
-    comment: 点击发送评论按钮
+    comment: 点击评论框右下方蓝色“发布”按钮
     on_error: stop

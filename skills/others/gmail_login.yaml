@@ -1,0 +1,81 @@
+id: gmail_login
+name: Gmail 登录
+type: domain
+description: 打开 Gmail 中文登录页，填写邮箱和密码，选择第一种登录方式，等待用户输入验证码后完成登录。
+version: "1.0.0"
+
+triggers:
+  - gmail
+  - Gmail
+  - 谷歌邮箱
+  - Google Mail
+  - 邮箱登录
+  - 登录
+  - login
+  - 账号
+  - 邮箱
+  - 密码
+  - 验证码
+
+url_patterns:
+  - mail.google.com
+  - accounts.google.com
+
+domain: gmail
+
+parameters:
+  email:
+    type: string
+    required: true
+    description: Gmail 账号邮箱，例如 che53438@gmail.com。
+  password:
+    type: string
+    required: true
+    description: Gmail 密码。
+  login_url:
+    type: string
+    required: false
+    default: "https://mail.google.com/mail?hl=zh-CN"
+    description: Gmail 中文登录入口。
+
+steps:
+  - action: goto
+    args:
+      url: "{{login_url}}"
+    comment: 打开 Gmail 中文登录页
+
+  - action: smart_fill
+    target: email
+    value: "{{email}}"
+    comment: 输入账号邮箱
+
+  - action: smart_click
+    target: next_button
+    comment: 点击“下一步”或按回车
+
+  - action: smart_fill
+    target: password
+    value: "{{password}}"
+    comment: 输入密码
+
+  - action: smart_click
+    target: next_button
+    comment: 点击“下一步”
+
+  - action: smart_click
+    target: first_signin_method
+    comment: 识别“选择您想要使用的登录方式：”后点击下面第一个方式
+    on_error: continue
+
+  - action: wait
+    args:
+      seconds: 30
+    comment: 等待用户输入验证码
+
+  - action: smart_click
+    target: next_button
+    comment: 用户输入验证码后点击“下一步”
+
+  - action: wait
+    target: gmail_logo
+    comment: 识别左上角 Gmail 图标，确认登录成功

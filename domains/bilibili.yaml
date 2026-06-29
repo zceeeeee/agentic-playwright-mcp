@@ -67,3 +67,19 @@ locators:
       - "[role='button']:has-text('发布')"
       - "div:has-text('发布')"
       - "span:has-text('发布')"
+  comment_input:
+    css:
+      - ".reply-box-textarea"
+      - ".comment-input"
+      - "[contenteditable='true'][data-placeholder*='评论']"
+      - "[contenteditable='true'][data-placeholder*='友善']"
+      - "textarea[placeholder*='评论']"
+      - "[class*='reply' i] textarea"
+      - "[class*='comment' i] textarea"
+      - "[class*='comment' i] [contenteditable='true']"
+  send_comment_button:
+    css:
+      - "button:has-text('发布')"
+      - "[role='button']:has-text('发布')"
+      - "button:has-text('发送')"
+      - "[role='button']:has-text('发送')"

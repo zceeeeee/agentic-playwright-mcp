@@ -554,6 +554,20 @@ class AgentLoop:
         """
         import re
 
+        if skill_id == "domain/gmail_login":
+            credentials = self._extract_gmail_credentials(task)
+            if not credentials:
+                return (
+                    f"{source_code}\n\n"
+                    "raise ValueError('Gmail login requires email and password')"
+                )
+            email, password = credentials
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(email, ensure_ascii=False)}, "
+                f"{json.dumps(password, ensure_ascii=False)})"
+            )
+
         if skill_id == "domain/github_login":
             credentials = self._extract_login_credentials(task)
             if not credentials:
@@ -679,6 +693,25 @@ class AgentLoop:
         return None
 
     @staticmethod
+    def _extract_gmail_credentials(task: str) -> tuple[str, str] | None:
+        import re
+
+        email_match = re.search(
+            r"([A-Z0-9._%+-]+@gmail\.com)",
+            task,
+            re.IGNORECASE,
+        )
+        password_match = re.search(
+            r"(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\s,，;；。)）]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if email_match and password_match:
+            password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
+            return email_match.group(1), password
+        return AgentLoop._extract_login_credentials(task)
+
+    @staticmethod
     def _extract_phone_number(task: str) -> str | None:
         import re
 
@@ -732,10 +765,15 @@ class AgentLoop:
         def clean(value: str | None) -> str | None:
             if not value:
                 return None
-            text = value.strip().strip("'\"`""''").rstrip("，,；;。 \n\r\t")
+            text = value.strip()
+            text = text.strip("'\"`“”‘’")
+            text = text.rstrip("，,；;。.!！?？ \n\r\t")
+            text = text.strip("'\"`“”‘’")
             return text or None
 
         comment_patterns = [
+            r"(?:发布|发表|发送|发)?(?:评论|留言|回复)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+            r"['\"“‘](.+?)['\"”’]\s*(?:的)?(?:评论|留言|回复)",
             r"(?:评论|留言|回复|说|内容)\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?(.+?)(?=(?:在|然后|并且|接着)|$)",
             r"['\"“”‘’](.+?)['\"“”‘’]\s*(?:的评论|评论|留言)",
             r"发布评论['\"“”‘’]?(.+?)(?:\s|$)",
@@ -754,15 +792,15 @@ class AgentLoop:
         """从任务描述中提取视频URL。"""
         import re
 
-        # 直接匹配 bilibili 视频 URL，排除中文标点和常见分隔符
+        # 直接匹配 bilibili 视频 URL，保留带点号的查询参数。
         match = re.search(
-            r"(https?://[^\s<>\"]+bilibili\.com/video/[A-Za-z0-9?=&_\-/%#]+)",
+            r"(https?://(?:www\.)?bilibili\.com/video/[^\s<>\"'“”‘’]+)",
             task,
-            re.IGNORECASE
+            re.IGNORECASE,
         )
         if match:
             url = match.group(1)
-            return url
+            return re.sub(r"[.,;:，。；：！!?）)>]+$", "", url)
 
         # 回退：尝试匹配任何以 BV 开头的视频链接
         match = re.search(r"(https?://[^\s]+/video/BV[A-Za-z0-9]+)", task, re.IGNORECASE)

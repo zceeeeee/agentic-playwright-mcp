@@ -8,6 +8,7 @@ except Exception:
 
 DEFAULT_LOGIN_URL = "https://www.bilibili.com"
 DEFAULT_VIDEO_URL = "https://www.bilibili.com/video/BV1oh7b6xE4R"
+POST_LOGIN_WAIT_SECONDS = 20
 
 
 def _default_log(message):
@@ -91,16 +92,23 @@ def _detect_login_state(run_js_fn):
       rect.left > window.innerWidth * 0.45;
     return visible(el) && topRight && compactText(el) === '\\u767b\\u5f55';
   });
-  const avatar = Array.from(document.querySelectorAll(
-    '.header-avatar,.bili-avatar,.b-avatar,[class*="avatar" i],.right-entry__outside img,.right-entry img'
-  )).some((el) => visible(el));
-  const loggedIn = (avatar && !loginPopup) || (!loginEntry && !loginPopup);
+  const headerAvatar = Array.from(document.querySelectorAll(
+    '.right-entry__outside .header-avatar,.right-entry .header-avatar,' +
+    '.right-entry__outside img,.right-entry img,' +
+    '.bili-header [class*="avatar" i],.international-header [class*="avatar" i]'
+  )).some((el) => {
+    const rect = el.getBoundingClientRect();
+    const topRight = rect.top < Math.max(180, window.innerHeight * 0.3) &&
+      rect.left > window.innerWidth * 0.45;
+    return visible(el) && topRight;
+  });
+  const loggedIn = headerAvatar && !loginPopup;
   return {
     success: true,
     logged_in: loggedIn,
     login_popup: loginPopup,
     login_entry: loginEntry,
-    avatar: avatar,
+    header_avatar: headerAvatar,
     url: location.href
   };
 })()
@@ -115,6 +123,11 @@ def _open_login_panel(run_js_fn):
 (async () => {
   const LOGIN_TEXT = '\\u767b\\u5f55';
   const SMS_LOGIN_TEXT = '\\u77ed\\u4fe1\\u767b\\u5f55';
+  try {
+    window.scrollTo({top: 0, behavior: 'instant'});
+  } catch (error) {
+    window.scrollTo(0, 0);
+  }
   const visible = (el) => {
     const style = window.getComputedStyle(el);
     return style && style.visibility !== 'hidden' && style.display !== 'none' &&
@@ -134,6 +147,15 @@ def _open_login_panel(run_js_fn):
     if (/login-entry/i.test(className)) value -= 1500;
     if (rect.top < Math.max(180, window.innerHeight * 0.3) &&
         rect.left > window.innerWidth * 0.45) value -= 900;
+    const style = window.getComputedStyle(el);
+    if (/rgb\\(\\s*(0|20|30)\\s*,\\s*(1[4-9][0-9]|2[0-5][0-9])\\s*,\\s*(2[0-5][0-9])\\s*\\)|#?00a1d6|#?00aeec/i.test(
+      `${style.backgroundColor} ${style.color} ${style.borderColor}`
+    )) {
+      value -= 300;
+    }
+    if (Math.abs(rect.width - rect.height) <= 18 && rect.width <= 90 && rect.height <= 90) {
+      value -= 180;
+    }
     value += rect.top;
     value -= rect.left / 10;
     return value;
@@ -150,26 +172,55 @@ def _open_login_panel(run_js_fn):
       const rect = el.getBoundingClientRect();
       const topRight = rect.top < Math.max(180, window.innerHeight * 0.3) &&
         rect.left > window.innerWidth * 0.45;
-      return label === LOGIN_TEXT && (topRight || /login/i.test(String(el.className || '')));
+      const className = String(el.className || '');
+      const rightEntry = Boolean(el.closest('.right-entry,.right-entry__outside,.bili-header,.international-header'));
+      const compactLoginText = label === LOGIN_TEXT || label.toLowerCase() === 'login';
+      const loginEntryClass = /header-login-entry|login-entry/i.test(className);
+      if (compactLoginText && (topRight || rightEntry || loginEntryClass)) {
+        return true;
+      }
+      return loginEntryClass && (topRight || rightEntry) && rect.width <= 180 && rect.height <= 180;
     });
     nodes.sort((a, b) => score(a) - score(b));
     return nodes[0] || null;
   };
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  for (let attempt = 1; attempt <= 6; attempt += 1) {
+  let lastText = '';
+  let lastClass = '';
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    if (hasSmsLogin()) {
+      return {success: true, already_open: true, marker_found: true, attempts: attempt - 1};
+    }
     const button = findButton();
     if (!button) {
-      return {success: false, error: 'Bilibili login icon not found', attempts: attempt - 1};
+      await pause(500);
+      continue;
     }
     const target = button.closest('button,[role="button"],a') || button;
     target.scrollIntoView({block: 'center', inline: 'center'});
+    lastText = compactText(target) || compactText(button);
+    lastClass = String(button.className || '');
     target.click();
-    await pause(700);
+    await pause(900);
     if (hasSmsLogin()) {
-      return {success: true, clicked: true, marker_found: true, attempts: attempt};
+      return {
+        success: true,
+        clicked: true,
+        marker_found: true,
+        attempts: attempt,
+        text: lastText,
+        class_name: lastClass,
+        method: 'top_right_login_button_until_sms_marker'
+      };
     }
   }
-  return {success: false, error: 'Bilibili SMS login marker not found', attempts: 6};
+  return {
+    success: false,
+    error: 'Bilibili SMS login marker not found after clicking login button',
+    attempts: 10,
+    text: lastText,
+    class_name: lastClass
+  };
 })()
 """,
     )
@@ -219,8 +270,19 @@ def _fill_login_phone(run_js_fn, phone_number):
     return _run_js_dict(
         run_js_fn,
         """
-(() => {
+(async () => {
   const phone = PHONE_NUMBER;
+  const PANEL_SELECTOR = [
+    '.bili-mini-login',
+    '.login-panel',
+    '.login-panel-popover',
+    '.login-container',
+    '.bili-login',
+    '.passport-login-container',
+    '[class*="mini-login" i]',
+    '[class*="login-panel" i]',
+    '[class*="login"]'
+  ].join(',');
   const visible = (el) => {
     const style = window.getComputedStyle(el);
     return style && style.visibility !== 'hidden' && style.display !== 'none' &&
@@ -236,36 +298,112 @@ def _fill_login_phone(run_js_fn, phone_number):
     el.inputMode || '',
     el.getAttribute('aria-label') || ''
   ].join(' ').toLowerCase();
-  const inLoginArea = (el) => {
-    let node = el;
+  const ancestorTextMatches = (el) => {
+    let node = el.parentElement;
     for (let i = 0; i < 7 && node; i += 1) {
       const text = compactText(node);
-      if (text.includes('\\u77ed\\u4fe1\\u767b\\u5f55') || text.includes('\\u9a8c\\u8bc1\\u7801')) {
+      if (
+        text.includes('\\u77ed\\u4fe1\\u767b\\u5f55') ||
+        text.includes('\\u672a\\u6ce8\\u518c\\u8fc7\\u54d4\\u54e9\\u54d4\\u54e9') ||
+        text.includes('\\u9a8c\\u8bc1\\u7801') ||
+        text.includes('\\u767b\\u5f55\\u6216\\u5b8c\\u6210\\u6ce8\\u518c')
+      ) {
         return true;
       }
       node = node.parentElement;
     }
     return false;
   };
-  const target = Array.from(document.querySelectorAll('input')).filter(visible).find((el) => {
+  const inLoginArea = (el) => Boolean(el.closest(PANEL_SELECTOR)) || ancestorTextMatches(el);
+  const denied = (text) => /(验证码|code|密码|password|国家|地区|area|country|邮箱|email|搜索|search|keyword|账号|account)/i.test(text);
+  const phoneHint = (text) => /(手机号|手机|phone|mobile|tel)/i.test(text);
+  const inputs = Array.from(document.querySelectorAll('input')).filter(visible);
+  let target = inputs.find((el) => {
     const text = textOf(el);
-    return inLoginArea(el) && /(手机号|手机|phone|mobile|tel)/i.test(text) &&
-      !/(验证码|code|密码|password|搜索|search|账号|account)/i.test(text);
+    return inLoginArea(el) && phoneHint(text) && !denied(text);
   });
   if (!target) {
-    return {success: false, error: 'Phone input not found'};
+    target = inputs.find((el) => {
+      const text = textOf(el);
+      const type = (el.type || '').toLowerCase();
+      return inLoginArea(el) && !denied(text) && type === 'tel';
+    });
   }
+  if (!target) {
+    return {success: false, error: 'Phone input not found in Bilibili login panel'};
+  }
+
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+  const setValue = (value) => {
+    if (descriptor && descriptor.set) {
+      descriptor.set.call(target, value);
+    } else {
+      target.value = value;
+    }
+  };
+  const emitInput = (inputType, data) => {
+    try {
+      target.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        inputType,
+        data
+      }));
+    } catch (error) {
+      target.dispatchEvent(new Event('input', {bubbles: true}));
+    }
+  };
+  const emitKeyboard = (type, key) => {
+    try {
+      target.dispatchEvent(new KeyboardEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        key,
+        code: /^\\d$/.test(key) ? `Digit${key}` : '',
+        charCode: key.length === 1 ? key.charCodeAt(0) : 0,
+        keyCode: key.length === 1 ? key.charCodeAt(0) : 0,
+        which: key.length === 1 ? key.charCodeAt(0) : 0
+      }));
+    } catch (error) {}
+  };
+
   target.scrollIntoView({block: 'center', inline: 'center'});
   target.focus();
-  if (descriptor && descriptor.set) {
-    descriptor.set.call(target, phone);
-  } else {
-    target.value = phone;
+  target.click();
+  setValue('');
+  emitInput('deleteContentBackward', null);
+  await pause(30);
+
+  for (const char of phone) {
+    emitKeyboard('keydown', char);
+    emitKeyboard('keypress', char);
+    try {
+      target.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: char
+      }));
+    } catch (error) {}
+    setValue((target.value || '') + char);
+    emitInput('insertText', char);
+    emitKeyboard('keyup', char);
+    await pause(25);
   }
-  target.dispatchEvent(new Event('input', {bubbles: true}));
+
   target.dispatchEvent(new Event('change', {bubbles: true}));
-  return {success: (target.value || '').replace(/\\D/g, '') === phone, value: target.value || ''};
+  await pause(120);
+  const digits = (target.value || '').replace(/\\D/g, '');
+  return {
+    success: digits === phone,
+    error: digits === phone ? '' : 'Phone input did not accept all digits',
+    placeholder: target.placeholder || '',
+    name: target.name || '',
+    id: target.id || '',
+    type: target.type || '',
+    value: target.value || ''
+  };
 })()
 """.replace("PHONE_NUMBER", _js_string(phone_number)),
     )
@@ -329,8 +467,8 @@ def _reload_page(run_js_fn):
     )
 
 
-def _prepare_sms_login_on_video(phone, goto_fn, run_js_fn, wait_fn, get_url_fn, get_text_fn, steps):
-    """Prepare SMS login on the video page."""
+def _prepare_sms_login_on_video(phone, run_js_fn, get_url_fn, get_text_fn, steps):
+    """Prepare SMS login on the already-open video page."""
     state = _detect_login_state(run_js_fn)
     steps.append({"step": "detect_login_state", "result": state})
     if state.get("logged_in"):
@@ -414,8 +552,19 @@ def _find_comment_input(run_js_fn):
     '\\u70b9\\u51fb\\u8bc4\\u8bba', 'comment', 'reply', '\\u56de\\u590d'
   ];
 
+  const scrollForComments = () => {
+    const anchors = Array.from(document.querySelectorAll('a,button,div,span'))
+      .filter(visible)
+      .filter((el) => /评论/.test(compactText(el)));
+    if (anchors.length) {
+      anchors[0].scrollIntoView({block: 'center', inline: 'center'});
+    } else {
+      window.scrollTo({top: Math.max(window.innerHeight * 0.8, 700), behavior: 'instant'});
+    }
+  };
+
   const inputCandidates = Array.from(document.querySelectorAll(
-    'textarea,[contenteditable="true"],[role="textbox"],[data-placeholder]'
+    '.reply-box-textarea,.comment-input,textarea,[contenteditable="true"],[role="textbox"],[data-placeholder],[class*="reply" i] textarea,[class*="comment" i] textarea,[class*="comment" i] [contenteditable="true"]'
   )).filter(visible).filter((el) => {
     const label = labelOf(el);
     const nearText = compactText(el.parentElement || el.parentElement?.parentElement || el);
@@ -447,6 +596,7 @@ def _find_comment_input(run_js_fn):
     return {success: true, found: true, selector: 'fallback', method: 'placeholder_hint'};
   }
 
+  scrollForComments();
   return {success: false, error: 'Bilibili comment input not found'};
 })()
 """,
@@ -475,15 +625,27 @@ def _fill_comment(run_js_fn, comment_text):
   ].join(' ').toLowerCase();
   const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
 
+  const scrollForComments = () => {
+    const anchors = Array.from(document.querySelectorAll('a,button,div,span'))
+      .filter(visible)
+      .filter((el) => /评论/.test(compactText(el)));
+    if (anchors.length) {
+      anchors[0].scrollIntoView({block: 'center', inline: 'center'});
+    } else {
+      window.scrollTo({top: Math.max(window.innerHeight * 0.8, 700), behavior: 'instant'});
+    }
+  };
+
   const commentKeywords = [
     '\\u8bc4\\u8bba', '\\u8bc4\\u8bb0', '\\u53d1\\u8868\\u4f60\\u7684\\u770b\\u6cd5',
     '\\u5594\\u54e6\\u8bc4\\u8bb0\\u4e00\\u4e0b', '\\u6280\\u672f\\u8bc4\\u8bba',
-    '\\u70b9\\u51fb\\u8bc4\\u8bba', 'comment', 'reply'
+    '\\u70b9\\u51fb\\u8bc4\\u8bba', '\\u53d1\\u4e00\\u6761\\u53cb\\u5584\\u7684\\u8bc4\\u8bba',
+    '\\u53cb\\u5584\\u7684\\u8bc4\\u8bba', 'comment', 'reply'
   ];
 
   let target = null;
   const allInputs = Array.from(document.querySelectorAll(
-    'textarea,[contenteditable="true"],[role="textbox"],[data-placeholder]'
+    '.reply-box-textarea,.comment-input,textarea,[contenteditable="true"],[role="textbox"],[data-placeholder],[class*="reply" i] textarea,[class*="comment" i] textarea,[class*="comment" i] [contenteditable="true"]'
   )).filter(visible);
 
   for (const el of allInputs) {
@@ -496,7 +658,8 @@ def _fill_comment(run_js_fn, comment_text):
   }
 
   if (!target) {
-    const placeholderHints = ['说点什么', '评论', '留下你的精彩评论', '文明上网', '发表评论'];
+    scrollForComments();
+    const placeholderHints = ['说点什么', '评论', '留下你的精彩评论', '文明上网', '发表评论', '发一条友善的评论', '友善的评论'];
     for (const el of allInputs) {
       const ph = el.placeholder || el.getAttribute('data-placeholder') || '';
       if (placeholderHints.some((hint) => ph.includes(hint))) {
@@ -581,6 +744,59 @@ def _click_send_comment(run_js_fn):
     '\\u53d1\\u5e03', '\\u53d1\\u9001', '\\u63d0\\u4ea4', '\\u63d0\\u4ea4\\u8bc4\\u8bba',
     '\\u8bc4\\u8bba', '\\u56de\\u590d', 'submit', 'send', 'post'
   ];
+  const editorSelectors = [
+    '.reply-box-textarea',
+    '.comment-input',
+    'textarea',
+    '[contenteditable="true"]',
+    '[role="textbox"]',
+    '[data-placeholder]'
+  ].join(',');
+  const editors = Array.from(document.querySelectorAll(editorSelectors))
+    .filter(visible)
+    .map((el) => {
+      const value = el.value || el.innerText || el.textContent || '';
+      const label = labelOf(el);
+      const rect = el.getBoundingClientRect();
+      const commentLike = /(评论|comment|回复|reply|友善)/i.test(label);
+      return {el, value, label, rect, commentLike};
+    })
+    .filter((item) => item.value.trim() || item.commentLike);
+  editors.sort((a, b) => {
+    const score = (item) => {
+      let value = 0;
+      if (item.value.trim()) value -= 800;
+      if (item.commentLike) value -= 300;
+      value += item.rect.top;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const editor = editors[0] ? editors[0].el : null;
+  const editorRect = editor ? editor.getBoundingClientRect() : null;
+  let editorRoot = null;
+  if (editor) {
+    editorRoot = editor.closest(
+      '.reply-box,.comment-box,.comment-send,.comment-container,.bili-comment,.reply-box-wrap,[class*="reply" i],[class*="comment" i]'
+    );
+    if (!editorRoot || editorRoot === editor) {
+      editorRoot = editor.parentElement;
+    }
+  }
+  const nearEditor = (rect) => {
+    if (!editorRect) return false;
+    const horizontallyNear = rect.left >= editorRect.left + editorRect.width * 0.35 ||
+      rect.right >= editorRect.right - 40;
+    const belowOrSame = rect.top >= editorRect.top - 24 &&
+      rect.top <= editorRect.bottom + 180;
+    return horizontallyNear && belowOrSame;
+  };
+  const blueButton = (el) => {
+    const style = window.getComputedStyle(el);
+    return /rgb\\(\\s*(0|20|30|64)\\s*,\\s*(1[4-9][0-9]|2[0-5][0-9])\\s*,\\s*(2[0-5][0-9])\\s*\\)|#?00a1d6|#?00aeec|#?1890ff/i.test(
+      `${style.backgroundColor} ${style.color} ${style.borderColor}`
+    );
+  };
 
   let candidates = Array.from(document.querySelectorAll(
     'button,[role="button"],a,div,span'
@@ -588,11 +804,24 @@ def _click_send_comment(run_js_fn):
     const rect = el.getBoundingClientRect();
     const text = compactText(el);
     const label = labelOf(el);
-    return {el, text, label, rect, clickable: Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON'};
+    const target = el.closest('button,[role="button"],a') || el;
+    const inEditorRoot = editorRoot ? editorRoot.contains(el) : false;
+    return {
+      el,
+      target,
+      text,
+      label,
+      rect,
+      clickable: Boolean(el.closest('button,[role="button"],a')) || el.tagName === 'BUTTON',
+      near_editor: nearEditor(rect),
+      in_editor_root: inEditorRoot,
+      blue: blueButton(target) || blueButton(el)
+    };
   }).filter((item) => {
     if (!item.text) return false;
     if (/取消|关闭|删除|编辑/.test(item.text)) return false;
-    return sendKeywords.some((kw) => item.text.includes(kw) || item.label.includes(kw));
+    if (!sendKeywords.some((kw) => item.text.includes(kw) || item.label.includes(kw))) return false;
+    return item.near_editor || item.in_editor_root || item.blue;
   });
 
   if (candidates.length) {
@@ -601,18 +830,28 @@ def _click_send_comment(run_js_fn):
         let value = 0;
         if (item.text === SEND_TEXT) value -= 500;
         if (item.clickable) value -= 100;
-        if (/\\u53d1\\u5e03/.test(item.text)) value -= 200;
+        if (item.in_editor_root) value -= 400;
+        if (item.near_editor) value -= 300;
+        if (item.blue) value -= 250;
+        if (item.text.includes(SEND_TEXT)) value -= 200;
+        value += item.rect.width * item.rect.height / 1000;
         return value;
       };
       return score(a) - score(b);
     });
-    const target = candidates[0].el.closest('button,[role="button"],a') || candidates[0].el;
+    const target = candidates[0].target;
     if (target.disabled || target.getAttribute('aria-disabled') === 'true') {
       return {success: false, error: 'Send button is disabled', text: candidates[0].text};
     }
     target.scrollIntoView({block: 'center', inline: 'center'});
     target.click();
-    return {success: true, text: candidates[0].text, method: 'keyword_match'};
+    return {
+      success: true,
+      text: candidates[0].text,
+      method: candidates[0].near_editor ? 'comment_box_bottom_right_publish_button' : 'keyword_match',
+      blue: Boolean(candidates[0].blue),
+      near_editor: Boolean(candidates[0].near_editor)
+    };
   }
 
   const bottomRightButtons = Array.from(document.querySelectorAll('button,[role="button"]'))
@@ -665,6 +904,7 @@ def run(
     video_url=None,
     *,
     max_wait_seconds=300,
+    post_login_wait_seconds=POST_LOGIN_WAIT_SECONDS,
     goto_fn=None,
     run_js_fn=None,
     wait_fn=None,
@@ -672,17 +912,16 @@ def run(
     get_text_fn=None,
     log_fn=None,
 ):
-    """Log in to Bilibili on video page, reload, then post comment.
+    """Log in to Bilibili on video page, then scroll to comments and post.
 
     Flow:
     1. Open video page
     2. Click login button (top right)
     3. Switch to SMS login
     4. Fill phone and send code
-    5. Wait for user to complete verification
-    6. Wait 30 seconds
-    7. Reload page
-    8. Find comment input and send
+    5. Wait for manual verification/login completion
+    6. Wait 20 seconds after login completion
+    7. Scroll down, find comment input, fill it, and click its blue publish button
     """
     if goto_fn is None:
         goto_fn = _controls.goto if _controls is not None else goto
@@ -713,9 +952,7 @@ def run(
         # Step 2-5: Login on video page
         login_result = _prepare_sms_login_on_video(
             phone,
-            goto_fn,
             run_js_fn,
-            wait_fn,
             get_url_fn,
             get_text_fn,
             steps,
@@ -729,7 +966,7 @@ def run(
             }
 
         if not login_result.get("already_logged_in"):
-            log_fn("Please complete Bilibili human verification and SMS login in the browser.")
+            log_fn("Please complete Bilibili human verification and SMS login.")
             wait_result = _wait_for_login_completion_on_video(
                 run_js_fn,
                 wait_fn,
@@ -746,16 +983,15 @@ def run(
                     "steps": steps,
                 }
 
-        # Step 6: Wait 30 seconds after login
-        log_fn("Login completed. Waiting 30 seconds before reloading...")
-        steps.append({"step": "wait_before_reload", "result": _safe_call(wait_fn, "", 30)})
+        log_fn("Login completed. Waiting 20 seconds before locating comments.")
+        steps.append(
+            {
+                "step": "wait_after_login_completion_before_comment",
+                "result": _safe_call(wait_fn, "", post_login_wait_seconds),
+            }
+        )
 
-        # Step 7: Reload page
-        log_fn("Reloading page...")
-        steps.append({"step": "reload_page", "result": _reload_page(run_js_fn)})
-        steps.append({"step": "wait_after_reload", "result": _safe_call(wait_fn, "", 3)})
-
-        # Step 8: Find comment input
+        # Find comment input
         input_result = _retry(
             "find_comment_input",
             lambda: _find_comment_input(run_js_fn),

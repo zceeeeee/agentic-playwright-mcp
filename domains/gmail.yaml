@@ -1,0 +1,34 @@
+name: gmail
+base_url: https://mail.google.com/mail?hl=zh-CN
+locators:
+  email:
+    css:
+      - "input[type='email']"
+      - "#identifierId"
+      - "input[name='identifier']"
+      - "input[autocomplete='username']"
+  password:
+    css:
+      - "input[type='password']"
+      - "input[name='Passwd']"
+      - "input[autocomplete='current-password']"
+  next_button:
+    css:
+      - "#identifierNext"
+      - "#passwordNext"
+      - "button:has-text('下一步')"
+      - "[role='button']:has-text('下一步')"
+      - "button:has-text('Next')"
+      - "[role='button']:has-text('Next')"
+  first_signin_method:
+    css:
+      - "[role='link']"
+      - "[role='button']"
+      - "li[role='link']"
+      - "li[role='button']"
+  gmail_logo:
+    css:
+      - "a[title='Gmail']"
+      - "a[aria-label='Gmail']"
+      - "img[alt='Gmail']"
+      - "div[aria-label='Gmail']"
