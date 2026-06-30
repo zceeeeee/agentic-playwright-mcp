@@ -345,16 +345,49 @@ skills:
         description: "手机号码"
 
   - id: "domain/xiaohongshu_publish"
-    name: "小红书图文发布"
+    name: "小红书发布"
     type: "domain"
-    triggers: ["小红书 发布","小红书发布"]
+    triggers:
+      - "小红书 发布"
+      - "小红书发布"
+      - "小红书上传"
+      - "小红书图文"
+      - "小红书笔记"
+      - "小红书文章"
+      - "小红书长文"
+      - "小红书视频"
+      - "小红书投稿"
+      - "发布图文"
+      - "发布笔记"
+      - "发布文章"
+      - "发布长文"
+      - "发布视频"
+      - "发布小说"
+      - "写文章"
+      - "写长文"
+      - "发文章"
+      - "发长文"
+      - "发图文"
+      - "发笔记"
+      - "上传图文"
+      - "上传图片"
+      - "上传视频"
+      - "发视频"
+      - "视频地址"
+      - "视频路径"
+      - "图片地址"
+      - "图片路径"
+      - "文字配图"
+      - "生成图片"
     url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com", "creator.xiaohongshu.com"]
-    description: "检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后进入图文发布页点击文字配图，填写内容，生成图片并发布"
+    description: "检查小红书登录状态，必要时填写手机号并获取验证码，登录成功后发布图文、上传图片、上传视频或发布文章"
     version: "1.0.0"
     examples:
       - "在小红书发布一篇图文笔记"
       - "小红书发一条笔记 内容是 今天天气真好"
       - "帮我发一个小红书图文"
+      - "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”"
+      - "小红书上传视频，视频地址是 \"D:\\xxx\\clip.mp4\"，标题是“视频标题”，正文是“视频正文”"
     params:
       content:
         type: quoted
@@ -452,7 +485,7 @@ skills:
   - id: "domain/xiaohongshu_search"
     name: "小红书搜索"
     type: "domain"
-    triggers: ["xiaohongshu", "小红书"]
+    triggers: ["xiaohongshu", "小红书", "小红书搜索", "小红书 搜索", "小红书上找", "搜索小红书"]
     url_patterns: ["xiaohongshu.com"]
     description: "在小红书搜索笔记和内容"
     version: "1.0.0"

@@ -13,6 +13,8 @@ from src.core.agent_loop import (
     AgentTaskResult,
     run_task,
 )
+from src.core.skill_router import SkillRouter
+from src.skill_library.registry import SkillRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -316,6 +318,87 @@ class TestGitHubLoginScript:
         assert 'mode="article"' in script
         assert 'title="长文标题"' in script
         assert 'run("第一段内容"' in script
+
+    def test_build_xiaohongshu_publish_script_writes_article_from_publish_keyword(self):
+        agent = AgentLoop(max_steps=3)
+        source = "def run(content=None, **kwargs):\n    log(content)"
+
+        script = agent._build_skill_script(
+            source,
+            "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”。",
+            "domain/xiaohongshu_publish",
+        )
+
+        assert 'mode="article"' in script
+        assert 'title="测试发布功能"' in script
+        assert 'run("测试发布功能"' in script
+
+    def test_router_routes_xiaohongshu_article_to_publish_fallback(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route(
+            "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”。"
+        )
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/xiaohongshu_publish"
+        assert decision.script == ""
+
+    def test_router_routes_xiaohongshu_video_upload_to_publish_fallback(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route(
+            r'小红书上传视频，视频地址是 "D:\xxx\clip.mp4"，标题是“视频标题”，正文是“视频正文”'
+        )
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/xiaohongshu_publish"
+        assert decision.script == ""
+
+    def test_router_keeps_xiaohongshu_search_on_search_intent(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("小红书搜索旅游攻略")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/xiaohongshu_search"
+
+    def test_registry_fallback_builds_xiaohongshu_article_publish_script(self):
+        task = "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”。"
+        registry = SkillRegistry(library_dir="src/skill_library")
+        registry.load_from_yaml()
+        agent = AgentLoop(max_steps=3)
+
+        skills = registry.search(query=task)
+        selected = agent._select_best_skill(skills, task)
+        detail = registry.get_detail(selected.id)
+        assert detail is not None
+
+        script = agent._build_skill_script(detail.source_code, task, selected.id)
+
+        assert selected.id == "domain/xiaohongshu_publish"
+        assert 'mode="article"' in script
+        assert 'title="测试发布功能"' in script
+        assert 'run("测试发布功能"' in script
+
+    def test_registry_fallback_builds_xiaohongshu_video_publish_script(self):
+        task = r'小红书上传视频，视频地址是 "D:\xxx\clip.mp4"，标题是“视频标题”，正文是“视频正文”'
+        registry = SkillRegistry(library_dir="src/skill_library")
+        registry.load_from_yaml()
+        agent = AgentLoop(max_steps=3)
+
+        skills = registry.search(query=task)
+        selected = agent._select_best_skill(skills, task)
+        detail = registry.get_detail(selected.id)
+        assert detail is not None
+
+        script = agent._build_skill_script(detail.source_code, task, selected.id)
+
+        assert selected.id == "domain/xiaohongshu_publish"
+        assert 'mode="video"' in script
+        assert 'video_path="D:\\\\xxx\\\\clip.mp4"' in script
+        assert 'title="视频标题"' in script
+        assert 'run("视频正文"' in script
 
     def test_build_douyin_login_script_passes_phone_number(self):
         agent = AgentLoop(max_steps=3)

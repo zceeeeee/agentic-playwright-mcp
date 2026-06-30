@@ -418,6 +418,9 @@ class SkillRouter:
 
         source_code = source_path.read_text(encoding="utf-8")
 
+        if skill.id == "domain/xiaohongshu_publish":
+            return ""
+
         # 检查源码是否已经自带 run() 调用
         code_without_defs = re.sub(r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code)
         if "run(" in code_without_defs:
