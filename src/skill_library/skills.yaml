@@ -356,7 +356,7 @@ skills:
       - "小红书发一条笔记 内容是 今天天气真好"
       - "帮我发一个小红书图文"
     params:
-      content:
+      keyword:
         type: quoted
         required: true
         description: "图文内容 / 笔记文案"
@@ -476,7 +476,7 @@ skills:
       - "在知乎发布一篇文章"
       - "知乎发文章 内容是 如何学习编程"
     params:
-      content:
+      keyword:
         type: quoted
         required: true
         description: "文章内容"

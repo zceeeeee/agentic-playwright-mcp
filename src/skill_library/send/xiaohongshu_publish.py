@@ -1133,7 +1133,7 @@ def _resolve_mouse_click(mouse_click_fn):
 
 
 def run(
-    content,
+    keyword,
     phone_number=None,
     *,
     login_url=DEFAULT_LOGIN_URL,
@@ -1165,7 +1165,7 @@ def run(
     steps = []
 
     try:
-        publish_content = str(content).strip()
+        publish_content = str(keyword).strip()
         if not publish_content:
             raise ValueError("Xiaohongshu publish requires content")
 

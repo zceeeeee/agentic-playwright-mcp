@@ -29,7 +29,7 @@ url_patterns:
 domain: xiaohongshu
 
 parameters:
-  content:
+  keyword:
     type: string
     required: true
     description: 要发布到小红书图文生成器的内容或文案。
@@ -84,7 +84,7 @@ steps:
 
   - action: smart_fill
     target: publish_content
-    value: "{{content}}"
+    value: "{{keyword}}"
     comment: 填入用户给定的图文内容。
     on_error: stop
 
