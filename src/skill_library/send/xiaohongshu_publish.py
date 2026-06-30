@@ -930,30 +930,134 @@ def _resolve_upload_file(upload_file_fn):
         return None
 
 
-def _upload_local_file(upload_file_fn, file_path):
-    if upload_file_fn is None:
-        return {"success": False, "error": "File upload control is not available"}
+def _find_upload_input_selector(run_js_fn, kind):
+    return _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const KIND = UPLOAD_INPUT_KIND;
+  const isImage = KIND === 'image';
+  const isVideo = KIND === 'video';
+  const cssEscape = (value) => {
+    if (window.CSS && typeof window.CSS.escape === 'function') {
+      return window.CSS.escape(value);
+    }
+    return String(value).replace(/["\\\\]/g, '\\\\$&');
+  };
+  const acceptsKind = (accept) => {
+    const text = (accept || '').toLowerCase().replace(/\\s+/g, '');
+    if (!text || text === '*' || text === '*/*') return true;
+    if (isImage) {
+      return text.includes('image') || /\\.(jpg|jpeg|png|webp|bmp|gif)/i.test(text);
+    }
+    if (isVideo) {
+      return text.includes('video') || /\\.(mp4|mov|avi|mkv|webm|m4v)/i.test(text);
+    }
+    return true;
+  };
+  const rejectsKind = (accept) => {
+    const text = (accept || '').toLowerCase();
+    if (isImage) return text.includes('video') && !text.includes('image');
+    if (isVideo) return text.includes('image') && !text.includes('video');
+    return false;
+  };
+  const inputs = Array.from(document.querySelectorAll('input[type="file"]'))
+    .map((el, index) => ({
+      el,
+      index,
+      accept: el.getAttribute('accept') || '',
+      disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
+      multiple: Boolean(el.multiple),
+    }))
+    .filter((item) => !item.disabled && !rejectsKind(item.accept) && acceptsKind(item.accept));
+  if (!inputs.length) {
+    return {success: false, error: `File input for ${KIND} not found`};
+  }
+  inputs.sort((a, b) => {
+    const score = (item) => {
+      const accept = item.accept.toLowerCase();
+      let value = item.index;
+      if (isImage && accept.includes('image')) value -= 1000;
+      if (isVideo && accept.includes('video')) value -= 1000;
+      if (!accept || accept === '*' || accept === '*/*') value -= 100;
+      return value;
+    };
+    return score(a) - score(b);
+  });
+  const target = inputs[0].el;
+  const marker = `codex-xhs-${KIND}-${Date.now()}-${inputs[0].index}`;
+  target.setAttribute('data-codex-upload-target', marker);
+  if (target.id) {
+    return {
+      success: true,
+      selector: `input[type="file"]#${cssEscape(target.id)}`,
+      accept: inputs[0].accept,
+      method: 'file_input_id'
+    };
+  }
+  return {
+    success: true,
+    selector: `input[type="file"][data-codex-upload-target="${marker}"]`,
+    accept: inputs[0].accept,
+    method: 'file_input_marker'
+  };
+})()
+""".replace("UPLOAD_INPUT_KIND", _js_string(kind)),
+    )
 
-    selectors = [
-        'input[type="file"][accept*="image"]',
-        'input[type="file"]',
-    ]
 
-    last_result = {"success": False, "error": "File input not attempted"}
-    for selector in selectors:
-        result = _safe_call(
-            upload_file_fn,
-            {"success": False, "error": "upload_file failed"},
-            selector,
-            file_path,
-        )
-        if not isinstance(result, dict):
-            result = {"success": bool(result), "result": result}
-        result.setdefault("selector", selector)
-        if result.get("success"):
-            return result
-        last_result = result
-    return last_result
+def _upload_via_file_input(run_js_fn, upload_file_fn, file_path, kind):
+    uploader = _resolve_upload_file(upload_file_fn)
+    if uploader is None:
+        return {
+            "success": False,
+            "error": "upload_file function is not available",
+            "file_path": file_path,
+            "kind": kind,
+        }
+
+    selector_result = _find_upload_input_selector(run_js_fn, kind)
+    if not selector_result.get("success"):
+        selector_result["file_path"] = file_path
+        selector_result["kind"] = kind
+        return selector_result
+
+    selector = selector_result.get("selector")
+    if not selector:
+        return {
+            "success": False,
+            "error": "File input selector was not resolved",
+            "file_path": file_path,
+            "kind": kind,
+            "selector_result": selector_result,
+        }
+
+    try:
+        upload_result = uploader(selector, file_path)
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "selector": selector,
+            "file_path": file_path,
+            "kind": kind,
+            "selector_result": selector_result,
+        }
+
+    if isinstance(upload_result, dict):
+        result = dict(upload_result)
+    else:
+        result = {"success": bool(upload_result), "result": upload_result}
+    result.setdefault("selector", selector)
+    result.setdefault("file_path", file_path)
+    result["kind"] = kind
+    result["selector_result"] = selector_result
+    return result
+
+
+def _upload_local_file(run_js_fn, file_path, upload_file_fn=None):
+    """Upload a local image through the real file input using Playwright."""
+    return _upload_via_file_input(run_js_fn, upload_file_fn, file_path, "image")
 
 
 # ==================== Upload Video Mode Functions ====================
@@ -1012,30 +1116,9 @@ def _click_upload_video(run_js_fn):
     )
 
 
-def _upload_video_file(upload_file_fn, file_path):
-    if upload_file_fn is None:
-        return {"success": False, "error": "File upload control is not available"}
-
-    selectors = [
-        'input[type="file"][accept*="video"]',
-        'input[type="file"]',
-    ]
-
-    last_result = {"success": False, "error": "File input not attempted"}
-    for selector in selectors:
-        result = _safe_call(
-            upload_file_fn,
-            {"success": False, "error": "upload_file failed"},
-            selector,
-            file_path,
-        )
-        if not isinstance(result, dict):
-            result = {"success": bool(result), "result": result}
-        result.setdefault("selector", selector)
-        if result.get("success"):
-            return result
-        last_result = result
-    return last_result
+def _upload_video_file(run_js_fn, file_path, upload_file_fn=None):
+    """Upload a local video through the real file input using Playwright."""
+    return _upload_via_file_input(run_js_fn, upload_file_fn, file_path, "video")
 
 
 # ==================== Article/Long-form Writing Mode Functions ====================
@@ -1940,12 +2023,16 @@ def run(
                 }
             steps.append({"step": "wait_after_upload_image_click", "result": _safe_call(wait_fn, "", 1)})
 
-            # Upload local image file
+            # Upload the local image through Playwright's real file input support.
             if image_path:
-                upload_result = _upload_local_file(upload_file_fn, image_path)
+                upload_result = _upload_local_file(run_js_fn, image_path, upload_file_fn)
                 steps.append({"step": "upload_local_image", "result": upload_result})
                 if not upload_result.get("success"):
-                    log_fn("Warning: Failed to upload local image, file dialog may be needed")
+                    return {
+                        "success": False,
+                        "error": "Failed to upload Xiaohongshu image file",
+                        "steps": steps,
+                    }
 
             # Fill optional title and body
             if title or body:
@@ -1989,12 +2076,16 @@ def run(
                 }
             steps.append({"step": "wait_after_upload_video_click", "result": _safe_call(wait_fn, "", 1)})
 
-            # Upload local video file
+            # Upload the local video through Playwright's real file input support.
             if video_path:
-                upload_result = _upload_video_file(upload_file_fn, video_path)
+                upload_result = _upload_video_file(run_js_fn, video_path, upload_file_fn)
                 steps.append({"step": "upload_local_video", "result": upload_result})
                 if not upload_result.get("success"):
-                    log_fn("Warning: Failed to upload local video, file dialog may be needed")
+                    return {
+                        "success": False,
+                        "error": "Failed to upload Xiaohongshu video file",
+                        "steps": steps,
+                    }
 
             # Fill optional title and body
             if title or body:

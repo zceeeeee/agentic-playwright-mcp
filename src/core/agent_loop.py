@@ -715,7 +715,12 @@ class AgentLoop:
             if title:
                 kwargs.append(f"title={json.dumps(title, ensure_ascii=False)}")
             call_args = ", ".join(args + kwargs)
-            return f"{source_code}\n\n# 自动调用\nrun({call_args})"
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"_result = run({call_args})\n"
+                "if isinstance(_result, dict) and not _result.get('success', True):\n"
+                "    raise RuntimeError(_result.get('error') or str(_result))"
+            )
 
         if skill_id == "domain/xiaohongshu_publish":
             phone_number = self._extract_phone_number(task)

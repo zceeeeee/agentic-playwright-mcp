@@ -84,6 +84,18 @@ def _mock_publish_run_js(logged_in=True):
             return {"success": True, "text": "上传图片", "method": "upload_image_button"}
         if "UPLOAD_VIDEO_TEXT" in code:
             return {"success": True, "text": "上传视频", "method": "upload_video_button"}
+        if 'const KIND = "image"' in code or 'const KIND = "video"' in code:
+            if 'const KIND = "image"' in code:
+                return {
+                    "success": True,
+                    "selector": 'input[type="file"][data-codex-upload-target="image"]',
+                    "accept": "image/*",
+                }
+            return {
+                "success": True,
+                "selector": 'input[type="file"][data-codex-upload-target="video"]',
+                "accept": "video/*",
+            }
         if "NEW_CREATION_TEXT" in code:
             return {"success": True, "text": "新的创作", "method": "new_creation_button"}
         if "FORMAT_TEXT" in code:
@@ -276,9 +288,40 @@ def test_xiaohongshu_publish_image_upload_mode():
     steps = [step["step"] for step in result["steps"]]
     assert "click_upload_image" in steps
     assert "upload_local_image" in steps
+    assert uploads == [
+        ('input[type="file"][data-codex-upload-target="image"]', r"D:\notes\cover.jpg")
+    ]
     assert "click_text_to_image" not in steps
     assert "click_generate_image" not in steps
     assert "click_final_publish" in steps
+
+
+def test_xiaohongshu_publish_image_upload_fails_when_file_upload_fails():
+    result = run(
+        keyword="图片正文",
+        mode="image_upload",
+        image_path=r"D:\notes\missing.jpg",
+        max_wait_seconds=0,
+        goto_fn=_noop,
+        run_js_fn=_mock_publish_run_js(logged_in=True),
+        wait_fn=_noop,
+        upload_file_fn=lambda selector, path: {
+            "success": False,
+            "selector": selector,
+            "file_path": path,
+            "error": "File not found",
+        },
+        get_url_fn=lambda: "https://creator.xiaohongshu.com/publish/publish",
+        get_text_fn=lambda: "",
+        log_fn=lambda message: None,
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "Failed to upload Xiaohongshu image file"
+    steps = [step["step"] for step in result["steps"]]
+    assert "upload_local_image" in steps
+    assert "upload_local_image_dialog" not in steps
+    assert "click_final_publish" not in steps
 
 
 def test_xiaohongshu_publish_video_mode():
@@ -308,9 +351,40 @@ def test_xiaohongshu_publish_video_mode():
     steps = [step["step"] for step in result["steps"]]
     assert "click_upload_video" in steps
     assert "upload_local_video" in steps
+    assert uploads == [
+        ('input[type="file"][data-codex-upload-target="video"]', r"D:\notes\clip.mp4")
+    ]
     assert "wait_for_video_upload" in steps
     assert 10 in waits
     assert steps.index("wait_for_video_upload") < steps.index("click_final_publish")
+
+
+def test_xiaohongshu_publish_video_upload_fails_when_file_upload_fails():
+    result = run(
+        keyword="视频正文",
+        mode="video",
+        video_path=r"D:\notes\missing.mp4",
+        max_wait_seconds=0,
+        goto_fn=_noop,
+        run_js_fn=_mock_publish_run_js(logged_in=True),
+        wait_fn=_noop,
+        upload_file_fn=lambda selector, path: {
+            "success": False,
+            "selector": selector,
+            "file_path": path,
+            "error": "File not found",
+        },
+        get_url_fn=lambda: "https://creator.xiaohongshu.com/publish/publish",
+        get_text_fn=lambda: "",
+        log_fn=lambda message: None,
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "Failed to upload Xiaohongshu video file"
+    steps = [step["step"] for step in result["steps"]]
+    assert "upload_local_video" in steps
+    assert "upload_local_video_dialog" not in steps
+    assert "click_final_publish" not in steps
 
 
 def test_xiaohongshu_publish_article_mode():
