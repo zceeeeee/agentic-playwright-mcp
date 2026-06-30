@@ -389,7 +389,7 @@ skills:
       - "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”"
       - "小红书上传视频，视频地址是 \"D:\\xxx\\clip.mp4\"，标题是“视频标题”，正文是“视频正文”"
     params:
-      content:
+      keyword:
         type: quoted
         required: true
         description: "图文内容 / 笔记文案"
@@ -509,7 +509,7 @@ skills:
       - "在知乎发布一篇文章"
       - "知乎发文章 内容是 如何学习编程"
     params:
-      content:
+      keyword:
         type: quoted
         required: true
         description: "文章内容"
