@@ -28,6 +28,7 @@ from src.core.event_bus import (
     get_event_bus,
 )
 from src.logging import get_logger, log_browser_event
+from src.panel import get_panel_manager
 
 logger = get_logger(__name__)
 
@@ -151,6 +152,7 @@ class BrowserManager:
             pass  # 某些 Playwright 版本可能不支持
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
+        self._inject_panel()
         log_browser_event("launched", engine="playwright", headless=headless)
 
         after_event = Event(
@@ -210,6 +212,7 @@ class BrowserManager:
             pass
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
+        self._inject_panel()
         log_browser_event(
             "launched", engine="cloakbrowser", headless=headless, humanize=humanize
         )
@@ -296,6 +299,13 @@ class BrowserManager:
                 )
 
         # 无论是否已断开，都清理引用
+        # 清理面板管理器中对旧 context 的记录
+        if self._context is not None:
+            try:
+                get_panel_manager().cleanup_context(self._context)
+            except Exception:
+                pass
+
         self._browser = None
         self._context = None
         self._page = None
@@ -413,6 +423,7 @@ class BrowserManager:
 
             self._context = self._browser.new_context(**ctx_kwargs)
             self._page = self._context.new_page()
+            self._inject_panel()
             self._current_domain = domain
             return self._page
 
@@ -430,6 +441,7 @@ class BrowserManager:
                     pass
             self._context = self._browser.new_context(storage_state=auth_data)
             self._page = self._context.new_page()
+            self._inject_panel()
             logger.info("Loaded auth for domain=%s", domain)
 
         self._current_domain = domain
@@ -461,6 +473,16 @@ class BrowserManager:
     def current_domain(self) -> str | None:
         """当前加载的站点名。"""
         return self._current_domain
+
+    def _inject_panel(self) -> None:
+        """在当前 context 注入交互面板（内部方法）。"""
+        if self._context is None:
+            return
+        try:
+            pm = get_panel_manager()
+            pm.inject(self._context)
+        except Exception as exc:
+            logger.warning("Failed to inject panel: %s", exc)
 
 
 def get_browser_manager() -> BrowserManager:

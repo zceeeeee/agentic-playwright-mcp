@@ -209,6 +209,9 @@ def run_script(code: str) -> str:
     - Wait: wait_for_navigation(timeout), wait_for_element(selector, timeout), wait(sec)
     - Info: get_url(), get_title(), get_text(), screenshot(path)
     - Output: print(...), log(...)
+    - Panel: panel_log(msg), panel_prompt(question), panel_read(),
+             panel_read_events(), panel_show(), panel_hide(),
+             panel_set_title(text), panel_set_fields(fields)
 
     Args:
         code: Python script source code to execute.
@@ -464,6 +467,182 @@ def browser_launch_with_domain(domain: str) -> str:
         return f"Browser ready for '{domain}' ({has}). Current page: {page.url}"
     except Exception as exc:
         return f"Launch failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# 面板交互工具
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def panel_toggle(visible: bool) -> str:
+    """Show or hide the interactive panel in the browser.
+
+    The panel provides input fields, buttons, and a log area for
+    user-program communication. It is injected into all pages
+    automatically when the browser launches.
+
+    Args:
+        visible: True to show the panel, False to hide it.
+
+    Returns:
+        Confirmation message.
+    """
+    bm = get_browser_manager()
+    if not bm.is_alive():
+        return "Error: Browser not launched. Call browser_launch first."
+
+    try:
+        from src.panel import get_panel_manager
+
+        pm = get_panel_manager()
+        pm.toggle(bm.get_page(), visible)
+        return f"Panel {'shown' if visible else 'hidden'}."
+    except Exception as exc:
+        return f"Panel toggle failed: {exc}"
+
+
+@mcp.tool()
+def panel_read() -> str:
+    """Read user input data and events from the interactive panel.
+
+    Returns the latest data submitted by the user through the panel
+    form, and flushes the event queue (button clicks, form submissions).
+
+    Returns:
+        JSON string with 'data' (latest input) and 'events' (queue).
+    """
+    bm = get_browser_manager()
+    if not bm.is_alive():
+        return "Error: Browser not launched. Call browser_launch first."
+
+    try:
+        import json
+
+        from src.panel import get_panel_manager
+
+        pm = get_panel_manager()
+        page = bm.get_page()
+        data = pm.read_data(page)
+        events = pm.read_events(page)
+        return json.dumps({"data": data, "events": events}, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        return f"Panel read failed: {exc}"
+
+
+@mcp.tool()
+def panel_log(message: str) -> str:
+    """Write a message to the panel's log area.
+
+    The log is displayed in the panel and helps the user track
+    what the automation is doing.
+
+    Args:
+        message: Log message to display.
+
+    Returns:
+        Confirmation message.
+    """
+    bm = get_browser_manager()
+    if not bm.is_alive():
+        return "Error: Browser not launched. Call browser_launch first."
+
+    try:
+        from src.panel import get_panel_manager
+
+        pm = get_panel_manager()
+        pm.log(bm.get_page(), message)
+        return "Log written to panel."
+    except Exception as exc:
+        return f"Panel log failed: {exc}"
+
+
+@mcp.tool()
+def panel_set_title(text: str) -> str:
+    """Set the title of the interactive panel.
+
+    Args:
+        text: New title text.
+
+    Returns:
+        Confirmation message.
+    """
+    bm = get_browser_manager()
+    if not bm.is_alive():
+        return "Error: Browser not launched. Call browser_launch first."
+
+    try:
+        from src.panel import get_panel_manager
+
+        pm = get_panel_manager()
+        pm.set_title(bm.get_page(), text)
+        return f"Panel title set to: {text}"
+    except Exception as exc:
+        return f"Panel set_title failed: {exc}"
+
+
+@mcp.tool()
+def panel_prompt(question: str) -> str:
+    """Ask the user a question through the panel and wait for an answer.
+
+    The panel will expand and display the question. The user can type
+    an answer or click quick-answer buttons (if the question contains
+    options like [Yes] [No] or A/B/C).
+
+    This is a blocking call — it waits until the user responds.
+
+    Args:
+        question: Question to display to the user.
+
+    Returns:
+        The user's answer as a string.
+    """
+    bm = get_browser_manager()
+    if not bm.is_alive():
+        return "Error: Browser not launched. Call browser_launch first."
+
+    try:
+        from src.panel import get_panel_manager
+
+        pm = get_panel_manager()
+        answer = pm.prompt(bm.get_page(), question)
+        return f"User answered: {answer}"
+    except Exception as exc:
+        return f"Panel prompt failed: {exc}"
+
+
+@mcp.tool()
+def panel_set_fields(fields_json: str) -> str:
+    """Dynamically update the panel's form fields.
+
+    Replace the current form with new fields. Each field is an object
+    with: name, label, type (text/password/textarea/select),
+    placeholder, and optionally options (for select).
+
+    Args:
+        fields_json: JSON array of field definitions, e.g.
+            '[{"name": "username", "label": "用户名", "type": "text", "placeholder": "输入用户名"}]'
+
+    Returns:
+        Confirmation message.
+    """
+    bm = get_browser_manager()
+    if not bm.is_alive():
+        return "Error: Browser not launched. Call browser_launch first."
+
+    try:
+        import json
+
+        from src.panel import get_panel_manager
+
+        fields = json.loads(fields_json)
+        pm = get_panel_manager()
+        pm.set_fields(bm.get_page(), fields)
+        return f"Panel fields updated: {len(fields)} fields configured."
+    except json.JSONDecodeError as exc:
+        return f"Invalid JSON: {exc}"
+    except Exception as exc:
+        return f"Panel set_fields failed: {exc}"
 
 
 # ---------------------------------------------------------------------------

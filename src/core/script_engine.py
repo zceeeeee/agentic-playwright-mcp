@@ -245,6 +245,52 @@ class ScriptEngine:
         ns["get_url"] = lambda: self._get_browser_manager().get_page().url
         ns["get_title"] = lambda: self._get_browser_manager().get_page().title()
 
+        # 注入面板交互函数
+        from src.panel import get_panel_manager
+        _pm = get_panel_manager()
+        _get_page = self._get_browser_manager
+
+        def panel_log(message: str) -> None:
+            """向浏览器面板写入日志。"""
+            _pm.log(_get_page().get_page(), str(message))
+
+        def panel_prompt(question: str) -> str:
+            """向用户提问并等待回答。"""
+            return _pm.prompt(_get_page().get_page(), str(question))
+
+        def panel_read() -> dict:
+            """读取用户通过面板输入的最新数据。"""
+            return _pm.read_data(_get_page().get_page()) or {}
+
+        def panel_read_events() -> list:
+            """读取并清空面板事件队列。"""
+            return _pm.read_events(_get_page().get_page())
+
+        def panel_show() -> None:
+            """显示面板。"""
+            _pm.toggle(_get_page().get_page(), True)
+
+        def panel_hide() -> None:
+            """隐藏面板。"""
+            _pm.toggle(_get_page().get_page(), False)
+
+        def panel_set_title(text: str) -> None:
+            """设置面板标题。"""
+            _pm.set_title(_get_page().get_page(), str(text))
+
+        def panel_set_fields(fields: list) -> None:
+            """动态更新面板表单字段。"""
+            _pm.set_fields(_get_page().get_page(), fields)
+
+        ns["panel_log"] = panel_log
+        ns["panel_prompt"] = panel_prompt
+        ns["panel_read"] = panel_read
+        ns["panel_read_events"] = panel_read_events
+        ns["panel_show"] = panel_show
+        ns["panel_hide"] = panel_hide
+        ns["panel_set_title"] = panel_set_title
+        ns["panel_set_fields"] = panel_set_fields
+
         # 注册用户自定义函数（控件层等）
         ns.update(self._extra_globals)
 

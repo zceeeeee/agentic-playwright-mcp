@@ -15,16 +15,18 @@
    ↳ 若执行失败 → 自愈机制 → 视觉 fallback → 记录新知识
 ```
 
-## 三层进化架构
+## 四层架构
 
 ```
-Layer 3: Domains (站点经验)     ← domains/*.yaml + workspace/knowledge/
-Layer 2: Skills  (肌肉记忆)     ← controls.py + skill_library/
-Layer 1: Helpers (原语)          ← actions.py: goto/click/fill/screenshot
+Layer 0: Panel    (用户交互)     ← panel/: inject.js + panel_manager.py
+Layer 3: Domains  (站点经验)     ← domains/*.yaml + workspace/knowledge/
+Layer 2: Skills   (肌肉记忆)     ← controls.py + skill_library/
+Layer 1: Helpers  (原语)          ← actions.py: goto/click/fill/screenshot
 ```
 
 | 层级 | 职责 | 进化方式 |
 |------|------|---------|
+| **Layer 0** | 浏览器内交互面板 | Shadow DOM 注入，脚本/MCP 双向控制 |
 | **Layer 1** | 原子操作 | 不变 |
 | **Layer 2** | 控件函数 | 扩展新函数 |
 | **Layer 3** | 站点经验 | 选择器自愈 + 知识积累 |
@@ -38,6 +40,41 @@ Layer 1: Helpers (原语)          ← actions.py: goto/click/fill/screenshot
 | **复杂任务**（多步骤、跨页面） | ⚠️ 有限 | Agent 循环能跑，推理能力有限 |
 
 **已适配站点**：百度、搜狗、当当、B站、头条、CSDN、百科、天气、微博、掘金、IT之家、菜鸟教程、开源中国
+
+## 交互面板（Layer 0）
+
+浏览器启动后自动注入一个交互面板，用户可以通过输入框、按钮与自动化程序双向通信。
+
+```
+┌─────────────────────────┐
+│ 🤖  Agentic Panel   [—] │  ← 默认最小化，点击展开
+├─────────────────────────┤
+│ 输入                    │
+│ [________________] [提交]│  ← 用户输入数据，程序通过 panel_read() 读取
+│                         │
+│ 日志                    │
+│ ┌─────────────────────┐ │
+│ │ 正在搜索...          │ │  ← 程序通过 panel_log() 写入
+│ │ 找到 10 个结果       │ │
+│ └─────────────────────┘ │
+│                         │
+│      Agentic Playwright │
+└─────────────────────────┘
+```
+
+**技术特性**：
+- **Shadow DOM 隔离**：面板样式不受宿主页面影响
+- **键盘事件隔离**：页面 JS 无法拦截面板输入
+- **自动存活保护**：被页面移除后自动重建
+- **跨页面持久**：通过 `addInitScript` 注入，导航/刷新/新标签页自动生效
+
+**三种操控方式**：
+
+| 方式 | 场景 | 示例 |
+|------|------|------|
+| 脚本函数 | `run_script` / agent loop | `panel_log("进度 50%")` |
+| MCP 工具 | Claude 等客户端 | `panel_prompt(question="继续?")` |
+| Python API | 项目内部代码 | `get_panel_manager().log(page, "msg")` |
 
 ## 快速开始
 
@@ -145,7 +182,7 @@ with AgentLoop(headless=True) as agent:
 }
 ```
 
-## MCP 工具列表（12 个）
+## MCP 工具列表（18 个）
 
 | 工具 | 说明 |
 |------|------|
@@ -161,6 +198,12 @@ with AgentLoop(headless=True) as agent:
 | `auth_delete` | 删除某站点的 cookie |
 | `screenshot` | 截取当前页面截图 |
 | `ping` | 健康检查 |
+| `panel_toggle` | 显示/隐藏交互面板 |
+| `panel_read` | 读取用户输入数据和事件 |
+| `panel_log` | 向面板写入日志 |
+| `panel_set_title` | 设置面板标题 |
+| `panel_prompt` | 向用户提问并等待回答 |
+| `panel_set_fields` | 动态更新面板表单字段 |
 
 ## 脚本引擎可用函数
 
@@ -199,6 +242,19 @@ url = get_url()
 title = get_title()
 text = get_text()
 screenshot("page.png")
+
+# 交互面板（Layer 0）
+panel_log("正在搜索...")                    # 写日志到面板
+answer = panel_prompt("请输入关键词:")       # 向用户提问（阻塞等待）
+data = panel_read()                         # 读取用户输入数据
+events = panel_read_events()                # 读取并清空事件队列
+panel_show()                                # 显示面板
+panel_hide()                                # 隐藏面板
+panel_set_title("任务进度")                  # 设置面板标题
+panel_set_fields([                          # 动态更新表单字段
+    {"name": "keyword", "label": "关键词", "type": "text", "placeholder": "输入搜索词"},
+    {"name": "action", "label": "操作", "type": "select", "options": ["搜索", "取消"]},
+])
 ```
 
 ## 经验进化系统
@@ -255,20 +311,23 @@ auth_delete("baidu") # 删除
 ```
 agentic-playwright-mcp/
 ├── src/
-│   ├── server.py                  # MCP 入口（8 个工具）
+│   ├── server.py                  # MCP 入口（18 个工具）
 │   ├── cli.py                     # CLI (serve/run/doctor/gui)
 │   ├── sdk.py                     # Python SDK
 │   ├── core/
 │   │   ├── agent_loop.py          # Agent 循环引擎
 │   │   ├── auth_manager.py        # Cookie 持久化管理
-│   │   ├── script_engine.py       # 脚本执行引擎
+│   │   ├── script_engine.py       # 脚本执行引擎（注入面板函数）
 │   │   ├── script_generator.py    # 任务意图解析（规则）
 │   │   ├── intent_parser.py       # LLM 意图解析（兜底）
 │   │   ├── experience.py          # 经验进化系统
-│   │   ├── browser_manager.py     # 双引擎浏览器管理
+│   │   ├── browser_manager.py     # 双引擎浏览器管理（自动注入面板）
 │   │   ├── event_bus.py           # 事件钩子系统
 │   │   ├── recovery.py            # 错误恢复
 │   │   └── vision.py              # 视觉模块
+│   ├── panel/                     # Layer 0: 交互面板
+│   │   ├── inject.js              # Shadow DOM 面板（注入浏览器）
+│   │   └── panel_manager.py       # 面板管理器（Python 端）
 │   ├── gui/app.py                 # Web GUI
 │   ├── layer_1/actions.py         # 原子操作
 │   ├── layer_2/controls.py        # 高级控件函数
