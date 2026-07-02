@@ -83,7 +83,7 @@ class SkillRouter:
 
         Args:
             library_dir: 技能库目录（包含 skills.yaml 和源码）。
-            llm_caller: LLM 调用器，需提供 .call(prompt) -> str 方法。
+            llm_caller: LLM 调用器，需提供 .call_json(prompt, schema=...) -> dict 方法。
                         若为 None，禁用 LLM 精排。
         """
         self._library_dir = Path(library_dir) if library_dir else None
@@ -339,13 +339,57 @@ class SkillRouter:
             candidate_list.append(entry)
 
         prompt = self._build_rank_prompt(task, candidate_list, page_context)
+        schema = {
+            "type": "object",
+            "properties": {
+                "skill_id": {"type": "string"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "reason": {"type": "string"},
+            },
+            "required": ["skill_id", "confidence"],
+        }
 
         try:
-            raw = self._llm_caller.call(prompt)
-            return self._parse_rank_response(raw, candidates)
+            data = self._llm_caller.call_json(
+                prompt,
+                schema=schema,
+                system_prompt="你是任务路由器。根据用户输入，从候选 skill 中选最匹配的一个。",
+            )
         except Exception as exc:
             logger.warning("LLM 精排失败: %s", exc)
             return None
+
+        chosen_id = data.get("skill_id", "")
+        try:
+            confidence = float(data.get("confidence", 0) or 0)
+        except (TypeError, ValueError):
+            logger.warning("LLM 精排返回非法 confidence: %s", data.get("confidence"))
+            return None
+        reason = data.get("reason", "")
+
+        if confidence < 0.5:
+            logger.info("LLM 精排置信度过低 (%.2f)，忽略", confidence)
+            return None
+
+        candidate_map = {s.id: s for s, _ in candidates}
+        chosen_skill = candidate_map.get(chosen_id)
+        if not chosen_skill:
+            logger.warning("LLM 精排返回未知技能 ID: %s", chosen_id)
+            return None
+
+        logger.info(
+            "LLM 精排选择: %s (confidence=%.2f, reason=%s)",
+            chosen_id,
+            confidence,
+            reason,
+        )
+
+        return SkillDecision(
+            skill=chosen_skill,
+            confidence=confidence,
+            reason=reason,
+            source="llm",
+        )
 
     def _build_rank_prompt(
         self,
@@ -369,64 +413,9 @@ class SkillRouter:
 候选 skills:
 {candidates_json}
 
-返回 JSON:
-{{"skill_id": "选中的技能id", "confidence": 0.0-1.0, "reason": "选择原因"}}
-
 规则:
 1. 优先匹配用户明确提到的站点和操作
-2. 如果没有明确匹配，confidence 设为 0.3 以下
-3. 只返回 JSON，不要其他文字"""
-
-    def _parse_rank_response(
-        self,
-        raw: str,
-        candidates: List[tuple[SkillRouterInfo, float]],
-    ) -> Optional[SkillDecision]:
-        """解析 LLM 精排响应。"""
-        text = raw.strip()
-
-        # 提取 JSON 块
-        if "```" in text:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start != -1 and end > 0:
-                text = text[start:end]
-
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning("LLM 精排返回非 JSON: %s", raw[:200])
-            return None
-
-        chosen_id = data.get("skill_id", "")
-        confidence = float(data.get("confidence", 0))
-        reason = data.get("reason", "")
-
-        if confidence < 0.5:
-            logger.info("LLM 精排置信度过低 (%.2f)，忽略", confidence)
-            return None
-
-        # 查找对应的候选
-        candidate_map = {s.id: s for s, _ in candidates}
-        chosen_skill = candidate_map.get(chosen_id)
-
-        if not chosen_skill:
-            logger.warning("LLM 精排返回未知技能 ID: %s", chosen_id)
-            return None
-
-        logger.info(
-            "LLM 精排选择: %s (confidence=%.2f, reason=%s)",
-            chosen_id,
-            confidence,
-            reason,
-        )
-
-        return SkillDecision(
-            skill=chosen_skill,
-            confidence=confidence,
-            reason=reason,
-            source="llm",
-        )
+2. 如果没有明确匹配，confidence 设为 0.3 以下"""
 
     # -------------------------------------------------------------------
     # 脚本构建
@@ -450,13 +439,6 @@ class SkillRouter:
 
         source_code = source_path.read_text(encoding="utf-8")
 
-        if skill.id in {
-            "domain/gmail_send",
-            "domain/xiaohongshu_publish",
-            "domain/xiaohongshu_comment",
-        }:
-            return ""
-
         # 检查源码是否已经自带 run() 调用
         code_without_defs = re.sub(r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code)
         if "run(" in code_without_defs:
@@ -466,8 +448,8 @@ class SkillRouter:
         if skill.params:
             return self._build_parametrized_script(source_code, skill, task)
 
-        # 无参数声明 → 返回空，让 agent_loop 的旧路径处理（它有更好的关键词提取）
-        return ""
+        # 无参数声明 → 使用通用关键词提取，避免 AgentLoop 再拼特化脚本。
+        return self._build_keyword_script(source_code, task)
 
     def _build_parametrized_script(
         self,
@@ -486,14 +468,23 @@ class SkillRouter:
         # 构造 run() 调用
         llm_values = self._extract_params_with_llm(skill, task, extracted)
         for param_name, value in llm_values.items():
-            if value and value != "-1":
+            if extracted.get(param_name, "-1") == "-1" and value and value != "-1":
                 extracted[param_name] = value
 
         args_parts = []
         for param_name in skill.params:
-            args_parts.append(
-                f"{param_name}={json.dumps(extracted.get(param_name, '-1'), ensure_ascii=False)}"
-            )
+            param_def = skill.params[param_name]
+            raw_value = extracted.get(param_name, "-1")
+            if raw_value == "-1" and not param_def.get("required", False):
+                continue
+            if param_def.get("type") == "boolean" and str(raw_value).lower() in {"true", "false"}:
+                value = "True" if str(raw_value).lower() == "true" else "False"
+            else:
+                value = json.dumps(raw_value, ensure_ascii=False)
+            if param_def.get("positional", False):
+                args_parts.append(value)
+            else:
+                args_parts.append(f"{param_name}={value}")
 
         args_str = ", ".join(args_parts)
         return f"{source_code}\n\n# 自动调用\nrun({args_str})"
@@ -531,23 +522,33 @@ class SkillRouter:
             f"Selected skill:\n{json.dumps(skill_meta, ensure_ascii=False, indent=2)}\n\n"
             f"Declared parameters:\n{json.dumps(params_meta, ensure_ascii=False, indent=2)}\n\n"
             f"Values already found by rules:\n{json.dumps(rule_values, ensure_ascii=False, indent=2)}\n\n"
-            "Return one JSON object whose keys are exactly the declared parameter names.\n"
             "Rules:\n"
             "- If a value is clearly present in the user task, return that value as a string.\n"
             "- If a value cannot be found, return \"-1\" for that key.\n"
             "- Do not invent titles, comments, article bodies, phone numbers, or URLs.\n"
-            "- Do not return markdown or any text outside JSON.\n"
         )
 
+        schema = {
+            "type": "object",
+            "properties": {
+                param_name: {"type": ["string", "number", "boolean", "null"]}
+                for param_name in skill.params
+            },
+            "required": list(skill.params),
+        }
+
         try:
-            raw = self._llm_caller.call(prompt)
-            data = self._parse_json_object(raw)
+            data = self._llm_caller.call_json(
+                prompt,
+                schema=schema,
+                system_prompt="You extract declared browser automation parameters and return only structured values.",
+            )
         except Exception as exc:
             logger.warning("LLM param extraction failed: %s", exc)
             return {}
 
-        if not data:
-            logger.warning("LLM param extraction returned non-JSON")
+        if not isinstance(data, dict):
+            logger.warning("LLM param extraction returned non-object")
             return {}
 
         extracted: Dict[str, str] = {}
@@ -564,32 +565,6 @@ class SkillRouter:
         return extracted
 
     @staticmethod
-    def _parse_json_object(raw: str) -> Optional[Dict[str, Any]]:
-        """Parse a JSON object from raw LLM text, including fenced output."""
-        text = raw.strip()
-        if "```" in text:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start != -1 and end > start:
-                text = text[start:end]
-
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start == -1 or end <= start:
-                return None
-            try:
-                parsed = json.loads(text[start:end])
-            except json.JSONDecodeError:
-                return None
-
-        if not isinstance(parsed, dict):
-            return None
-        return parsed
-
-    @staticmethod
     def _extract_param(
         task: str, param_name: str, param_def: Dict[str, Any]
     ) -> Optional[str]:
@@ -600,7 +575,10 @@ class SkillRouter:
             match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
             if match:
                 value = match.group(1).strip()
-                value = value.strip("'\"`“”‘’")
+                value = value.strip("'\"`“”‘’「」")
+                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
+                value = value.strip("'\"`“”‘’「」")
+                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
                 if value:
                     return value
 
@@ -617,19 +595,160 @@ class SkillRouter:
                     return digits
 
         if ptype == "email":
+            if param_name in {"sender_email", "from_email"}:
+                return None
             match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", task, re.I)
             if match:
                 return match.group(0)
 
         if ptype == "url":
-            match = re.search(r"https?://[^\s<>\"'“”‘’]+", task)
+            match = re.search(r"https?://[A-Za-z0-9:/?#@!$&()*+,;=%._~%-]+", task)
             if match:
-                return re.sub(r"[.,;:。，；：!?！?）)>]+$", "", match.group(0))
+                url = match.group(0)
+                url = re.split(
+                    r"(?=下?(?:发布|发表|发送|发)?(?:评论|留言|回复))",
+                    url,
+                    maxsplit=1,
+                )[0]
+                return re.sub(r"[.,;:。，；：!?！?）)>]+$", "", url)
 
         if ptype == "quoted":
-            match = re.search(r"['\"“‘](.+?)['\"”’]", task)
+            match = re.search(r"['\"“‘「](.+?)['\"”’」]", task)
             if match:
                 return match.group(1).strip()
+
+        if ptype == "content":
+            quoted = re.search(r"['\"“‘「](.+?)['\"”’」]", task, re.DOTALL)
+            if quoted:
+                return quoted.group(1).strip()
+            match = re.search(
+                r"(?:内容|正文|文案|文章内容|发布内容|content)\s*(?:是|为|:|：|=)?\s*(.+)$",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                value = match.group(1).strip()
+                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
+                value = value.strip("'\"`“”‘’「」")
+                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
+                return value
+
+        if ptype == "title":
+            quoted = re.search(
+                r"(?:标题|题目|title)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if quoted:
+                return quoted.group(1).strip()
+            match = re.search(
+                r"(?:标题|题目|title)\s*(?:是|为|:|：|=)?\s*(.+?)(?=\s*(?:正文|内容|文章内容|body|content)\s*(?:是|为|:|：|=)?|$)",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                return re.sub(r"[，,。.;；!！?？)）]+$", "", match.group(1).strip().strip("'\"`“”‘’「」")).strip()
+
+        if ptype == "body":
+            quoted = re.search(
+                r"(?:正文|正文内容|内容|文章内容|body|content)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if quoted:
+                return quoted.group(1).strip()
+            match = re.search(
+                r"(?:正文|正文内容|内容|文章内容|body|content)\s*(?:是|为|:|：|=)?\s*(.+)$",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                return re.sub(r"[，,。.;；!！?？)）]+$", "", match.group(1).strip().strip("'\"`“”‘’「」")).strip()
+
+        if ptype == "comment_text":
+            quoted = re.search(r"['\"“‘](.+?)['\"”’]", task, re.DOTALL)
+            if quoted:
+                return quoted.group(1).strip()
+            match = re.search(
+                r"(?:评论内容|留言内容|回复内容|评论|留言|回复)\s*(?:是|为|:|：|=)?\s*(.+?)(?=\s*(?:在|然后|并且|接着)|$)",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                return re.sub(r"[，,。.;；!！?？)）]+$", "", match.group(1).strip().strip("'\"`“”‘’「」")).strip()
+
+        if ptype in {"image_path", "video_path"}:
+            if ptype == "video_path":
+                extensions = r"mp4|mov|avi|mkv|webm|m4v"
+                labels = r"视频地址|视频路径|视频|video_path|video|地址|path"
+            else:
+                extensions = r"jpg|jpeg|png|webp|bmp|gif"
+                labels = r"图片地址|图片路径|图片|图像|image_path|image|地址|path"
+
+            quoted = re.search(
+                rf"(?:{labels})\s*(?:是|为|:|：|=)?\s*['\"“‘]([^'\"“”‘’]+?\.(?:{extensions}))['\"”’]",
+                task,
+                re.IGNORECASE,
+            )
+            if quoted:
+                return quoted.group(1).strip()
+
+            labeled = re.search(
+                rf"(?:{labels})\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?([A-Za-z]:[\\/][^'\"“”‘’\s，,。；;]+?\.(?:{extensions}))",
+                task,
+                re.IGNORECASE,
+            )
+            if labeled:
+                return labeled.group(1).strip()
+
+            bare = re.search(
+                rf"([A-Za-z]:[\\/][^'\"“”‘’\s，,。；;]+?\.(?:{extensions}))",
+                task,
+                re.IGNORECASE,
+            )
+            if bare:
+                return bare.group(1).strip()
+
+        if ptype == "publish_mode":
+            if re.search(r"(文章|长文|小说|article|novel)", task, re.IGNORECASE):
+                return "article"
+            if re.search(r"(上传视频|视频地址|视频路径|video)", task, re.IGNORECASE):
+                return "video"
+            if re.search(r"(上传图片|图片地址|图片路径|image|upload)", task, re.IGNORECASE):
+                return "image_upload"
+            return "text_to_image"
+
+        if ptype == "style":
+            styles = ["基础", "弥散", "涂写", "光影", "手写", "备忘", "边框", "便签", "涂鸦", "简约"]
+            for style in styles:
+                if style in task:
+                    return style
+
+        if ptype == "boolean":
+            if re.search(r"(定时发布|定时|预约发布|scheduled)", task, re.IGNORECASE):
+                return "true"
+            return "false"
+
+        if ptype == "datetime":
+            match = re.search(
+                r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})(?:日)?\s+(\d{1,2})[:：点](\d{1,2})",
+                task,
+            )
+            if match:
+                year, month, day, hour, minute = match.groups()
+                return (
+                    f"{int(year):04d}-{int(month):02d}-{int(day):02d} "
+                    f"{int(hour):02d}:{int(minute):02d}"
+                )
+            match = re.search(r"(\d{1,2})月(\d{1,2})日?\s*(\d{1,2})[:：点](\d{1,2})", task)
+            if match:
+                from datetime import datetime
+
+                month, day, hour, minute = match.groups()
+                return (
+                    f"{datetime.now().year:04d}-{int(month):02d}-{int(day):02d} "
+                    f"{int(hour):02d}:{int(minute):02d}"
+                )
 
         if ptype == "keyword":
             # 提取搜索关键词（去掉动作词和站点名）
@@ -661,6 +780,22 @@ class SkillRouter:
     @staticmethod
     def _build_keyword_script(source_code: str, task: str) -> str:
         """无 params 声明时，用通用关键词提取拼 run() 调用。"""
+        run_match = re.search(r"def\s+run\s*\(([^)]*)\)", source_code)
+        if run_match:
+            params_text = run_match.group(1).strip()
+            if not params_text:
+                return f"{source_code}\n\n# 自动调用\nrun()"
+
+            required_parts = []
+            for part in params_text.split(","):
+                part = part.strip()
+                if not part or part in {"*", "/"} or part.startswith("*"):
+                    continue
+                if "=" not in part:
+                    required_parts.append(part)
+            if not required_parts:
+                return f"{source_code}\n\n# 自动调用\nrun()"
+
         # 提取关键词（去掉常见的动作词和站点名）
         # 注意：长词必须排在短词前面，否则 "搜索" 中的 "搜" 会先被匹配
         keyword = re.sub(

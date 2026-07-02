@@ -42,6 +42,7 @@ from src.core.event_bus import (
 )
 from src.core.experience import ExperienceManager, get_experience_manager
 from src.core.intent_parser import LLMIntentParser, get_llm_intent_parser
+from src.core.llm_utils import chat_json_with_retry
 from src.core.script_engine import get_script_engine
 from src.core.script_generator import ScriptGenerator
 from src.core.skill_router import SkillDecision, SkillRouter, get_skill_router
@@ -60,13 +61,26 @@ logger = get_logger(__name__)
 
 
 class _LLMCallerAdapter:
-    """将 LLMIntentParser._call_llm 包装为 SkillRouter 期望的 .call() 接口。"""
+    """将 LLMIntentParser 包装为 SkillRouter 期望的 LLM 调用接口。"""
 
     def __init__(self, parser: LLMIntentParser) -> None:
         self._parser = parser
 
     def call(self, prompt: str) -> str:
-        return self._parser._call_llm(prompt)
+        return self._parser._client.chat(prompt)
+
+    def call_json(
+        self,
+        prompt: str,
+        schema: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
+        return chat_json_with_retry(
+            self._parser._client,
+            prompt,
+            system_prompt=system_prompt or "根据用户输入，返回结构化 JSON 结果。",
+            schema=schema,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -490,37 +504,6 @@ class AgentLoop:
                 decision.skill.name,
             )
 
-        # 1b. 回退：旧的 registry.search + _build_skill_script 路径
-        with log_timing("agent_plan_skill_lookup") as meta:
-            skills = self._registry.search(query=task)
-            meta["matches"] = len(skills)
-
-        if skills:
-            skill = self._select_best_skill(skills, task)
-            detail = self._registry.get_detail(skill.id)
-
-            if detail and detail.source_code:
-                script = self._build_skill_script(detail.source_code, task, skill.id)
-                if script:
-                    step.action = f"使用技能: {skill.name}"
-                    step.script = script
-                    step.result = f"找到技能: {skill.name} (registry 回退)"
-                    logger.info("PLAN: registry fallback matched '%s'", skill.name)
-                    self._bus.emit(
-                        Event(
-                            name=EVENT_AGENT_PLAN,
-                            phase=Phase.AFTER,
-                            data={
-                                "step_number": step.step_number,
-                                "source": "skill_registry_fallback",
-                                "skill_id": skill.id,
-                                "skill_name": skill.name,
-                            },
-                            result=step.result,
-                        )
-                    )
-                    return AgentState.ACT
-
         # 2. 查找已保存的脚本（经验复用）
         saved_script = self._experience.find_script(task)
         if saved_script and saved_script.script:
@@ -558,28 +541,6 @@ class AgentLoop:
                 )
             )
             return AgentState.ACT
-
-        # 4. 规则失败 → LLM 兜底
-        if self._llm_parser and self._llm_parser.available:
-            logger.info("PLAN: 规则未命中，尝试 LLM 意图解析")
-            script = self._generate_script_via_llm(task)
-            if script:
-                step.action = "LLM 意图解析"
-                step.script = script
-                step.result = "LLM 兜底生成脚本"
-                logger.info("PLAN: LLM fallback succeeded")
-                self._bus.emit(
-                    Event(
-                        name=EVENT_AGENT_PLAN,
-                        phase=Phase.AFTER,
-                        data={
-                            "step_number": step.step_number,
-                            "source": "llm_fallback",
-                        },
-                        result=step.result,
-                    )
-                )
-                return AgentState.ACT
 
         # 5. 无法生成脚本
         step.result = "无法规划行动"
@@ -1359,29 +1320,35 @@ class AgentLoop:
             desc = getattr(s, "description", "")
             candidates.append({"id": sid, "name": name, "description": desc})
 
-        # 构造仲裁 prompt（直接调 LLM，不走 intent_parser 的完整流程）
-        import json as _json
-
-        candidates_text = _json.dumps(candidates, ensure_ascii=False, indent=2)
+        candidates_text = json.dumps(candidates, ensure_ascii=False, indent=2)
         prompt = (
             f"用户指令: {task}\n\n"
             f"候选技能列表:\n{candidates_text}\n\n"
-            '请选出最匹配用户指令的技能，返回 JSON: {"skill_id": "选中的技能id", "confidence": 0.9}\n'
-            "只返回 JSON，不要其他文字。"
+            "请选出最匹配用户指令的技能。"
         )
 
-        try:
-            raw = self._llm_parser._call_llm(prompt)
-            # 提取 JSON
-            text = raw.strip()
-            if "```" in text:
-                start = text.find("{")
-                end = text.rfind("}") + 1
-                text = text[start:end] if start != -1 and end > 0 else text
+        schema = {
+            "type": "object",
+            "properties": {
+                "skill_id": {"type": "string"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "required": ["skill_id", "confidence"],
+        }
 
-            data = _json.loads(text)
+        try:
+            data = chat_json_with_retry(
+                self._llm_parser._client,
+                prompt,
+                system_prompt="你是一个技能路由器。从候选技能列表中选出最匹配用户指令的技能。",
+                schema=schema,
+            )
             chosen_id = data.get("skill_id", "")
-            confidence = data.get("confidence", 0)
+            try:
+                confidence = float(data.get("confidence", 0) or 0)
+            except (TypeError, ValueError):
+                logger.warning("LLM 仲裁返回非法 confidence: %s", data.get("confidence"))
+                return None
 
             if confidence < 0.5:
                 logger.info("LLM 仲裁置信度过低 (%.2f)，使用规则结果", confidence)

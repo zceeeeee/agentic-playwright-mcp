@@ -13,10 +13,10 @@ LLM 意图解析器 —— 当硬编码规则无法解析任务时，用 LLM 兜
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING
 
+from src.core.llm_utils import chat_json_with_retry
 from src.core.script_generator import TaskIntent
 
 if TYPE_CHECKING:
@@ -83,14 +83,6 @@ def _build_system_prompt() -> str:
 已知网站（engine 字段可选值）:
 {sites_desc}
 
-请返回严格的 JSON 格式，不要包含其他文字:
-{{
-  "action": "动作类型",
-  "target": "目标值（搜索关键词、URL、点击目标等，视 action 而定）",
-  "engine": "网站标识（仅 search action 需要，其他填 null）",
-  "confidence": 0.95
-}}
-
 字段说明:
 - action: 必填，必须是上述列表中的一个
 - target: 搜索关键词 / URL / 元素选择器 / 空字符串
@@ -138,59 +130,53 @@ class LLMIntentParser:
             logger.warning("LLM fallback 不可用: 未配置 API Key")
             return None
 
+        schema = {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": _ACTIONS},
+                "target": {"type": "string"},
+                "engine": {"type": ["string", "null"]},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "max_pages": {"type": "integer", "minimum": 1},
+                "direction": {"type": "string"},
+                "seconds": {"type": "number", "minimum": 0},
+            },
+            "required": ["action", "target", "confidence"],
+        }
+
         try:
-            raw = self._call_llm(task)
-            return self._parse_response(raw)
+            data = chat_json_with_retry(
+                self._client,
+                task,
+                system_prompt=_build_system_prompt(),
+                schema=schema,
+                temperature=0,
+                max_tokens=256,
+            )
         except Exception as exc:
             logger.warning("LLM 意图解析失败: %s", exc)
             return None
 
-    def _call_llm(self, task: str) -> str:
-        """调用 LLM（委托给 LLMClient）。"""
-        return self._client.chat(
-            task,
-            system_prompt=_build_system_prompt(),
-            temperature=0,
-            max_tokens=256,
-        )
-
-    def _parse_response(self, raw: str) -> TaskIntent | None:
-        """解析 LLM 返回的 JSON 为 TaskIntent。"""
-        # 提取 JSON 块（LLM 可能包裹在 ```json ``` 中）
-        text = raw.strip()
-        if "```" in text:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start == -1 or end == 0:
-                return None
-            text = text[start:end]
-
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning("LLM 返回非 JSON: %s", raw[:200])
-            return None
-
-        # 校验必填字段
         action = data.get("action", "")
         if action not in _ACTIONS:
             logger.warning("LLM 返回未知 action: %s", action)
             return None
 
-        # 置信度过滤
-        confidence = data.get("confidence", 0)
+        try:
+            confidence = float(data.get("confidence", 0) or 0)
+        except (TypeError, ValueError):
+            logger.warning("LLM 返回非法 confidence: %s", data.get("confidence"))
+            return None
         if confidence < 0.5:
             logger.info("LLM 置信度过低 (%.2f)，跳过", confidence)
             return None
 
-        # 构造 TaskIntent
         target = data.get("target", "")
         engine = data.get("engine")
         parameters = {}
         if engine:
             parameters["engine"] = engine
 
-        # 特殊 action 的参数补充
         if action == "paginate":
             parameters["max_pages"] = data.get("max_pages", 5)
         elif action == "scroll":

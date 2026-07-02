@@ -366,7 +366,7 @@ class TestGitHubLoginScript:
         assert 'title="测试发布功能"' in script
         assert 'run("测试发布功能"' in script
 
-    def test_router_routes_xiaohongshu_article_to_publish_fallback(self):
+    def test_router_routes_xiaohongshu_article_to_publish_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -375,9 +375,11 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_publish"
-        assert decision.script == ""
+        assert 'keyword="测试发布功能"' in decision.script
+        assert 'title="测试发布功能"' in decision.script
+        assert 'mode="article"' in decision.script
 
-    def test_router_routes_xiaohongshu_video_upload_to_publish_fallback(self):
+    def test_router_routes_xiaohongshu_video_upload_to_publish_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -386,7 +388,10 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_publish"
-        assert decision.script == ""
+        assert 'mode="video"' in decision.script
+        assert 'video_path="D:\\\\xxx\\\\clip.mp4"' in decision.script
+        assert 'title="视频标题"' in decision.script
+        assert 'body="视频正文"' in decision.script
 
     def test_router_keeps_xiaohongshu_search_on_search_intent(self):
         router = SkillRouter(library_dir="src/skill_library")
@@ -396,14 +401,15 @@ class TestGitHubLoginScript:
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_search"
 
-    def test_router_defaults_generic_publish_content_to_xiaohongshu_publish(self):
+    def test_router_defaults_generic_publish_content_to_xiaohongshu_publish_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route("发布内容“测试内容”")
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_publish"
-        assert decision.script == ""
+        assert 'keyword="测试内容"' in decision.script
+        assert 'mode="text_to_image"' in decision.script
 
     def test_registry_fallback_builds_xiaohongshu_article_publish_script(self):
         task = "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”。"
@@ -442,7 +448,7 @@ class TestGitHubLoginScript:
         assert 'title="视频标题"' in script
         assert 'run("视频正文"' in script
 
-    def test_router_routes_gmail_send_to_send_fallback(self):
+    def test_router_routes_gmail_send_to_send_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -451,9 +457,11 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/gmail_send"
-        assert decision.script == ""
+        assert 'recipient="alice@example.com"' in decision.script
+        assert 'subject="测试标题"' in decision.script
+        assert 'body="测试正文"' in decision.script
 
-    def test_router_routes_gmail_send_with_sender_login_to_send_fallback(self):
+    def test_router_routes_gmail_send_with_sender_login_to_send_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -462,7 +470,11 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/gmail_send"
-        assert decision.script == ""
+        assert 'recipient="12412639@mail.sustech.edu.cn"' in decision.script
+        assert 'subject="测试邮件"' in decision.script
+        assert 'body="测试邮件内容"' in decision.script
+        assert 'sender_email="12412639@mail.sustech.edu.cn"' in decision.script
+        assert 'password="8105432a"' in decision.script
 
     def test_registry_fallback_builds_gmail_send_script(self):
         task = "Gmail发送邮件，收件人是alice@example.com，标题是测试标题，正文是测试正文"
@@ -543,7 +555,7 @@ class TestGitHubLoginScript:
         assert "enable_schedule=True" in script
         assert 'schedule_time="2026-07-01 11:17"' in script
 
-    def test_router_routes_xiaohongshu_comment_to_comment_fallback(self):
+    def test_router_routes_xiaohongshu_comment_to_comment_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -552,7 +564,8 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_comment"
-        assert decision.script == ""
+        assert 'comment_text="dwfebfer"' in decision.script
+        assert 'note_url="https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b"' in decision.script
 
     def test_build_xiaohongshu_comment_script_passes_url_and_text(self):
         agent = AgentLoop(max_steps=3)
