@@ -1,4 +1,4 @@
-# skills.yaml -- 技能索引配置
+﻿# skills.yaml -- 技能索引配置
 #
 # 本文件是 skill_library 的唯一数据源，由 SkillRegistry.load_from_yaml() 和
 # SkillRouter 加载。
@@ -24,7 +24,12 @@ skills:
   - id: "domain/baidu_search"
     name: "百度搜索"
     type: "domain"
+    platform: "baidu"
+    action: "search"
     triggers: ["百度", "baidu", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:百度|baidu)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:百度|baidu)(?:上)?$"
     url_patterns: ["baidu.com"]
     description: "在百度搜索关键词并返回结果"
     version: "1.0.0"
@@ -42,7 +47,12 @@ skills:
   - id: "domain/google_search"
     name: "Google 搜索"
     type: "domain"
+    platform: "google"
+    action: "search"
     triggers: ["google", "谷歌", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:google|谷歌)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:google|谷歌)(?:上)?$"
     url_patterns: ["google.com"]
     description: "在 Google 搜索关键词"
     version: "1.0.0"
@@ -59,7 +69,12 @@ skills:
   - id: "domain/bing_search"
     name: "Bing 搜索"
     type: "domain"
+    platform: "bing"
+    action: "search"
     triggers: ["bing", "必应", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:bing|必应)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:bing|必应)(?:上)?$"
     url_patterns: ["bing.com"]
     description: "在 Bing 搜索关键词"
     version: "1.0.0"
@@ -104,7 +119,13 @@ skills:
   - id: "domain/github_search"
     name: "GitHub 搜索"
     type: "domain"
+    platform: "github"
+    action: "search"
     triggers: ["github", "搜索", "search", "仓库", "repo"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:github)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:github)(?:上)?$"
+      - "(?:github)(?:上)?\\s*(?:找|查找)\\s*(.+)"
     url_patterns: ["github.com/search"]
     description: "在 GitHub 搜索仓库/代码/用户"
     version: "1.0.0"
@@ -136,7 +157,12 @@ skills:
   - id: "domain/amazon_search"
     name: "Amazon 搜索"
     type: "domain"
+    platform: "amazon"
+    action: "search"
     triggers: ["amazon", "亚马逊", "购物", "商品"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:amazon|亚马逊)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:amazon|亚马逊)(?:上)?$"
     url_patterns: ["amazon.com"]
     description: "在 Amazon 搜索商品"
     version: "1.0.0"
@@ -272,7 +298,12 @@ skills:
   - id: "domain/youtube_search"
     name: "YouTube 搜索"
     type: "domain"
+    platform: "youtube"
+    action: "search"
     triggers: ["youtube", "油管", "视频", "搜索"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:youtube|油管)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:youtube|油管)(?:上)?$"
     url_patterns: ["youtube.com"]
     description: "在 YouTube 搜索视频"
     version: "1.0.0"
@@ -288,7 +319,12 @@ skills:
   - id: "domain/bilibili_search"
     name: "Bilibili 搜索"
     type: "domain"
+    platform: "bilibili"
+    action: "search"
     triggers: ["bilibili", "B站", "b站", "哔哩哔哩", "哔哩", "视频", "搜索", "search"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:bilibili|B站|b站|哔哩哔哩|哔哩)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:bilibili|B站|b站|哔哩哔哩|哔哩)(?:上)?$"
     url_patterns: ["bilibili.com"]
     description: "在 Bilibili 搜索视频、番剧、用户和相关内容"
     version: "1.0.0"
@@ -543,7 +579,12 @@ skills:
   - id: "domain/weibo_search"
     name: "微博搜索"
     type: "domain"
+    platform: "weibo"
+    action: "search"
     triggers: ["微博", "weibo", "搜索"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:微博|weibo)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:微博|weibo)(?:上)?$"
     url_patterns: ["weibo.com"]
     description: "在微博搜索"
     version: "1.0.0"
@@ -559,7 +600,12 @@ skills:
   - id: "domain/taobao_search"
     name: "淘宝搜索"
     type: "domain"
+    platform: "taobao"
+    action: "search"
     triggers: ["淘宝", "taobao", "搜索", "问答"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:淘宝|taobao)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:淘宝|taobao)(?:上)?$"
     url_patterns: ["taobao.com"]
     description: "在淘宝搜索"
     version: "1.0.0"
@@ -575,7 +621,12 @@ skills:
   - id: "domain/doubao_search"
     name: "豆包搜索"
     type: "domain"
+    platform: "doubao"
+    action: "search"
     triggers: ["豆包", "doubao", "搜索", "问答"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:豆包|doubao)(?:上)?\\s*(?:搜索|搜|查找|查询|查|问|问答|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|问|问答|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:豆包|doubao)(?:上)?$"
     url_patterns: ["doubao.com"]
     description: "在豆包搜索"
     version: "1.0.0"
@@ -591,7 +642,12 @@ skills:
   - id: "domain/csnd_search"
     name: "CSDN 搜索"
     type: "domain"
+    platform: "csdn"
+    action: "search"
     triggers: ["csnd", "csdn", "搜索", "问答"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:csdn|csnd)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:csdn|csnd)(?:上)?$"
     url_patterns: ["csdn.net"]
     description: "在 CSDN 搜索技术文章"
     version: "1.0.0"
@@ -607,7 +663,12 @@ skills:
   - id: "domain/xiaohongshu_search"
     name: "小红书搜索"
     type: "domain"
+    platform: "xiaohongshu"
+    action: "search"
     triggers: ["xiaohongshu", "小红书", "小红书搜索", "小红书 搜索", "小红书上找", "搜索小红书"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:小红书|xiaohongshu|xhs|rednote)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:小红书|xiaohongshu|xhs|rednote)(?:上)?$"
     url_patterns: ["xiaohongshu.com"]
     description: "在小红书搜索笔记和内容"
     version: "1.0.0"
@@ -665,7 +726,12 @@ skills:
   - id: "domain/zhihu_search"
     name: "知乎搜索"
     type: "domain"
+    platform: "zhihu"
+    action: "search"
     triggers: ["知乎 搜索"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:知乎|zhihu)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:知乎|zhihu)(?:上)?$"
     url_patterns: ["zhihu.com"]
     description: "在知乎搜索"
     version: "1.0.0"

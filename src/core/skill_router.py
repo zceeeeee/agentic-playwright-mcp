@@ -38,6 +38,9 @@ class SkillRouterInfo:
     name: str
     description: str = ""
     triggers: List[str] = field(default_factory=list)
+    trigger_patterns: List[str] = field(default_factory=list)
+    platform: str = ""
+    action: str = ""
     examples: List[str] = field(default_factory=list)
     params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     confirm_before_run: bool = False
@@ -129,6 +132,9 @@ class SkillRouter:
                 name=item.get("name", ""),
                 description=item.get("description", ""),
                 triggers=item.get("triggers", []),
+                trigger_patterns=item.get("trigger_patterns", []),
+                platform=item.get("platform", ""),
+                action=item.get("action", ""),
                 examples=item.get("examples", []),
                 params=item.get("params", {}),
                 confirm_before_run=item.get("confirm_before_run", False),
@@ -168,7 +174,24 @@ class SkillRouter:
         candidates = self._keyword_filter(task, limit=5)
 
         if not candidates:
-            return SkillDecision(source="none", reason="关键词无匹配")
+            # 严格 trigger 未命中时，让 AI 从技能库中选择，而不是直接放弃。
+            if self._llm_caller:
+                llm_result = self._llm_rank(
+                    task,
+                    self._all_skill_candidates(limit=40),
+                    page_context,
+                )
+                if llm_result and llm_result.confidence >= 0.7:
+                    script = self.build_script(llm_result.skill, task)
+                    return SkillDecision(
+                        skill=llm_result.skill,
+                        confidence=llm_result.confidence,
+                        reason=f"trigger 未命中，由 LLM 选择: {llm_result.reason}",
+                        source="llm",
+                        script=script,
+                    )
+                return SkillDecision(source="none", reason="trigger 未命中，LLM 未返回高置信技能")
+            return SkillDecision(source="none", reason="trigger 未命中且 LLM 不可用")
 
         if self._is_gmail_send_intent(task.lower()):
             gmail_send = next(
@@ -186,6 +209,23 @@ class SkillRouter:
                 )
 
         top_skill, top_score = candidates[0]
+
+        if len(candidates) > 1 and self._llm_caller:
+            llm_result = self._llm_rank(
+                task,
+                candidates,
+                page_context,
+                force_pick=True,
+            )
+            if llm_result:
+                script = self.build_script(llm_result.skill, task)
+                return SkillDecision(
+                    skill=llm_result.skill,
+                    confidence=llm_result.confidence,
+                    reason=f"多个 trigger 命中，由 LLM 选择: {llm_result.reason}",
+                    source="llm",
+                    script=script,
+                )
 
         # 单候选且高分 → 直接命中
         if len(candidates) == 1 or top_score >= 0.8:
@@ -240,6 +280,14 @@ class SkillRouter:
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:limit]
 
+    def _all_skill_candidates(self, limit: int = 40) -> List[tuple[SkillRouterInfo, float]]:
+        """给 LLM 使用的全量候选集。"""
+        return [
+            (skill, 0.0)
+            for skill in self._skills.values()
+            if skill.source_file
+        ][:limit]
+
     @staticmethod
     def _is_gmail_send_intent(query_lower: str) -> bool:
         if "gmail" not in query_lower:
@@ -260,6 +308,13 @@ class SkillRouter:
     def _match_score(self, skill: SkillRouterInfo, query_lower: str) -> float:
         """计算技能与查询的匹配分数 (0.0 ~ 1.0)。"""
         score = 0.0
+
+        # 严格 trigger：有 trigger_patterns 时，只认可完整语义正则。
+        if skill.trigger_patterns:
+            for pattern in skill.trigger_patterns:
+                if re.search(pattern, query_lower, re.IGNORECASE | re.DOTALL):
+                    return 0.95
+            return 0.0
 
         # 触发词匹配（核心信号，权重最高）
         matched_triggers = 0
@@ -321,6 +376,7 @@ class SkillRouter:
         task: str,
         candidates: List[tuple[SkillRouterInfo, float]],
         page_context: Optional[Dict[str, str]] = None,
+        force_pick: bool = False,
     ) -> Optional[SkillDecision]:
         """用 LLM 从候选技能中选出最佳匹配。"""
         if not self._llm_caller:
@@ -333,16 +389,19 @@ class SkillRouter:
                 "id": skill.id,
                 "name": skill.name,
                 "description": skill.description,
+                "platform": skill.platform,
+                "action": skill.action,
             }
             if skill.examples:
                 entry["examples"] = skill.examples[:3]
             candidate_list.append(entry)
 
-        prompt = self._build_rank_prompt(task, candidate_list, page_context)
+        prompt = self._build_rank_prompt(task, candidate_list, page_context, force_pick)
+        candidate_ids = [skill.id for skill, _ in candidates]
         schema = {
             "type": "object",
             "properties": {
-                "skill_id": {"type": "string"},
+                "skill_id": {"type": "string", "enum": candidate_ids},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "reason": {"type": "string"},
             },
@@ -367,7 +426,7 @@ class SkillRouter:
             return None
         reason = data.get("reason", "")
 
-        if confidence < 0.5:
+        if confidence < 0.5 and not force_pick:
             logger.info("LLM 精排置信度过低 (%.2f)，忽略", confidence)
             return None
 
@@ -386,7 +445,7 @@ class SkillRouter:
 
         return SkillDecision(
             skill=chosen_skill,
-            confidence=confidence,
+            confidence=max(confidence, 0.65) if force_pick else confidence,
             reason=reason,
             source="llm",
         )
@@ -396,6 +455,7 @@ class SkillRouter:
         task: str,
         candidates: List[Dict],
         page_context: Optional[Dict[str, str]] = None,
+        force_pick: bool = False,
     ) -> str:
         """构造 LLM 精排 prompt。"""
         candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)
@@ -407,6 +467,14 @@ class SkillRouter:
                 f"— {page_context.get('title', '')}\n"
             )
 
+        force_rules = (
+            "\n3. 当前必须从候选 skill_id 中选择一个最符合用户意图的技能。"
+            "\n4. 如果用户说“在A搜索B”，通常 A 是平台，B 是关键词。"
+            "\n5. 如果用户说“用A搜索B”，通常 A 是搜索引擎/平台，B 是关键词。"
+            if force_pick
+            else "\n3. 如果没有明确匹配，confidence 设为 0.3 以下。"
+        )
+
         return f"""你是任务路由器。根据用户输入，从候选 skill 中选最匹配的一个。
 
 用户输入: {task}{context_line}
@@ -415,7 +483,7 @@ class SkillRouter:
 
 规则:
 1. 优先匹配用户明确提到的站点和操作
-2. 如果没有明确匹配，confidence 设为 0.3 以下"""
+2. skill_id 必须是候选 skills 中的 id{force_rules}"""
 
     # -------------------------------------------------------------------
     # 脚本构建
@@ -751,6 +819,18 @@ class SkillRouter:
                 )
 
         if ptype == "keyword":
+            direct_patterns = [
+                r"(?:在|用|打开)?\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?\s*(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+)$",
+                r"(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+?)\s*(?:用|在|到)\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?$",
+            ]
+            for pattern in direct_patterns:
+                match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+                if match:
+                    keyword = match.group(1).strip().strip("'\"`“”‘’「」")
+                    keyword = re.sub(r"[，,。.;；!！?？)）]+$", "", keyword).strip()
+                    if keyword:
+                        return keyword
+
             # 提取搜索关键词（去掉动作词和站点名）
             # 注意：长词必须排在短词前面，否则 "搜索" 中的 "搜" 会先被匹配
             keyword = re.sub(
@@ -798,6 +878,21 @@ class SkillRouter:
 
         # 提取关键词（去掉常见的动作词和站点名）
         # 注意：长词必须排在短词前面，否则 "搜索" 中的 "搜" 会先被匹配
+        direct_patterns = [
+            r"(?:在|用|打开)?\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?\s*(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+)$",
+            r"(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+?)\s*(?:用|在|到)\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?$",
+        ]
+        for pattern in direct_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                keyword = match.group(1).strip().strip("'\"`“”‘’「」")
+                keyword = re.sub(r"[，,。.;；!！?？)）]+$", "", keyword).strip()
+                if keyword:
+                    return (
+                        f"{source_code}\n\n# 自动调用\n"
+                        f"run({json.dumps(keyword, ensure_ascii=False)})"
+                    )
+
         keyword = re.sub(
             r"(?:帮我看|帮我查|帮我搜|查查|搜索|查找|看看|一下|search|在|去|到|用|帮|我|搜|查)",
             "",
@@ -865,6 +960,8 @@ def get_skill_router(
         if library_dir is None:
             library_dir = Path(__file__).parent.parent / "skill_library"
         _instance = SkillRouter(library_dir=library_dir, llm_caller=llm_caller)
+    elif llm_caller is not None:
+        _instance._llm_caller = llm_caller
     return _instance
 
 
