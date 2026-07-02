@@ -623,6 +623,26 @@ skills:
         required: true
         description: "评论内容"
 
+  - id: "domain/zhihu_question"
+    name: "知乎提问题"
+    type: "domain"
+    triggers: ["知乎提问题", "知乎 提问题", "知乎提问", "知乎 提问"]
+    url_patterns: ["zhihu.com"]
+    description: "打开知乎首页并点击提问题入口"
+    version: "1.0.0"
+    examples:
+      - "知乎提问题"
+      - "打开知乎提问"
+    params:
+      keyword:
+        type: keyword
+        required: false
+        description: "预留问题内容"
+        extract_patterns:
+          - "(?:在|到)?知乎(?:上)?(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
+          - "知乎\\s*(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
+          - "(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
+
   # ──────────────────────────────────────────────
   # 通用交互模板
   # ──────────────────────────────────────────────
@@ -700,6 +720,10 @@ sources:
 
   - id: "domain/zhihu_answer"
     file: "zhihu/zhihu_answer.py"
+    entry: "run"
+
+  - id: "domain/zhihu_question"
+    file: "zhihu/zhihu_question.py"
     entry: "run"
 
   - id: "domain/baidu_search"
