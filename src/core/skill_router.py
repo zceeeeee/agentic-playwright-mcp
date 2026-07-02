@@ -450,6 +450,13 @@ class SkillRouter:
 
         source_code = source_path.read_text(encoding="utf-8")
 
+        if skill.id in {
+            "domain/gmail_send",
+            "domain/xiaohongshu_publish",
+            "domain/xiaohongshu_comment",
+        }:
+            return ""
+
         # 检查源码是否已经自带 run() 调用
         code_without_defs = re.sub(r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code)
         if "run(" in code_without_defs:
@@ -459,8 +466,8 @@ class SkillRouter:
         if skill.params:
             return self._build_parametrized_script(source_code, skill, task)
 
-        # 无参数声明 → 使用通用关键词提取，避免 AgentLoop 再拼特化脚本。
-        return self._build_keyword_script(source_code, task)
+        # 无参数声明 → 返回空，让 agent_loop 的旧路径处理（它有更好的关键词提取）
+        return ""
 
     def _build_parametrized_script(
         self,
@@ -479,23 +486,14 @@ class SkillRouter:
         # 构造 run() 调用
         llm_values = self._extract_params_with_llm(skill, task, extracted)
         for param_name, value in llm_values.items():
-            if extracted.get(param_name, "-1") == "-1" and value and value != "-1":
+            if value and value != "-1":
                 extracted[param_name] = value
 
         args_parts = []
         for param_name in skill.params:
-            param_def = skill.params[param_name]
-            raw_value = extracted.get(param_name, "-1")
-            if raw_value == "-1" and not param_def.get("required", False):
-                continue
-            if param_def.get("type") == "boolean" and str(raw_value).lower() in {"true", "false"}:
-                value = "True" if str(raw_value).lower() == "true" else "False"
-            else:
-                value = json.dumps(raw_value, ensure_ascii=False)
-            if param_def.get("positional", False):
-                args_parts.append(value)
-            else:
-                args_parts.append(f"{param_name}={value}")
+            args_parts.append(
+                f"{param_name}={json.dumps(extracted.get(param_name, '-1'), ensure_ascii=False)}"
+            )
 
         args_str = ", ".join(args_parts)
         return f"{source_code}\n\n# 自动调用\nrun({args_str})"
@@ -602,8 +600,7 @@ class SkillRouter:
             match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
             if match:
                 value = match.group(1).strip()
-                value = value.strip("'\"`“”‘’「」")
-                value = re.sub(r"[，,。.;；!！?？)）]+$", "", value).strip()
+                value = value.strip("'\"`“”‘’")
                 if value:
                     return value
 
@@ -620,8 +617,6 @@ class SkillRouter:
                     return digits
 
         if ptype == "email":
-            if param_name in {"sender_email", "from_email"}:
-                return None
             match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", task, re.I)
             if match:
                 return match.group(0)
@@ -632,138 +627,9 @@ class SkillRouter:
                 return re.sub(r"[.,;:。，；：!?！?）)>]+$", "", match.group(0))
 
         if ptype == "quoted":
-            match = re.search(r"['\"“‘「](.+?)['\"”’」]", task)
+            match = re.search(r"['\"“‘](.+?)['\"”’]", task)
             if match:
                 return match.group(1).strip()
-
-        if ptype == "content":
-            quoted = re.search(r"['\"“‘「](.+?)['\"”’」]", task, re.DOTALL)
-            if quoted:
-                return quoted.group(1).strip()
-            match = re.search(
-                r"(?:内容|正文|文案|文章内容|发布内容|content)\s*(?:是|为|:|：|=)?\s*(.+)$",
-                task,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if match:
-                return match.group(1).strip().strip("'\"`“”‘’「」")
-
-        if ptype == "title":
-            quoted = re.search(
-                r"(?:标题|题目|title)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
-                task,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if quoted:
-                return quoted.group(1).strip()
-            match = re.search(
-                r"(?:标题|题目|title)\s*(?:是|为|:|：|=)?\s*(.+?)(?=\s*(?:正文|内容|文章内容|body|content)\s*(?:是|为|:|：|=)?|$)",
-                task,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if match:
-                return re.sub(r"[，,。.;；!！?？)）]+$", "", match.group(1).strip().strip("'\"`“”‘’「」")).strip()
-
-        if ptype == "body":
-            quoted = re.search(
-                r"(?:正文|正文内容|内容|文章内容|body|content)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
-                task,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if quoted:
-                return quoted.group(1).strip()
-            match = re.search(
-                r"(?:正文|正文内容|内容|文章内容|body|content)\s*(?:是|为|:|：|=)?\s*(.+)$",
-                task,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if match:
-                return re.sub(r"[，,。.;；!！?？)）]+$", "", match.group(1).strip().strip("'\"`“”‘’「」")).strip()
-
-        if ptype == "comment_text":
-            quoted = re.search(r"['\"“‘](.+?)['\"”’]", task, re.DOTALL)
-            if quoted:
-                return quoted.group(1).strip()
-            match = re.search(
-                r"(?:评论内容|留言内容|回复内容|评论|留言|回复)\s*(?:是|为|:|：|=)?\s*(.+?)(?=\s*(?:在|然后|并且|接着)|$)",
-                task,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if match:
-                return re.sub(r"[，,。.;；!！?？)）]+$", "", match.group(1).strip().strip("'\"`“”‘’「」")).strip()
-
-        if ptype in {"image_path", "video_path"}:
-            if ptype == "video_path":
-                extensions = r"mp4|mov|avi|mkv|webm|m4v"
-                labels = r"视频地址|视频路径|视频|video_path|video|地址|path"
-            else:
-                extensions = r"jpg|jpeg|png|webp|bmp|gif"
-                labels = r"图片地址|图片路径|图片|图像|image_path|image|地址|path"
-
-            quoted = re.search(
-                rf"(?:{labels})\s*(?:是|为|:|：|=)?\s*['\"“‘]([^'\"“”‘’]+?\.(?:{extensions}))['\"”’]",
-                task,
-                re.IGNORECASE,
-            )
-            if quoted:
-                return quoted.group(1).strip()
-
-            labeled = re.search(
-                rf"(?:{labels})\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?([A-Za-z]:[\\/][^'\"“”‘’\s，,。；;]+?\.(?:{extensions}))",
-                task,
-                re.IGNORECASE,
-            )
-            if labeled:
-                return labeled.group(1).strip()
-
-            bare = re.search(
-                rf"([A-Za-z]:[\\/][^'\"“”‘’\s，,。；;]+?\.(?:{extensions}))",
-                task,
-                re.IGNORECASE,
-            )
-            if bare:
-                return bare.group(1).strip()
-
-        if ptype == "publish_mode":
-            if re.search(r"(文章|长文|小说|article|novel)", task, re.IGNORECASE):
-                return "article"
-            if re.search(r"(上传视频|视频地址|视频路径|video)", task, re.IGNORECASE):
-                return "video"
-            if re.search(r"(上传图片|图片地址|图片路径|image|upload)", task, re.IGNORECASE):
-                return "image_upload"
-            return "text_to_image"
-
-        if ptype == "style":
-            styles = ["基础", "弥散", "涂写", "光影", "手写", "备忘", "边框", "便签", "涂鸦", "简约"]
-            for style in styles:
-                if style in task:
-                    return style
-
-        if ptype == "boolean":
-            if re.search(r"(定时发布|定时|预约发布|scheduled)", task, re.IGNORECASE):
-                return "true"
-            return "false"
-
-        if ptype == "datetime":
-            match = re.search(
-                r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})(?:日)?\s+(\d{1,2})[:：点](\d{1,2})",
-                task,
-            )
-            if match:
-                year, month, day, hour, minute = match.groups()
-                return (
-                    f"{int(year):04d}-{int(month):02d}-{int(day):02d} "
-                    f"{int(hour):02d}:{int(minute):02d}"
-                )
-            match = re.search(r"(\d{1,2})月(\d{1,2})日?\s*(\d{1,2})[:：点](\d{1,2})", task)
-            if match:
-                from datetime import datetime
-
-                month, day, hour, minute = match.groups()
-                return (
-                    f"{datetime.now().year:04d}-{int(month):02d}-{int(day):02d} "
-                    f"{int(hour):02d}:{int(minute):02d}"
-                )
 
         if ptype == "keyword":
             # 提取搜索关键词（去掉动作词和站点名）
@@ -795,22 +661,6 @@ class SkillRouter:
     @staticmethod
     def _build_keyword_script(source_code: str, task: str) -> str:
         """无 params 声明时，用通用关键词提取拼 run() 调用。"""
-        run_match = re.search(r"def\s+run\s*\(([^)]*)\)", source_code)
-        if run_match:
-            params_text = run_match.group(1).strip()
-            if not params_text:
-                return f"{source_code}\n\n# 自动调用\nrun()"
-
-            required_parts = []
-            for part in params_text.split(","):
-                part = part.strip()
-                if not part or part in {"*", "/"} or part.startswith("*"):
-                    continue
-                if "=" not in part:
-                    required_parts.append(part)
-            if not required_parts:
-                return f"{source_code}\n\n# 自动调用\nrun()"
-
         # 提取关键词（去掉常见的动作词和站点名）
         # 注意：长词必须排在短词前面，否则 "搜索" 中的 "搜" 会先被匹配
         keyword = re.sub(

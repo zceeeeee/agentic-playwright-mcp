@@ -21,6 +21,7 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -489,6 +490,37 @@ class AgentLoop:
                 decision.skill.name,
             )
 
+        # 1b. 回退：旧的 registry.search + _build_skill_script 路径
+        with log_timing("agent_plan_skill_lookup") as meta:
+            skills = self._registry.search(query=task)
+            meta["matches"] = len(skills)
+
+        if skills:
+            skill = self._select_best_skill(skills, task)
+            detail = self._registry.get_detail(skill.id)
+
+            if detail and detail.source_code:
+                script = self._build_skill_script(detail.source_code, task, skill.id)
+                if script:
+                    step.action = f"使用技能: {skill.name}"
+                    step.script = script
+                    step.result = f"找到技能: {skill.name} (registry 回退)"
+                    logger.info("PLAN: registry fallback matched '%s'", skill.name)
+                    self._bus.emit(
+                        Event(
+                            name=EVENT_AGENT_PLAN,
+                            phase=Phase.AFTER,
+                            data={
+                                "step_number": step.step_number,
+                                "source": "skill_registry_fallback",
+                                "skill_id": skill.id,
+                                "skill_name": skill.name,
+                            },
+                            result=step.result,
+                        )
+                    )
+                    return AgentState.ACT
+
         # 2. 查找已保存的脚本（经验复用）
         saved_script = self._experience.find_script(task)
         if saved_script and saved_script.script:
@@ -527,6 +559,28 @@ class AgentLoop:
             )
             return AgentState.ACT
 
+        # 4. 规则失败 → LLM 兜底
+        if self._llm_parser and self._llm_parser.available:
+            logger.info("PLAN: 规则未命中，尝试 LLM 意图解析")
+            script = self._generate_script_via_llm(task)
+            if script:
+                step.action = "LLM 意图解析"
+                step.script = script
+                step.result = "LLM 兜底生成脚本"
+                logger.info("PLAN: LLM fallback succeeded")
+                self._bus.emit(
+                    Event(
+                        name=EVENT_AGENT_PLAN,
+                        phase=Phase.AFTER,
+                        data={
+                            "step_number": step.step_number,
+                            "source": "llm_fallback",
+                        },
+                        result=step.result,
+                    )
+                )
+                return AgentState.ACT
+
         # 5. 无法生成脚本
         step.result = "无法规划行动"
         logger.warning("PLAN: no action could be planned")
@@ -546,6 +600,819 @@ class AgentLoop:
         使用 ScriptGenerator 进行意图解析和脚本生成。
         """
         return self._script_generator.generate(task, page_summary)
+
+    def _build_skill_script(self, source_code: str, task: str, skill_id: str) -> str:
+        """将技能源码转换为可执行脚本。
+
+        技能源码通常只定义函数（如 def run(keyword)），需要追加调用语句。
+        从任务描述中提取参数，自动调用函数。
+        """
+        import re
+
+        if skill_id == "domain/gmail_login":
+            credentials = self._extract_gmail_credentials(task)
+            if not credentials:
+                return (
+                    f"{source_code}\n\n"
+                    "raise ValueError('Gmail login requires email and password')"
+                )
+            email, password = credentials
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(email, ensure_ascii=False)}, "
+                f"{json.dumps(password, ensure_ascii=False)})"
+            )
+
+        if skill_id == "domain/gmail_send":
+            recipient, subject, body = self._extract_gmail_send_fields(task)
+            sender_email, password = self._extract_gmail_send_account(task)
+            missing = []
+            if not recipient:
+                missing.append("recipient")
+            if not subject:
+                missing.append("subject")
+            if not body:
+                missing.append("body")
+            if missing:
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('Gmail send requires {', '.join(missing)}')"
+                )
+            kwargs = []
+            if sender_email and password:
+                kwargs.append(f"sender_email={json.dumps(sender_email, ensure_ascii=False)}")
+                kwargs.append(f"password={json.dumps(password, ensure_ascii=False)}")
+            kwargs_text = ", " + ", ".join(kwargs) if kwargs else ""
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"_result = run({json.dumps(recipient, ensure_ascii=False)}, "
+                f"{json.dumps(subject, ensure_ascii=False)}, "
+                f"{json.dumps(body, ensure_ascii=False)}{kwargs_text})\n"
+                "if isinstance(_result, dict) and not _result.get('success', True):\n"
+                "    raise RuntimeError(_result.get('error') or str(_result))"
+            )
+
+        if skill_id == "domain/github_login":
+            credentials = self._extract_login_credentials(task)
+            if not credentials:
+                return (
+                    f"{source_code}\n\n"
+                    "raise ValueError('GitHub login requires username and password')"
+                )
+            username, password = credentials
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(username, ensure_ascii=False)}, "
+                f"{json.dumps(password, ensure_ascii=False)})"
+            )
+
+        if skill_id == "domain/bilibili_publish":
+            phone_number = self._extract_phone_number(task)
+            title, body = self._extract_bilibili_publish_fields(task)
+            missing = []
+            if not phone_number:
+                missing.append("phone number")
+            if not title:
+                missing.append("title")
+            if not body:
+                missing.append("body")
+            if missing:
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('Bilibili publish requires {', '.join(missing)}')"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(phone_number, ensure_ascii=False)}, "
+                f"{json.dumps(title, ensure_ascii=False)}, "
+                f"{json.dumps(body, ensure_ascii=False)})"
+            )
+
+        if skill_id == "domain/bilibili_comment":
+            phone_number = self._extract_phone_number(task)
+            comment_text = self._extract_comment_text(task)
+            video_url = self._extract_video_url(task)
+            missing = []
+            if not phone_number:
+                missing.append("phone number")
+            if not comment_text:
+                missing.append("comment text")
+            if missing:
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('Bilibili comment requires {', '.join(missing)}')"
+                )
+            if video_url:
+                return (
+                    f"{source_code}\n\n# 自动调用\n"
+                    f"run({json.dumps(phone_number, ensure_ascii=False)}, "
+                    f"{json.dumps(comment_text, ensure_ascii=False)}, "
+                    f"video_url={json.dumps(video_url, ensure_ascii=False)})"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(phone_number, ensure_ascii=False)}, "
+                f"{json.dumps(comment_text, ensure_ascii=False)})"
+            )
+
+        if skill_id == "domain/xiaohongshu_comment":
+            comment_text = self._extract_comment_text(task)
+            note_url = self._extract_xiaohongshu_note_url(task)
+            missing = []
+            if not note_url:
+                missing.append("note url")
+            if not comment_text:
+                missing.append("comment text")
+            if missing:
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('Xiaohongshu comment requires {', '.join(missing)}')"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"_result = run({json.dumps(comment_text, ensure_ascii=False)}, "
+                f"note_url={json.dumps(note_url, ensure_ascii=False)})\n"
+                "if isinstance(_result, dict) and not _result.get('success', True):\n"
+                "    raise RuntimeError(_result.get('error') or str(_result))"
+            )
+
+        if skill_id == "domain/xiaohongshu_publish":
+            phone_number = self._extract_phone_number(task)
+            image_path = self._extract_xiaohongshu_media_path(task, "image")
+            video_path = self._extract_xiaohongshu_media_path(task, "video")
+            mode = self._extract_xiaohongshu_publish_mode(task, image_path, video_path)
+            title, content = self._extract_xiaohongshu_publish_fields(task)
+            cover_style = self._extract_xiaohongshu_cover_style(task)
+            enable_schedule, schedule_time = self._extract_xiaohongshu_schedule(task)
+            missing = []
+            if mode in {"text_to_image", "article"} and not content:
+                missing.append("content")
+            if mode == "video" and not video_path:
+                missing.append("video_path")
+            if mode == "image_upload" and not image_path:
+                missing.append("image_path")
+            if missing:
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('Xiaohongshu publish requires {', '.join(missing)}')"
+                )
+            args = [json.dumps(content, ensure_ascii=False) if content is not None else "None"]
+            kwargs = [f"mode={json.dumps(mode, ensure_ascii=False)}"]
+            if phone_number:
+                kwargs.append(f"phone_number={json.dumps(phone_number, ensure_ascii=False)}")
+            if image_path:
+                kwargs.append(f"image_path={json.dumps(image_path, ensure_ascii=False)}")
+            if video_path:
+                kwargs.append(f"video_path={json.dumps(video_path, ensure_ascii=False)}")
+            if title:
+                kwargs.append(f"title={json.dumps(title, ensure_ascii=False)}")
+            if cover_style:
+                kwargs.append(f"cover_style={json.dumps(cover_style, ensure_ascii=False)}")
+            if enable_schedule:
+                kwargs.append("enable_schedule=True")
+            if schedule_time:
+                kwargs.append(f"schedule_time={json.dumps(schedule_time, ensure_ascii=False)}")
+            call_args = ", ".join(args + kwargs)
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"_result = run({call_args})\n"
+                "if isinstance(_result, dict) and not _result.get('success', True):\n"
+                "    raise RuntimeError(_result.get('error') or str(_result))"
+            )
+
+        if skill_id == "domain/xiaohongshu_publish":
+            phone_number = self._extract_phone_number(task)
+            content = self._extract_xiaohongshu_publish_content(task)
+            if not content:
+                return (
+                    f"{source_code}\n\n"
+                    "raise ValueError('Xiaohongshu publish requires content')"
+                )
+            if phone_number:
+                return (
+                    f"{source_code}\n\n# 自动调用\n"
+                    f"run({json.dumps(content, ensure_ascii=False)}, "
+                    f"phone_number={json.dumps(phone_number, ensure_ascii=False)})"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(content, ensure_ascii=False)})"
+            )
+
+        phone_login_sites = {
+            "domain/xiaohongshu_login": "Xiaohongshu",
+            "domain/douyin_login": "Douyin",
+            "domain/bilibili_login": "Bilibili",
+        }
+        if skill_id in phone_login_sites:
+            phone_number = self._extract_phone_number(task)
+            if not phone_number:
+                site_name = phone_login_sites[skill_id]
+                return (
+                    f"{source_code}\n\n"
+                    f"raise ValueError('{site_name} login requires phone number')"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(phone_number, ensure_ascii=False)})"
+            )
+
+        if skill_id == "domain/zhihu_send":
+            content = self._extract_zhihu_publish_content(task)
+            if not content:
+                return (
+                    f"{source_code}\n\n"
+                    "raise ValueError('Zhihu publish requires article content')"
+                )
+            return (
+                f"{source_code}\n\n# 自动调用\n"
+                f"run({json.dumps(content, ensure_ascii=False)})"
+            )
+
+        # 提取关键词
+        keyword = self._script_generator._extract_keyword(task)
+        if not keyword:
+            # 关键词提取失败，不降级使用整句话（会导致搜索整个指令文本）
+            # 返回空字符串让 agent loop 走 LLM 兜底路径
+            return ""
+
+        # 检查源码是否已经有独立的 run() 调用（不是 def run 定义）
+        # 去掉 def 语句后，检查是否还有 run( 调用
+        code_without_defs = re.sub(r"def\s+\w+\s*\([^)]*\)\s*:", "", source_code)
+        if "run(" in code_without_defs:
+            # 已经有调用语句，直接返回
+            return source_code
+
+        # 追加调用语句
+        call_script = f"{source_code}\n\n# 自动调用\nrun({json.dumps(keyword, ensure_ascii=False)})"
+        return call_script
+
+    @staticmethod
+    def _extract_login_credentials(task: str) -> tuple[str, str] | None:
+        import re
+
+        def find(patterns: list[str]) -> str | None:
+            for pattern in patterns:
+                match = re.search(pattern, task, re.IGNORECASE)
+                if match:
+                    return match.group(1).strip().strip("'\"`")
+            return None
+
+        username = find(
+            [
+                r"(?:用户名|用户|账号|账户|名称|邮箱|username|user|account|email)\s*(?:是|为|:|：|=)?\s*['\"]?([^'\"\s,，;；。]+)",
+            ]
+        )
+        password = find(
+            [
+                r"(?:密码|口令|password|pass)\s*(?:是|为|:|：|=)?\s*['\"]?([^'\"\s,，;；。]+)",
+            ]
+        )
+        if username and password:
+            return username, password
+        return None
+
+    @staticmethod
+    def _extract_gmail_credentials(task: str) -> tuple[str, str] | None:
+        import re
+
+        email_match = re.search(
+            r"([A-Z0-9._%+-]+@gmail\.com)",
+            task,
+            re.IGNORECASE,
+        )
+        password_match = re.search(
+            r"(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\s,，;；。)）]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if email_match and password_match:
+            password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
+            return email_match.group(1), password
+        return AgentLoop._extract_login_credentials(task)
+
+    @staticmethod
+    def _extract_gmail_send_fields(task: str) -> tuple[str | None, str | None, str | None]:
+        import re
+
+        quote_chars = "'\"`“”‘’"
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip().strip(quote_chars)
+            text = text.rstrip("，,。.;；!！?？)）\n\r\t ").strip()
+            text = text.strip(quote_chars)
+            return text or None
+
+        def find_labeled(label_pattern: str, stop_pattern: str | None = None) -> str | None:
+            quoted = re.search(
+                rf"(?:{label_pattern})\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+                task,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if quoted:
+                return clean(quoted.group(1))
+
+            if stop_pattern:
+                pattern = (
+                    rf"(?:{label_pattern})\s*(?:是|为|:|：|=)?\s*(.+?)"
+                    rf"(?=\s*(?:{stop_pattern})\s*(?:是|为|:|：|=)?|$)"
+                )
+            else:
+                pattern = rf"(?:{label_pattern})\s*(?:是|为|:|：|=)?\s*(.+)$"
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                return clean(match.group(1))
+            return None
+
+        recipient = None
+        recipient_match = re.search(
+            r"(?:收件人|收件邮箱|收信人|发送给|发给|寄给|to|recipient)[^A-Z0-9@]{0,16}"
+            r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+            task,
+            re.IGNORECASE,
+        )
+        if recipient_match:
+            recipient = recipient_match.group(1).strip()
+        else:
+            any_email = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", task, re.IGNORECASE)
+            if any_email:
+                recipient = any_email.group(0).strip()
+
+        subject = find_labeled(
+            r"邮件标题|信件标题|标题|主题|subject|title",
+            r"邮件正文|正文内容|正文|邮件内容|内容|body|content",
+        )
+        body = find_labeled(r"邮件正文|正文内容|正文|邮件内容|内容|body|content")
+
+        return recipient, subject, body
+
+    @staticmethod
+    def _extract_gmail_send_account(task: str) -> tuple[str | None, str | None]:
+        import re
+
+        sender = None
+        sender_match = re.search(
+            r"(?:发件邮箱|发件人|发信邮箱|发送邮箱|账号邮箱|邮箱账号|sender|from)[^A-Z0-9@]{0,16}"
+            r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+            task,
+            re.IGNORECASE,
+        )
+        if sender_match:
+            sender = sender_match.group(1).strip()
+
+        password = None
+        password_match = re.search(
+            r"(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\s,，;；。)）]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if password_match:
+            password = password_match.group(1).strip().strip("'\"`“”‘’()（）")
+
+        return sender, password
+
+    @staticmethod
+    def _extract_phone_number(task: str) -> str | None:
+        import re
+
+        candidates = re.findall(r"(?:\+?86[-\s]*)?1[3-9](?:[-\s]*\d){9}", task)
+        for candidate in candidates:
+            digits = re.sub(r"\D", "", candidate)
+            if digits.startswith("86") and len(digits) == 13:
+                digits = digits[2:]
+            if re.fullmatch(r"1[3-9]\d{9}", digits):
+                return digits
+        return None
+
+    @staticmethod
+    def _extract_bilibili_publish_fields(task: str) -> tuple[str | None, str | None]:
+        import re
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip().strip("'\"`“”‘’").rstrip("，,；;。 \n\r\t")
+            return text or None
+
+        title_patterns = [
+            r"(?:标题|题目|title)\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?(.*?)(?=(?:正文|内容|文章内容|body|content)\s*(?:是|为|:|：|=)|$)",
+        ]
+        body_patterns = [
+            r"(?:正文|内容|文章内容|body|content)\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?(.+)$",
+        ]
+
+        title = None
+        for pattern in title_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                title = clean(match.group(1))
+                break
+
+        body = None
+        for pattern in body_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                body = clean(match.group(1))
+                break
+
+        return title, body
+
+    @staticmethod
+    def _extract_xiaohongshu_publish_content(task: str) -> str | None:
+        """从任务描述中提取小红书图文发布内容。"""
+        import re
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip()
+            text = text.strip("'\"`“”‘’")
+            text = re.split(r"\s*(?:然后|并且|接着|最后)\s*", text, maxsplit=1)[0]
+            text = re.split(
+                r"\s*(?:电话号码|电话|手机号|手机号码|phone)\s*(?:是|为|:|：|=)?\s*",
+                text,
+                maxsplit=1,
+            )[0]
+            text = text.rstrip("，,；;。.!！?？ \n\r\t")
+            text = text.strip("'\"`“”‘’")
+            return text or None
+
+        quoted_patterns = [
+            r"(?:图文内容|笔记内容|发布内容|内容|正文|文案|caption|content)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+            r"(?:发布|发表|生成).{0,12}(?:图文|笔记).{0,16}['\"“‘](.+?)['\"”’]",
+        ]
+        for pattern in quoted_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                content = clean(match.group(1))
+                if content:
+                    return content
+
+        label_patterns = [
+            r"(?:图文内容|笔记内容|发布内容|内容|正文|文案|caption|content)\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?(.+)$",
+            r"(?:发布|发表|生成).{0,12}(?:图文|笔记)\s*(?:内容)?\s*(?:是|为|:|：|=)\s*['\"“”‘’]?(.+)$",
+        ]
+        for pattern in label_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                content = clean(match.group(1))
+                if content:
+                    return content
+
+        return None
+
+    @staticmethod
+    def _extract_xiaohongshu_media_path(task: str, kind: str) -> str | None:
+        """Extract a local image or video path from a Xiaohongshu publish task."""
+        import re
+
+        if kind == "video":
+            extensions = r"mp4|mov|avi|mkv|webm|m4v"
+            labels = r"视频地址|视频路径|视频|video_path|video|地址|path"
+        else:
+            extensions = r"jpg|jpeg|png|webp|bmp|gif"
+            labels = r"图片地址|图片路径|图片|图像|image_path|image|地址|path"
+
+        quoted_pattern = rf"['\"“”‘’]([^'\"“”‘’]+?\.(?:{extensions}))['\"“”‘’]"
+        for match in re.finditer(quoted_pattern, task, re.IGNORECASE):
+            value = match.group(1).strip()
+            prefix = task[max(0, match.start() - 24) : match.start()]
+            if re.search(labels, prefix, re.IGNORECASE) or re.search(
+                rf"\.(?:{extensions})$",
+                value,
+                re.IGNORECASE,
+            ):
+                return value
+
+        label_pattern = (
+            rf"(?:{labels})\s*(?:是|为|:|：|=)?\s*"
+            rf"['\"“”‘’]?([A-Za-z]:[\\/][^'\"“”‘’\s，,。；;]+?\.(?:{extensions}))"
+        )
+        match = re.search(label_pattern, task, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+        bare_pattern = rf"([A-Za-z]:[\\/][^'\"“”‘’\s，,。；;]+?\.(?:{extensions}))"
+        match = re.search(bare_pattern, task, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        return None
+
+    @staticmethod
+    def _extract_xiaohongshu_publish_mode(
+        task: str,
+        image_path: str | None = None,
+        video_path: str | None = None,
+    ) -> str:
+        """Return text_to_image, image_upload, video, or article."""
+        import re
+
+        if re.search(r"(文章|长文|小说|article|novel)", task, re.IGNORECASE) and re.search(
+            r"(小红书|xiaohongshu|xhs|rednote|上传|写|发布|发表|post|publish|write)",
+            task,
+            re.IGNORECASE,
+        ):
+            return "article"
+        if video_path or re.search(r"(上传视频|视频地址|视频路径|video)", task, re.IGNORECASE):
+            return "video"
+        if image_path:
+            return "image_upload"
+        return "text_to_image"
+
+    @staticmethod
+    def _extract_xiaohongshu_publish_fields(task: str) -> tuple[str | None, str | None]:
+        """Extract optional title and body/content for Xiaohongshu publishing."""
+        import re
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip().strip("'\"`“”‘’")
+            text = re.split(
+                r"\s*(?:图片地址|图片路径|视频地址|视频路径|地址|电话|电话号码|手机号|手机号码|phone|image_path|video_path)\s*(?:是|为|:|：|=)?",
+                text,
+                maxsplit=1,
+            )[0]
+            text = text.rstrip("，,。.;；!！\n\r\t ")
+            text = text.strip("'\"`“”‘’")
+            return text or None
+
+        title = None
+        title_patterns = [
+            r"(?:标题|题目|title)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+            r"(?:标题|题目|title)\s*(?:是|为|:|：|=)?\s*(.+?)(?=(?:正文|内容|文案|图片地址|图片路径|视频地址|视频路径|地址|电话|手机号|$))",
+        ]
+        for pattern in title_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                title = clean(match.group(1))
+                if title:
+                    break
+
+        body = AgentLoop._extract_xiaohongshu_publish_content(task)
+        return title, body
+
+    @staticmethod
+    def _extract_xiaohongshu_cover_style(task: str) -> str | None:
+        styles = ["基础", "弥散", "涂写", "光影", "手写", "备忘", "边框", "便签", "涂鸦", "简约"]
+        for style in styles:
+            if style in task:
+                return style
+        return None
+
+    @staticmethod
+    def _extract_xiaohongshu_schedule(task: str) -> tuple[bool, str | None]:
+        import re
+
+        enable = bool(re.search(r"(定时发布|定时|预约发布|scheduled)", task, re.IGNORECASE))
+        if not enable:
+            return False, None
+
+        patterns = [
+            r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})(?:日)?\s+(\d{1,2})[:：点](\d{1,2})",
+            r"(\d{1,2})月(\d{1,2})日?\s*(\d{1,2})[:：点](\d{1,2})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, task)
+            if not match:
+                continue
+            groups = match.groups()
+            if len(groups) == 5:
+                year, month, day, hour, minute = groups
+            else:
+                from datetime import datetime
+
+                year = str(datetime.now().year)
+                month, day, hour, minute = groups
+            return True, (
+                f"{int(year):04d}-{int(month):02d}-{int(day):02d} "
+                f"{int(hour):02d}:{int(minute):02d}"
+            )
+
+        return True, None
+
+    @staticmethod
+    def _extract_xiaohongshu_note_url(task: str) -> str | None:
+        import re
+
+        match = re.search(
+            r"(https?://(?:www\.)?xiaohongshu\.com/[A-Za-z0-9:/?#@!$&()*+,;=%._~%-]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        url = match.group(1)
+        url = re.split(r"(?=下?(?:发布|发表|发送|发)?(?:评论|留言|回复))", url, maxsplit=1)[0]
+        url = re.sub(r"[.,;:，。；：！!?）)>]+$", "", url)
+        return url or None
+
+    @staticmethod
+    def _extract_comment_text(task: str) -> str | None:
+        """从任务描述中提取评论文本。"""
+        import re
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip()
+            text = text.strip("'\"`“”‘’")
+            text = text.rstrip("，,；;。.!！?？ \n\r\t")
+            text = text.strip("'\"`“”‘’")
+            return text or None
+
+        comment_patterns = [
+            r"(?:评论内容|留言内容|回复内容|内容)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+            r"(?:发布|发表|发送|发)?(?:评论|留言|回复)\s*(?:是|为|:|：|=)?\s*['\"“‘](.+?)['\"”’]",
+            r"['\"“‘](.+?)['\"”’]\s*(?:的)?(?:评论|留言|回复)",
+            r"(?:评论|留言|回复|说|内容)\s*(?:是|为|:|：|=)?\s*['\"“”‘’]?(.+?)(?=(?:在|然后|并且|接着)|$)",
+            r"['\"“”‘’](.+?)['\"“”‘’]\s*(?:的评论|评论|留言)",
+            r"发布评论['\"“”‘’]?(.+?)(?:\s|$)",
+        ]
+
+        for pattern in comment_patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                comment = clean(match.group(1))
+                if comment and len(comment) >= 1:
+                    return comment
+        return None
+
+    @staticmethod
+    def _extract_zhihu_publish_content(task: str) -> str | None:
+        import re
+
+        def clean(value: str | None) -> str | None:
+            if not value:
+                return None
+            text = value.strip().strip("'\"`“”‘’")
+            text = re.sub(r"[，。,.!?！？]$", "", text)
+            return text or None
+
+        patterns = [
+            r"(?:在|到)?知乎(?:上)?(?:发布|发表|发文章|写文章|投稿)\s*[:：]?\s*(.+)$",
+            r"(?:发布|发表|发文章|写文章|投稿)\s*[:：]?\s*(.+)$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
+            if match:
+                content = clean(match.group(1))
+                if content:
+                    return content
+        return None
+
+    @staticmethod
+    def _extract_video_url(task: str) -> str | None:
+        """从任务描述中提取视频URL。"""
+        import re
+
+        # 直接匹配 bilibili 视频 URL，保留带点号的查询参数。
+        match = re.search(
+            r"(https?://(?:www\.)?bilibili\.com/video/[^\s<>\"'“”‘’]+)",
+            task,
+            re.IGNORECASE,
+        )
+        if match:
+            url = match.group(1)
+            return re.sub(r"[.,;:，。；：！!?）)>]+$", "", url)
+
+        # 回退：尝试匹配任何以 BV 开头的视频链接
+        match = re.search(r"(https?://[^\s]+/video/BV[A-Za-z0-9]+)", task, re.IGNORECASE)
+        if match:
+            url = match.group(1)
+            # 清理 URL 末尾的标点
+            url = re.sub(r"[.,;:，。；：！!?）)>]+$", "", url)
+            return url
+
+        return None
+
+    def _select_best_skill(self, skills: list[Any], task: str) -> Any:
+        """选择与任务最具体匹配的技能。
+
+        registry 会返回所有触发词命中的技能。这里避免“搜索/search”
+        这类宽泛触发词抢走“知乎搜索”“GitHub 搜索”等站点技能。
+        """
+        task_lower = task.lower()
+        gmail_send_markers = (
+            "gmail发送邮件",
+            "gmail发邮件",
+            "gmail寄邮件",
+            "发送邮件",
+            "发邮件",
+            "寄邮件",
+            "邮件发送",
+            "send email",
+            "compose email",
+        )
+        if any(marker in task_lower for marker in gmail_send_markers):
+            for skill in skills:
+                if getattr(skill, "id", "") == "domain/gmail_send":
+                    return skill
+        broad_triggers = {"搜索", "search", "查找", "find", "找"}
+
+        def score(skill: Any) -> tuple[int, int, int]:
+            triggers = getattr(skill, "triggers", []) or []
+            matched = [t for t in triggers if t.lower() in task_lower]
+            specific = [t for t in matched if t.lower() not in broad_triggers]
+            url_patterns = getattr(skill, "url_patterns", []) or []
+            return (len(specific), len(matched), len(url_patterns))
+
+        return max(skills, key=score)
+
+    def _skill_score(self, skill: Any, task: str) -> tuple[int, int, int]:
+        """计算技能评分（与 _select_best_skill 相同逻辑，供歧义检测复用）。"""
+        task_lower = task.lower()
+        broad_triggers = {"搜索", "search", "查找", "find", "找"}
+        triggers = getattr(skill, "triggers", []) or []
+        matched = [t for t in triggers if t.lower() in task_lower]
+        specific = [t for t in matched if t.lower() not in broad_triggers]
+        url_patterns = getattr(skill, "url_patterns", []) or []
+        return (len(specific), len(matched), len(url_patterns))
+
+    def _has_ambiguity(self, skills: list[Any], task: str) -> bool:
+        """检查多个候选技能是否评分打平（歧义）。
+
+        当第一名和第二名的专属词数相同时，视为歧义。
+        """
+        if len(skills) < 2:
+            return False
+        scored = sorted(skills, key=lambda s: self._skill_score(s, task), reverse=True)
+        top1 = self._skill_score(scored[0], task)
+        top2 = self._skill_score(scored[1], task)
+        # 专属词数相同 → 歧义
+        return top1[0] == top2[0]
+
+    def _resolve_skill_with_llm(self, task: str, skills: list[Any]) -> Any | None:
+        """用 LLM 仲裁技能歧义。
+
+        让 LLM 从候选技能中选择最匹配的一个，返回选中的技能或 None。
+        """
+        if not self._llm_parser:
+            return None
+
+        candidates = []
+        for s in skills:
+            name = getattr(s, "name", "")
+            sid = getattr(s, "id", "")
+            desc = getattr(s, "description", "")
+            candidates.append({"id": sid, "name": name, "description": desc})
+
+        # 构造仲裁 prompt（直接调 LLM，不走 intent_parser 的完整流程）
+        import json as _json
+
+        candidates_text = _json.dumps(candidates, ensure_ascii=False, indent=2)
+        prompt = (
+            f"用户指令: {task}\n\n"
+            f"候选技能列表:\n{candidates_text}\n\n"
+            '请选出最匹配用户指令的技能，返回 JSON: {"skill_id": "选中的技能id", "confidence": 0.9}\n'
+            "只返回 JSON，不要其他文字。"
+        )
+
+        try:
+            raw = self._llm_parser._call_llm(prompt)
+            # 提取 JSON
+            text = raw.strip()
+            if "```" in text:
+                start = text.find("{")
+                end = text.rfind("}") + 1
+                text = text[start:end] if start != -1 and end > 0 else text
+
+            data = _json.loads(text)
+            chosen_id = data.get("skill_id", "")
+            confidence = data.get("confidence", 0)
+
+            if confidence < 0.5:
+                logger.info("LLM 仲裁置信度过低 (%.2f)，使用规则结果", confidence)
+                return None
+
+            # 找到对应的技能
+            for s in skills:
+                if getattr(s, "id", "") == chosen_id:
+                    logger.info("LLM 仲裁选择: %s", chosen_id)
+                    return s
+
+            logger.warning("LLM 仲裁返回未知技能 ID: %s", chosen_id)
+        except Exception as exc:
+            logger.warning("LLM 仲裁失败: %s", exc)
+
+        return None
+
+    def _generate_script_via_llm(self, task: str) -> str | None:
+        """用 LLM 解析意图，再由 ScriptGenerator 生成脚本。
+
+        流程: LLM → TaskIntent → _intent_to_script()
+        """
+        if not self._llm_parser:
+            return None
+
+        intent = self._llm_parser.parse(task)
+        if not intent:
+            return None
+
+        # 用 ScriptGenerator 的模板拼装脚本
+        return self._script_generator._intent_to_script(intent)
 
     def _extract_site(self, url: str) -> str:
         """从 URL 中提取站点名称。"""
