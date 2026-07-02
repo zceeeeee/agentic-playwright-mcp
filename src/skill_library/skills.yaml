@@ -227,22 +227,31 @@ skills:
         type: email
         required: true
         description: "收件人邮箱"
+        extract_patterns:
+          - "(?:收件人|收件邮箱|收信人|发送给|发给|寄给|to|recipient)[^A-Z0-9@]{0,16}([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})"
       subject:
-        type: string
+        type: title
         required: true
         description: "邮件标题或主题"
+        extract_patterns:
+          - "(?:邮件标题|信件标题|标题|主题|subject|title)\\s*(?:是|为|:|：|=)?\\s*['\"“‘](.+?)['\"”’]"
+          - "(?:邮件标题|信件标题|标题|主题|subject|title)\\s*(?:是|为|:|：|=)?\\s*(.+?)(?=\\s*(?:邮件正文|正文内容|正文|邮件内容|内容|body|content)\\s*(?:是|为|:|：|=)?|$)"
       body:
-        type: string
+        type: body
         required: true
         description: "邮件正文"
       sender_email:
         type: email
         required: false
         description: "发件 Gmail 邮箱，用于未登录时自动登录"
+        extract_patterns:
+          - "(?:发件邮箱|发件人|发信邮箱|发送邮箱|账号邮箱|邮箱账号|sender|from)[^A-Z0-9@]{0,16}([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})"
       password:
         type: string
         required: false
         description: "发件 Gmail 密码，用于未登录时自动登录"
+        extract_patterns:
+          - "(?:密码|口令|password|pass)[^A-Za-z0-9@]{0,16}([^\\s,，;；。)）]+)"
     confirm_before_run: true
 
   - id: "domain/outlook_inbox"
@@ -296,7 +305,7 @@ skills:
   - id: "domain/bilibili_login"
     name: "Bilibili 短信登录"
     type: "domain"
-    triggers: ["bilibili 登录"]
+    triggers: ["bilibili 登录", "bilibili", "B站", "b站", "哔哩哔哩", "登录", "手机号", "短信登录"]
     url_patterns: ["bilibili.com", "*.bilibili.com"]
     description: "打开 Bilibili 登录弹窗，切换短信登录，填写手机号并发送验证码，真人认证和验证码由用户手动完成"
     version: "1.0.0"
@@ -305,7 +314,7 @@ skills:
       - "bilibili 短信登录"
       - "帮我登录 B 站"
     params:
-      phone:
+      phone_number:
         type: phone
         required: true
         description: "手机号码"
@@ -321,18 +330,18 @@ skills:
       - "在 B 站投稿一篇文章"
       - "bilibili 发布文章"
     params:
-      phone:
+      phone_number:
         type: phone
         required: true
         description: "手机号码"
       title:
-        type: string
+        type: title
         required: true
         description: "文章标题"
         extract_patterns:
           - "(?:标题|题目|title)\\s*(?:是|为|:|：)?\\s*['\"\"'']?(.*?)(?=(?:正文|内容|文章内容|body|content)\\s*(?:是|为|:|：)|$)"
       body:
-        type: string
+        type: body
         required: true
         description: "文章正文"
         extract_patterns:
@@ -350,12 +359,12 @@ skills:
       - "在 B 站视频下面留言"
       - "bilibili 视频评论"
     params:
-      phone:
+      phone_number:
         type: phone
         required: true
         description: "手机号码"
-      comment:
-        type: quoted
+      comment_text:
+        type: comment_text
         required: true
         description: "评论内容"
         extract_patterns:
@@ -373,7 +382,7 @@ skills:
   - id: "domain/douyin_login"
     name: "抖音验证码登录"
     type: "domain"
-    triggers: ["抖音", "douyin", "douyin.com", "登录", "login", "验证码"]
+    triggers: ["抖音", "douyin", "douyin.com", "登录", "login", "手机号", "短信登录", "验证码"]
     url_patterns: ["douyin.com", "*.douyin.com"]
     description: "填写抖音手机号并获取短信验证码，验证码由用户手动输入"
     version: "1.0.0"
@@ -381,7 +390,7 @@ skills:
       - "登录抖音"
       - "帮我登录抖音账号"
     params:
-      phone:
+      phone_number:
         type: phone
         required: true
         description: "手机号码"
@@ -389,7 +398,7 @@ skills:
   - id: "domain/xiaohongshu_login"
     name: "小红书验证码登录"
     type: "domain"
-    triggers: ["小红书 登录"]
+    triggers: ["小红书 登录", "小红书", "xiaohongshu", "xhs", "rednote", "登录", "手机号", "短信登录"]
     url_patterns: ["xiaohongshu.com", "*.xiaohongshu.com"]
     description: "填写小红书手机号、勾选协议并获取短信验证码，验证码由用户手动输入"
     version: "1.0.0"
@@ -397,7 +406,7 @@ skills:
       - "登录小红书"
       - "帮我登录小红书账号"
     params:
-      phone:
+      phone_number:
         type: phone
         required: true
         description: "手机号码"
@@ -457,18 +466,38 @@ skills:
       - "小红书发布短文，内容是“今天的穿搭灵感”，样式是弥散，定时发布 2026-07-01 11:17"
     params:
       keyword:
-        type: quoted
+        type: content
         required: true
         description: "图文内容 / 笔记文案"
         extract_patterns:
           - "(?:图文内容|笔记内容|发布内容|内容|正文|文案|caption|content)\\s*(?:是|为|:|：)?\\s*['\"\"'']?(.+?)(?=\\s*(?:电话号码|电话|手机号|phone)\\s*(?:是|为|:|：)|$)"
           - "(?:发布|发表|生成).{0,12}(?:图文|笔记).{0,16}['\"\"'']?(.+?)['\"\"'']"
-      phone:
+      phone_number:
         type: phone
         required: false
         description: "手机号码（登录用，可选）"
+      title:
+        type: title
+        required: false
+        description: "标题，文章/图片/视频发布时使用"
+      body:
+        type: body
+        required: false
+        description: "正文，文章/图片/视频发布时使用"
+      image_path:
+        type: image_path
+        required: false
+        description: "本地图片路径"
+      video_path:
+        type: video_path
+        required: false
+        description: "本地视频路径"
+      mode:
+        type: publish_mode
+        required: false
+        description: "发布模式: text_to_image/image_upload/video/article"
       cover_style:
-        type: quoted
+        type: style
         required: false
         description: "文字配图卡片样式，未指定或无效时默认基础"
       enable_schedule:
@@ -476,7 +505,7 @@ skills:
         required: false
         description: "用户提到定时发布时启用"
       schedule_time:
-        type: quoted
+        type: datetime
         required: false
         description: "定时发布时间，例如 2026-07-01 11:17"
     confirm_before_run: true
@@ -502,7 +531,7 @@ skills:
       - "在小红书 https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b 下发布评论，内容是“dwfebfer”"
     params:
       comment_text:
-        type: quoted
+        type: comment_text
         required: true
         description: "评论内容"
       note_url:
@@ -606,7 +635,7 @@ skills:
       - "知乎发文章 内容是 如何学习编程"
     params:
       keyword:
-        type: quoted
+        type: content
         required: true
         description: "文章内容"
         extract_patterns:
