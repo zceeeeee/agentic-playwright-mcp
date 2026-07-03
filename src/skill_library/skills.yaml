@@ -1,4 +1,4 @@
-# skills.yaml -- 技能索引配置
+﻿# skills.yaml -- 技能索引配置
 #
 # 本文件是 skill_library 的唯一数据源，由 SkillRegistry.load_from_yaml() 和
 # SkillRouter 加载。

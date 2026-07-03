@@ -280,7 +280,7 @@ def _click_compose_fullscreen(run_js_fn):
     return {success: true, skipped: true, already_fullscreen: true};
   }
   const candidates = Array.from(document.querySelectorAll(
-    'img[role="button"],div[role="button"],button,[aria-label],[data-tooltip],[alt],.Hq.aUG'
+    'img.Hq.aUG[role="button"],img.Hq.aUG[aria-label*="Full screen" i],img.Hq.aUG[data-tooltip*="Full screen" i],img[role="button"][aria-label*="Full screen" i],img[role="button"][data-tooltip*="Full screen" i],img[role="button"][alt*="Pop-out" i],img[role="button"],div[role="button"],button,[aria-label],[data-tooltip],[alt],.Hq.aUG'
   )).filter(visible).map((el) => {
     const text = textOf(el);
     const rect = el.getBoundingClientRect();
@@ -292,7 +292,7 @@ def _click_compose_fullscreen(run_js_fn):
     return {el, text, score};
   }).filter((item) => /Full screen|Pop-out/i.test(item.text) && !/Minimize|Close|Save & close/i.test(item.text));
   if (!candidates.length) {
-    return {success: true, skipped: true, error: 'Gmail compose full screen button not found'};
+    return {success: false, error: 'Gmail compose full screen button not found'};
   }
   candidates.sort((a, b) => a.score - b.score);
   const target = candidates[0].el.closest('[role="button"],button') || candidates[0].el;
@@ -666,8 +666,139 @@ def _fill_subject(run_js_fn, subject):
     )
 
 
-def _fill_body(run_js_fn, body):
-    return _run_js_dict(
+def _fill_body(run_js_fn, body, type_text_fn=None):
+    native_typing = type_text_fn is not None
+    focus_result = _run_js_dict(
+        run_js_fn,
+        """
+(() => {
+  const value = BODY_VALUE;
+  const useNativeTyping = NATIVE_TYPING;
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    if (!style || style.visibility === 'hidden' || style.display === 'none') return false;
+    if (el.getAttribute('aria-hidden') === 'true') return false;
+    return Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+  const candidates = Array.from(document.querySelectorAll(
+    'div[aria-label="Message Body"][contenteditable="true"],div[aria-label*="Message Body" i][contenteditable="true"],div.Am.aiL.Al.editable[contenteditable="true"],div.Am.Al.editable[contenteditable="true"],div[g_editable="true"][role="textbox"],div[aria-label*="邮件正文"][contenteditable="true"],div[role="textbox"][contenteditable="true"],[g_editable="true"],textarea[aria-label*="Message" i],textarea[aria-label*="邮件正文"]'
+  )).filter(visible).map((el) => {
+    const label = [
+      el.getAttribute('aria-label') || '',
+      el.getAttribute('role') || '',
+      String(el.className || ''),
+      el.getAttribute('g_editable') || '',
+      el.getAttribute('contenteditable') || '',
+      el.tagName || ''
+    ].join(' ');
+    const rect = el.getBoundingClientRect();
+    let score = rect.top + rect.left / 10;
+    if (/Message Body|邮件正文/i.test(label)) score -= 1000;
+    if (/textbox/i.test(label)) score -= 500;
+    if (/editable|g_editable/i.test(label)) score -= 250;
+    if (/\\bAm\\b/.test(label) && /\\bAl\\b/.test(label) && /editable/.test(label)) score -= 500;
+    if (/Search mail|Subject|主题|recipient|收件/i.test(label)) score += 5000;
+    return {el, score};
+  });
+  if (!candidates.length) {
+    return {success: false, error: 'Gmail body editor not found'};
+  }
+  candidates.sort((a, b) => a.score - b.score);
+  const target = candidates[0].el;
+  const readText = () => (target.value || target.innerText || target.textContent || '').trim();
+  target.scrollIntoView({block: 'center', inline: 'center'});
+  target.focus();
+  target.click();
+  if (target.tagName.toLowerCase() === 'textarea') {
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+    if (descriptor && descriptor.set) {
+      descriptor.set.call(target, value);
+    } else {
+      target.value = value;
+    }
+    try {
+      target.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true, inputType: 'insertText', data: value}));
+    } catch (err) {
+      target.dispatchEvent(new Event('input', {bubbles: true}));
+    }
+    target.dispatchEvent(new Event('change', {bubbles: true}));
+    return {success: (target.value || '') === value, text: target.value || '', mode: 'textarea'};
+  }
+
+  const selection = window.getSelection && window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  if (selection) {
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  target.innerHTML = '';
+  target.dispatchEvent(new Event('input', {bubbles: true}));
+
+  if (useNativeTyping) {
+    return {
+      success: true,
+      focused: document.activeElement === target || target.contains(document.activeElement),
+      text: readText(),
+      mode: 'native_focus',
+      target_id: target.id || '',
+      target_label: target.getAttribute('aria-label') || '',
+      target_class: String(target.className || '')
+    };
+  }
+
+  try {
+    target.dispatchEvent(new InputEvent('beforeinput', {bubbles: true, cancelable: true, inputType: 'insertText', data: value}));
+  } catch (err) {}
+
+  let inserted = false;
+  try {
+    inserted = document.execCommand && document.execCommand('insertText', false, value);
+  } catch (err) {
+    inserted = false;
+  }
+
+  if (!inserted || readText() !== value.trim()) {
+    target.innerHTML = '';
+    const lines = value.split(/\\r?\\n/);
+    lines.forEach((line, index) => {
+      if (index > 0) target.appendChild(document.createElement('br'));
+      target.appendChild(document.createTextNode(line));
+    });
+  } else {
+    target.normalize();
+  }
+
+  try {
+    target.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true, inputType: 'insertText', data: value}));
+  } catch (err) {
+    target.dispatchEvent(new Event('input', {bubbles: true}));
+  }
+  target.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, cancelable: true, key: value.slice(-1) || 'Unidentified'}));
+  target.dispatchEvent(new Event('change', {bubbles: true}));
+  return {
+    success: readText() === value.trim(),
+    text: readText(),
+    mode: inserted ? 'execCommand' : 'text_nodes',
+    target_id: target.id || '',
+    target_label: target.getAttribute('aria-label') || '',
+    target_class: String(target.className || '')
+  };
+})()
+""".replace("BODY_VALUE", _js_string(body)).replace(
+            "NATIVE_TYPING", "true" if native_typing else "false"
+        ),
+    )
+
+    if not native_typing or not focus_result.get("success"):
+        return focus_result
+
+    type_result = _safe_call(
+        type_text_fn,
+        {"success": False, "error": "type_text failed"},
+        str(body),
+    )
+    verify_result = _run_js_dict(
         run_js_fn,
         """
 (() => {
@@ -679,62 +810,26 @@ def _fill_body(run_js_fn, body):
     return Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   };
   const candidates = Array.from(document.querySelectorAll(
-    'div[aria-label*="Message Body" i],div[aria-label*="邮件正文"],div[role="textbox"][contenteditable="true"],.Am.Al.editable,[g_editable="true"],[contenteditable="true"],textarea[aria-label*="Message" i],textarea[aria-label*="邮件正文"]'
-  )).filter(visible).map((el) => {
-    const label = [
-      el.getAttribute('aria-label') || '',
-      el.getAttribute('role') || '',
-      String(el.className || ''),
-      el.getAttribute('g_editable') || '',
-      el.tagName || ''
-    ].join(' ');
-    let score = 0;
-    if (/Message Body|邮件正文/i.test(label)) score -= 1000;
-    if (/textbox/i.test(label)) score -= 500;
-    if (/editable|g_editable/i.test(label)) score -= 250;
-    return {el, score};
-  });
-  if (!candidates.length) {
-    return {success: false, error: 'Gmail body editor not found'};
-  }
-  candidates.sort((a, b) => a.score - b.score);
-  const target = candidates[0].el;
-  target.scrollIntoView({block: 'center', inline: 'center'});
-  target.focus();
-  target.click();
-  if (target.tagName.toLowerCase() === 'textarea') {
-    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-    if (descriptor && descriptor.set) {
-      descriptor.set.call(target, value);
-    } else {
-      target.value = value;
-    }
-  } else {
-    target.innerHTML = '';
-    target.textContent = '';
-    let inserted = false;
-    try {
-      inserted = document.execCommand && document.execCommand('insertText', false, value);
-    } catch (err) {
-      inserted = false;
-    }
-    if (!inserted || !((target.innerText || target.textContent || '').trim())) {
-      target.textContent = value;
-    }
-  }
-  try {
-    target.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true, inputType: 'insertText', data: value}));
-  } catch (err) {
-    target.dispatchEvent(new Event('input', {bubbles: true}));
-  }
-  target.dispatchEvent(new Event('change', {bubbles: true}));
+    'div[aria-label="Message Body"][contenteditable="true"],div[aria-label*="Message Body" i][contenteditable="true"],div.Am.aiL.Al.editable[contenteditable="true"],div.Am.Al.editable[contenteditable="true"],div[g_editable="true"][role="textbox"],div[aria-label*="邮件正文"][contenteditable="true"],div[role="textbox"][contenteditable="true"],[g_editable="true"],textarea[aria-label*="Message" i],textarea[aria-label*="邮件正文"]'
+  )).filter(visible);
+  const texts = candidates.map((el) => (el.value || el.innerText || el.textContent || '').trim());
   return {
-    success: ((target.value || target.innerText || target.textContent || '').trim() === value.trim()),
-    text: (target.value || target.innerText || target.textContent || '').trim()
+    success: texts.some((text) => text === value.trim()),
+    texts,
+    focus_result: FOCUS_RESULT,
+    type_result: TYPE_RESULT
   };
 })()
-""".replace("BODY_VALUE", _js_string(body)),
+""".replace("BODY_VALUE", _js_string(body))
+        .replace("FOCUS_RESULT", _js_string(focus_result))
+        .replace("TYPE_RESULT", _js_string(type_result)),
     )
+    if verify_result.get("success"):
+        return verify_result
+
+    fallback_result = _fill_body(run_js_fn, body)
+    fallback_result["native_verify"] = verify_result
+    return fallback_result
 
 
 def _click_send(run_js_fn):
@@ -1217,7 +1312,7 @@ def run(
 
         body_result = _retry(
             "fill_body",
-            lambda: _fill_body(run_js_fn, mail_body),
+            lambda: _fill_body(run_js_fn, mail_body, type_text_fn=type_text_fn),
             steps,
             wait_fn,
             attempts=5,

@@ -13,6 +13,7 @@ from src.core.agent_loop import (
     AgentTaskResult,
     run_task,
 )
+from src.core.dom_explorer import DomPageSummary, InteractiveElement
 from src.core.skill_router import SkillRouter
 from src.skill_library.registry import SkillRegistry
 
@@ -366,7 +367,7 @@ class TestGitHubLoginScript:
         assert 'title="测试发布功能"' in script
         assert 'run("测试发布功能"' in script
 
-    def test_router_routes_xiaohongshu_article_to_publish_fallback(self):
+    def test_router_routes_xiaohongshu_article_to_publish_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -375,9 +376,11 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_publish"
-        assert decision.script == ""
+        assert 'keyword="测试发布功能"' in decision.script
+        assert 'title="测试发布功能"' in decision.script
+        assert 'mode="article"' in decision.script
 
-    def test_router_routes_xiaohongshu_video_upload_to_publish_fallback(self):
+    def test_router_routes_xiaohongshu_video_upload_to_publish_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -386,7 +389,10 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_publish"
-        assert decision.script == ""
+        assert 'mode="video"' in decision.script
+        assert 'video_path="D:\\\\xxx\\\\clip.mp4"' in decision.script
+        assert 'title="视频标题"' in decision.script
+        assert 'body="视频正文"' in decision.script
 
     def test_router_keeps_xiaohongshu_search_on_search_intent(self):
         router = SkillRouter(library_dir="src/skill_library")
@@ -396,14 +402,54 @@ class TestGitHubLoginScript:
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_search"
 
-    def test_router_defaults_generic_publish_content_to_xiaohongshu_publish(self):
+    def test_router_routes_zhihu_search_without_space_to_zhihu_script(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("知乎搜索人工智能")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/zhihu_search"
+        assert 'run(keyword="人工智能")' in decision.script
+        assert "baidu_search" not in decision.script
+
+    def test_router_routes_zhihu_search_with_prefix_to_zhihu_script(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("在知乎搜索 Python 入门")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/zhihu_search"
+        assert 'run(keyword="Python 入门")' in decision.script
+
+    def test_router_routes_postfix_zhihu_search_even_when_keyword_mentions_xiaohongshu(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("帮我搜索在小红书上有哪些典型的人群，在知乎上。")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/zhihu_search"
+        assert 'run(keyword="在小红书上有哪些典型的人群")' in decision.script
+        assert "search_flow" not in decision.script
+
+    def test_router_routes_postfix_xiaohongshu_search_even_when_keyword_mentions_zhihu(self):
+        router = SkillRouter(library_dir="src/skill_library")
+
+        decision = router.route("帮我搜索怎么看知乎，在小红书上。")
+
+        assert decision.skill is not None
+        assert decision.skill.id == "domain/xiaohongshu_search"
+        assert 'run(keyword="怎么看知乎")' in decision.script
+        assert "search_flow" not in decision.script
+
+    def test_router_defaults_generic_publish_content_to_xiaohongshu_publish_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route("发布内容“测试内容”")
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_publish"
-        assert decision.script == ""
+        assert 'keyword="测试内容"' in decision.script
+        assert 'mode="text_to_image"' in decision.script
 
     def test_registry_fallback_builds_xiaohongshu_article_publish_script(self):
         task = "小红书发布文章，标题是“测试发布功能”，内容“测试发布功能”。"
@@ -442,7 +488,7 @@ class TestGitHubLoginScript:
         assert 'title="视频标题"' in script
         assert 'run("视频正文"' in script
 
-    def test_router_routes_gmail_send_to_send_fallback(self):
+    def test_router_routes_gmail_send_to_send_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -451,9 +497,11 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/gmail_send"
-        assert decision.script == ""
+        assert 'recipient="alice@example.com"' in decision.script
+        assert 'subject="测试标题"' in decision.script
+        assert 'body="测试正文"' in decision.script
 
-    def test_router_routes_gmail_send_with_sender_login_to_send_fallback(self):
+    def test_router_routes_gmail_send_with_sender_login_to_send_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -462,7 +510,11 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/gmail_send"
-        assert decision.script == ""
+        assert 'recipient="12412639@mail.sustech.edu.cn"' in decision.script
+        assert 'subject="测试邮件"' in decision.script
+        assert 'body="测试邮件内容"' in decision.script
+        assert 'sender_email="12412639@mail.sustech.edu.cn"' in decision.script
+        assert 'password="8105432a"' in decision.script
 
     def test_registry_fallback_builds_gmail_send_script(self):
         task = "Gmail发送邮件，收件人是alice@example.com，标题是测试标题，正文是测试正文"
@@ -543,7 +595,7 @@ class TestGitHubLoginScript:
         assert "enable_schedule=True" in script
         assert 'schedule_time="2026-07-01 11:17"' in script
 
-    def test_router_routes_xiaohongshu_comment_to_comment_fallback(self):
+    def test_router_routes_xiaohongshu_comment_to_comment_script(self):
         router = SkillRouter(library_dir="src/skill_library")
 
         decision = router.route(
@@ -552,7 +604,8 @@ class TestGitHubLoginScript:
 
         assert decision.skill is not None
         assert decision.skill.id == "domain/xiaohongshu_comment"
-        assert decision.script == ""
+        assert 'comment_text="dwfebfer"' in decision.script
+        assert 'note_url="https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b"' in decision.script
 
     def test_build_xiaohongshu_comment_script_passes_url_and_text(self):
         agent = AgentLoop(max_steps=3)
@@ -943,6 +996,26 @@ class TestAgentLoop:
 
         assert result.success is True
 
+    def test_observe_uses_dom_explorer(self, mock_browser):
+        """Should observe with a DOM summary before any vision fallback."""
+        summary = DomPageSummary(
+            url="https://example.com",
+            title="Example",
+            elements=[InteractiveElement(tag="button", text="登录", selector="#login")],
+            counts={"button": 1},
+            has_modal=True,
+        )
+
+        with patch("src.core.agent_loop.summarize_page", return_value=summary):
+            agent = AgentLoop(max_steps=3)
+            step = AgentStep(step_number=1, state=AgentState.OBSERVE)
+            state = agent._do_observe(step)
+
+        assert state == AgentState.PLAN
+        assert "可交互元素: 1" in step.page_summary
+        assert "Modal" in step.page_summary
+        assert "可交互元素 1 个" in step.result
+
 
 # ---------------------------------------------------------------------------
 # Vision fallback
@@ -967,7 +1040,9 @@ class TestVisionFallback:
             result = agent.run("点击搜索按钮")
 
         # Should have tried vision fallback
-        assert any("视觉" in s.result for s in result.steps)
+        assert result.success is True
+        mock_vision.analyze_page.assert_called_once()
+        assert any("视觉 fallback 执行成功" in s.result for s in result.steps)
 
     def test_no_vision_module(self, mock_browser, mock_registry):
         """Should handle missing vision module gracefully."""
@@ -984,10 +1059,48 @@ class TestVisionFallback:
                 mock_get.return_value = engine
 
                 agent = AgentLoop(max_steps=3)
-                result = agent.run("测试")
+                result = agent.run("点击搜索按钮")
 
         # Should fail but not crash
         assert result.success is False
+        assert any("VisionModule 未配置" in s.result for s in result.steps)
+
+    def test_heal_with_vision_coordinate_fallback(self, mock_browser, mock_registry):
+        """Should click coordinates when vision returns no selector."""
+        from src.core.script_engine import ScriptResult
+        from src.core.vision import ElementInfo, PageAnalysis
+
+        with patch("src.core.agent_loop.get_vision_module") as mock_get_vision:
+            vision = MagicMock()
+            vision.analyze_page.return_value = PageAnalysis(
+                summary="测试页面",
+                elements=[
+                    ElementInfo(
+                        description="搜索按钮",
+                        x=100,
+                        y=200,
+                        width=80,
+                        height=30,
+                        confidence=0.9,
+                    )
+                ],
+            )
+            mock_get_vision.return_value = vision
+
+            with patch("src.core.agent_loop.get_script_engine") as mock_get_engine:
+                engine = MagicMock()
+                engine.execute.return_value = ScriptResult(
+                    success=False, error="选择器不可用"
+                )
+                mock_get_engine.return_value = engine
+
+                agent = AgentLoop(max_steps=5)
+                result = agent.run("点击搜索按钮")
+
+        _, page = mock_browser
+        assert result.success is True
+        page.mouse.click.assert_called_once_with(140, 215)
+        assert any("视觉 fallback 坐标点击成功" in s.result for s in result.steps)
 
 
 # ---------------------------------------------------------------------------

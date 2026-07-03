@@ -5,14 +5,14 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 直到任务完成或达到最大步数。
 
 每一步：
-1. OBSERVE: 截图 + 分析当前页面状态
+1. OBSERVE: DOM Explorer 摘要当前页面状态
 2. PLAN:   决定下一步行动（查技能库 or 生成脚本）
 3. ACT:    执行脚本，观察结果
 
 失败恢复：
 - 脚本执行失败 → 自愈机制（选择器降级）
-- 选择器全部失败 → 视觉 fallback（用坐标点击）
-- 视觉 fallback 失败 → 记录经验，尝试其他方案
+- 选择器全部失败 → 启用视觉 fallback，通过截图分析定位可点击元素
+- 视觉 fallback 不可用 → 记录经验，尝试其他方案
 
 集成:
 - 结构化日志: 通过 src.logging 的 get_logger / bind_context / log_timing
@@ -27,6 +27,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from src.core.browser_manager import get_browser_manager
+from src.core.dom_explorer import summarize_page
 from src.core.event_bus import (
     EVENT_AGENT_ACT,
     EVENT_AGENT_HEAL,
@@ -91,7 +92,7 @@ class _LLMCallerAdapter:
 class AgentState(str, Enum):
     """Agent 循环状态。"""
 
-    OBSERVE = "observe"  # 截图 + 分析页面
+    OBSERVE = "observe"  # DOM 摘要 + 分析页面
     PLAN = "plan"  # 决定下一步
     ACT = "act"  # 执行脚本
     DONE = "done"  # 任务完成
@@ -162,7 +163,7 @@ class AgentLoop:
         self._bus = event_bus if event_bus is not None else get_event_bus()
 
         # 延迟初始化的模块
-        # self._vision: VisionModule | None = None  # 暂时禁用
+        self._vision: VisionModule | None = None
         self._registry: SkillRegistry | None = None
         self._skill_router: SkillRouter | None = None
         self._script_engine = None
@@ -357,11 +358,15 @@ class AgentLoop:
 
     def _init_modules(self) -> None:
         """延迟初始化各模块。"""
-        # if self._vision is None:  # 暂时禁用 VisionModule
-        #     try:
-        #         self._vision = get_vision_module()
-        #     except (ValueError, ImportError):
-        #         self._vision = None  # 视觉模块不可用时降级
+        if self._vision is None:
+            try:
+                self._vision = get_vision_module()
+            except (ValueError, ImportError) as exc:
+                self._vision = None
+                logger.warning(
+                    "VisionModule unavailable, vision fallback disabled: %s",
+                    exc,
+                )
 
         if self._registry is None:
             self._registry = get_skill_registry(library_dir=self._library_dir)
@@ -435,7 +440,7 @@ class AgentLoop:
         )
 
     # -------------------------------------------------------------------
-    # OBSERVE: 截图 + 分析页面
+    # OBSERVE: DOM Explorer + 基础页面信息
     # -------------------------------------------------------------------
 
     def _do_observe(self, step: AgentStep) -> AgentState:
@@ -456,36 +461,45 @@ class AgentLoop:
 
         page = get_browser_manager().get_page()
 
-        # 尝试视觉分析（暂时禁用 VisionModule）
-        # if self._vision:
-        #     try:
-        #         with log_timing("agent_observe_vision") as meta:
-        #             analysis = self._vision.analyze_page(
-        #                 question="当前页面是什么？有哪些可操作的元素？"
-        #             )
-        #             meta["summary_length"] = len(analysis.summary)
-        #         step.page_summary = analysis.summary
-        #         step.result = f"页面: {analysis.summary[:100]}"
-        #         logger.info(
-        #             "OBSERVE: vision analysis succeeded (%d chars)",
-        #             len(analysis.summary),
-        #         )
-        #         self._bus.emit(
-        #             Event(
-        #                 name=EVENT_AGENT_OBSERVE,
-        #                 phase=Phase.AFTER,
-        #                 data={"step_number": step.step_number, "method": "vision"},
-        #                 result=analysis.summary,
-        #             )
-        #         )
-        #         return AgentState.PLAN
-        #     except Exception as exc:
-        #         logger.debug(
-        #             "OBSERVE: vision analysis failed (%s), falling back",
-        #             exc,
-        #         )
+        try:
+            with log_timing("agent_observe_dom") as meta:
+                dom_summary = summarize_page(page)
+                meta["interactive_count"] = dom_summary.interactive_count
+                meta["has_modal"] = dom_summary.has_modal
+                meta["has_canvas"] = dom_summary.canvas_count > 0
 
-        # 降级：用基础信息
+            step.page_summary = dom_summary.to_text()
+            step.result = (
+                f"页面: {dom_summary.title or dom_summary.url} "
+                f"(可交互元素 {dom_summary.interactive_count} 个)"
+            )
+            logger.info(
+                "OBSERVE: DOM summary collected (%d interactive elements)",
+                dom_summary.interactive_count,
+            )
+            self._bus.emit(
+                Event(
+                    name=EVENT_AGENT_OBSERVE,
+                    phase=Phase.AFTER,
+                    data={
+                        "step_number": step.step_number,
+                        "method": "dom_explorer",
+                        "url": dom_summary.url,
+                        "title": dom_summary.title,
+                        "interactive_count": dom_summary.interactive_count,
+                        "has_modal": dom_summary.has_modal,
+                        "has_drawer": dom_summary.has_drawer,
+                        "has_dropdown": dom_summary.has_dropdown,
+                        "canvas_count": dom_summary.canvas_count,
+                        "svg_count": dom_summary.svg_count,
+                    },
+                    result=step.page_summary,
+                )
+            )
+            return AgentState.PLAN
+        except Exception as exc:
+            logger.debug("OBSERVE: DOM explorer failed (%s), falling back", exc)
+
         url = page.url
         title = page.title()
         step.page_summary = f"{title} ({url})"
@@ -1394,9 +1408,11 @@ class AgentLoop:
 
     def _try_heal(self, step: AgentStep) -> AgentState:
         """尝试自愈：用视觉 fallback 重试。"""
-        # if not self._vision:  # 暂时禁用 VisionModule
-        #     logger.warning("HEAL: no vision module available for fallback")
-        #     return AgentState.FAILED
+        if not self._vision:
+            step.result = "视觉 fallback 不可用（VisionModule 未配置）"
+            logger.warning("HEAL: no vision module available for fallback")
+            self._emit_heal_after(step, healed=False, result=step.result)
+            return AgentState.FAILED
 
         logger.info(
             "HEAL: attempting vision fallback for step %d",
@@ -1419,52 +1435,83 @@ class AgentLoop:
             return AgentState.FAILED
 
         try:
-            # 暂时禁用 VisionModule — 视觉 fallback 不可用
-            # with log_timing("agent_heal_vision") as meta:
-            #     analysis = self._vision.analyze_page(
-            #         question="找到页面上可以点击的按钮或链接"
-            #     )
-            #     meta["elements_found"] = len(analysis.elements)
-            #
-            # if analysis.elements:
-            #     elem = analysis.elements[0]
-            #     if elem.suggested_selector:
-            #         step.script = f'click("{elem.suggested_selector}")\nwait_for_navigation()'
-            #         step.action = f"视觉 fallback: 点击 {elem.description}"
-            #         ...
-            #         return AgentState.DONE
-
-            step.result = "视觉 fallback 暂不可用（VisionModule 已禁用）"
-            logger.warning("HEAL: vision fallback disabled")
-            self._bus.emit(
-                Event(
-                    name=EVENT_AGENT_HEAL,
-                    phase=Phase.AFTER,
-                    data={
-                        "step_number": step.step_number,
-                        "method": "vision_fallback",
-                        "healed": False,
-                    },
-                    result=step.result,
+            with log_timing("agent_heal_vision") as meta:
+                analysis = self._vision.analyze_page(
+                    question="找到页面上可以点击的按钮或链接"
                 )
+                meta["elements_found"] = len(analysis.elements)
+
+            elements = sorted(
+                analysis.elements,
+                key=lambda item: item.confidence,
+                reverse=True,
             )
+
+            for elem in elements:
+                description = elem.description or "可点击元素"
+                if elem.suggested_selector:
+                    selector = elem.suggested_selector
+                    heal_script = f"click({json.dumps(selector, ensure_ascii=False)})\nwait(1)"
+                    assert self._script_engine is not None
+                    heal_result = self._script_engine.execute(heal_script)
+                    if heal_result.success:
+                        step.success = True
+                        step.error = ""
+                        step.script = heal_script
+                        step.action = f"视觉 fallback: 点击 {description}"
+                        step.result = f"视觉 fallback 执行成功: {description}"
+                        self._emit_heal_after(step, healed=True, result=step.result)
+                        return AgentState.DONE
+
+                    step.error = heal_result.error
+                    step.result = (
+                        f"视觉 fallback selector 执行失败: {heal_result.error}"
+                    )
+
+                if elem.confidence > 0 and elem.width >= 0 and elem.height >= 0:
+                    page = get_browser_manager().get_page()
+                    click_x = elem.x + max(elem.width, 0) // 2
+                    click_y = elem.y + max(elem.height, 0) // 2
+                    page.mouse.click(click_x, click_y)
+                    step.success = True
+                    step.error = ""
+                    step.script = ""
+                    step.action = f"视觉 fallback: 坐标点击 {description}"
+                    step.result = f"视觉 fallback 坐标点击成功: {description}"
+                    self._emit_heal_after(step, healed=True, result=step.result)
+                    return AgentState.DONE
+
+            step.result = "视觉 fallback 未找到可用元素"
+            self._emit_heal_after(step, healed=False, result=step.result)
             return AgentState.FAILED
 
         except Exception as exc:
             logger.error("HEAL: vision fallback raised: %s", exc, exc_info=True)
-            self._bus.emit(
-                Event(
-                    name=EVENT_AGENT_HEAL,
-                    phase=Phase.AFTER,
-                    data={
-                        "step_number": step.step_number,
-                        "method": "vision_fallback",
-                        "healed": False,
-                    },
-                    error=exc,
-                )
-            )
+            self._emit_heal_after(step, healed=False, error=exc)
             return AgentState.FAILED
+
+    def _emit_heal_after(
+        self,
+        step: AgentStep,
+        *,
+        healed: bool,
+        result: str | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        """发射自愈阶段的 after 事件。"""
+        self._bus.emit(
+            Event(
+                name=EVENT_AGENT_HEAL,
+                phase=Phase.AFTER,
+                data={
+                    "step_number": step.step_number,
+                    "method": "vision_fallback",
+                    "healed": healed,
+                },
+                result=result,
+                error=error,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

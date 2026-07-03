@@ -99,46 +99,6 @@
       "file": "send/xiaohongshu_publish.py",
       "function": "run",
       "description": "小红书发布功能，支持三种模式：上传图文（文字配图/上传图片）、上传视频、写长文。自动检测用户提供的参数选择合适的模式。"
-    },
-    {
-      "id": "login_flow",
-      "name": "通用登录",
-      "type": "interaction",
-      "triggers": ["登录", "login", "sign in", "signin"],
-      "url_patterns": [],
-      "file": "others/login_flow.py",
-      "function": "run",
-      "description": "通用登录流程：填写用户名密码并提交"
-    },
-    {
-      "id": "search_flow",
-      "name": "通用搜索",
-      "type": "interaction",
-      "triggers": ["搜索", "search", "查找", "find"],
-      "url_patterns": [],
-      "file": "search/search_flow.py",
-      "function": "run",
-      "description": "通用搜索流程：输入关键词并点击搜索"
-    },
-    {
-      "id": "form_fill",
-      "name": "通用表单填写",
-      "type": "interaction",
-      "triggers": ["表单", "form", "填写", "fill", "注册", "register"],
-      "url_patterns": [],
-      "file": "others/form_fill.py",
-      "function": "run",
-      "description": "通用表单填写：批量填写多个表单字段"
-    },
-    {
-      "id": "pagination",
-      "name": "通用分页翻页",
-      "type": "interaction",
-      "triggers": ["分页", "pagination", "翻页", "next", "下一页"],
-      "url_patterns": [],
-      "file": "others/pagination.py",
-      "function": "run",
-      "description": "通用分页翻页：遍历多页内容"
     }
   ]
 }

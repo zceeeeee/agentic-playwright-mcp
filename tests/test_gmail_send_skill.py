@@ -250,6 +250,80 @@ def test_gmail_send_full_page_flow_fills_and_sends():
     _with_page(html, assert_page)
 
 
+def test_gmail_send_waits_for_fullscreen_icon_before_filling():
+    html = """
+    <body>
+      <input aria-label="Search mail" placeholder="Search mail" name="q" />
+      <div id="compose" class="T-I T-I-KE L3" role="button" gh="cm">Compose</div>
+      <div id="compose-window" style="display:none">
+        <div class="Hp"><h2 class="a3E"><div class="a3I">Compose:</div><span>New Message</span></h2></div>
+        <div id="window-controls" class="Hm"></div>
+        <input id="to" class="agP aFw" aria-label="To recipients" role="combobox" />
+        <input id="subject" name="subjectbox" aria-label="Subject" />
+        <div id="body" aria-label="Message Body" role="textbox" contenteditable="true"></div>
+        <div id="send" class="T-I J-J5-Ji aoO v7 T-I-atl L3" role="button"
+             aria-label="Send ‪(Ctrl-Enter)‬" data-tooltip="Send ‪(Ctrl-Enter)‬">Send</div>
+      </div>
+      <div id="fullscreen-clicked">no</div>
+      <div id="sent">no</div>
+      <script>
+        document.getElementById('compose').addEventListener('click', () => {
+          document.getElementById('compose-window').style.display = 'block';
+        });
+        window.addFullscreenButton = () => {
+          if (document.getElementById('fullscreen')) return;
+          const img = document.createElement('img');
+          img.id = 'fullscreen';
+          img.className = 'Hq aUG';
+          img.setAttribute('role', 'button');
+          img.setAttribute('alt', 'Pop-out');
+          img.setAttribute('aria-label', 'Full screen (Shift for pop-out)');
+          img.setAttribute('data-tooltip', 'Full screen (Shift for pop-out)');
+          img.style.cssText = 'width:16px;height:16px;display:inline-block';
+          img.addEventListener('click', () => {
+            document.getElementById('fullscreen-clicked').textContent = 'yes';
+          });
+          document.getElementById('window-controls').appendChild(img);
+        };
+        document.getElementById('send').addEventListener('click', () => {
+          document.getElementById('sent').textContent = 'yes';
+        });
+      </script>
+    </body>
+    """
+
+    def assert_page(page):
+        waits = []
+
+        def wait_and_add_fullscreen(seconds):
+            waits.append(seconds)
+            if len(waits) == 3:
+                page.evaluate("window.addFullscreenButton()")
+            return "ok"
+
+        result = run(
+            "alice@example.com",
+            "Test subject",
+            "Test body",
+            goto_fn=lambda url: "ok",
+            run_js_fn=lambda code: page.evaluate(code),
+            wait_fn=wait_and_add_fullscreen,
+            get_url_fn=lambda: "https://mail.google.com/mail/u/0/#inbox",
+            log_fn=_noop,
+        )
+
+        assert result["success"] is True
+        assert page.locator("#fullscreen-clicked").inner_text() == "yes"
+        assert page.locator("#to").input_value() == "alice@example.com"
+        assert page.locator("#subject").input_value() == "Test subject"
+        assert page.locator("#body").inner_text() == "Test body"
+        assert page.locator("#sent").inner_text() == "yes"
+        step_names = [step["step"] for step in result["steps"]]
+        assert "click_compose_fullscreen_attempt_2" in step_names
+
+    _with_page(html, assert_page)
+
+
 def test_gmail_send_fill_helpers_and_login_detection():
     html = """
     <body>
@@ -295,6 +369,29 @@ def test_gmail_send_handles_chinese_compose_fields_with_zero_width_recipient():
         assert page.locator("#to").input_value() == "alice@example.com"
         assert page.locator("#subject").input_value() == "测试标题"
         assert page.locator("#body").inner_text() == "测试正文"
+
+    _with_page(html, assert_page)
+
+
+def test_gmail_send_fills_gmail_message_body_editable_div():
+    html = """
+    <body>
+      <div id=":sw" class="Am aiL Al editable LW-avf tS-tW" hidefocus="true"
+           aria-label="Message Body" writingsuggestions="false" g_editable="true"
+           role="textbox" aria-multiline="true" contenteditable="true" tabindex="1"
+           style="direction: ltr; min-height: 266px;" spellcheck="false"><br></div>
+    </body>
+    """
+
+    def assert_page(page):
+        result = _fill_body(
+            lambda code: page.evaluate(code),
+            "测试邮件内容",
+            type_text_fn=lambda text: page.keyboard.type(text) or {"success": True},
+        )
+
+        assert result["success"] is True
+        assert page.locator("[aria-label='Message Body']").inner_text() == "测试邮件内容"
 
     _with_page(html, assert_page)
 

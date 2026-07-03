@@ -78,9 +78,13 @@ steps:
     target: compose_button
     comment: 点击左上 Compose 按钮。
 
+  - action: smart_click
+    target: compose_fullscreen_button
+    comment: 点击写信窗口右上角 Full screen / Pop-out 放大图标。
+
   - action: wait
     target: compose_popup
-    comment: 识别 Compose / New Message 弹窗。
+    comment: 识别放大后的 Compose / New Message 写信窗口。
 
   - action: smart_fill
     target: to_recipients
