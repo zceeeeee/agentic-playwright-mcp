@@ -2,6 +2,7 @@
 # 类似https://zhuanlan.zhihu.com/p/2049017245020558481
 
 APPROVE_URL="https://zhuanlan.zhihu.com/p/2049017245020558481"
+SIGN_URL="https://www.zhihu.com/signin"
 
 def _js_string(value: str) -> str:
     text = str(value)
@@ -14,6 +15,10 @@ def _js_string(value: str) -> str:
 
 def run(keyword: str):
     """Open Zhihu writer, fill title/body with keyword, and click publish."""
+    if not ensure_auth("zhihu", SIGN_URL):
+        log("Zhihu login state not confirmed; skip approve")
+        return
+
     goto(APPROVE_URL)
  
 

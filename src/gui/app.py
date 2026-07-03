@@ -89,32 +89,6 @@ def _domain_from_host(host: str) -> str | None:
     return parts[-2] if len(parts) >= 2 else parts[0]
 
 
-def _domain_from_task(task: str) -> str | None:
-    """Best-effort domain detection before running a GUI task."""
-    task_lower = task.lower()
-    aliases = {
-        "zhihu": ("知乎",),
-        "weibo": ("微博",),
-        "douyin": ("抖音",),
-        "xiaohongshu": ("小红书",),
-        "bilibili": ("B站", "b站", "哔哩哔哩", "哔哩", "bilibili"),
-    }
-
-    for domain, names in aliases.items():
-        if any(name in task for name in names):
-            return domain
-
-    for domain, host in _load_domain_hosts().items():
-        if domain.lower() in task_lower or host.lower() in task_lower:
-            return domain
-
-    match = re.search(r"https?://([^/\s，,]+)", task_lower)
-    if match:
-        host = match.group(1).split(":")[0]
-        return _domain_from_host(host)
-
-    return None
-
 
 SITE_LOGIN_COOKIES = {
     "zhihu": {"z_c0"},
@@ -1030,6 +1004,12 @@ HTML_TEMPLATE = """
                 </button>
             </div>
             <div class="output" id="output">等待执行...</div>
+            <div class="step info" id="authPrompt" style="display:none;margin-top:12px;">
+                <strong id="authPromptTitle">Login detected</strong>
+                <div id="authPromptText" style="margin:8px 0;"></div>
+                <button class="btn btn-dark" id="authSaveBtn" type="button">Save login</button>
+                <button class="btn btn-secondary" id="authDismissBtn" type="button">Not now</button>
+            </div>
         </div>
     </div>
 
@@ -1075,21 +1055,8 @@ HTML_TEMPLATE = """
     <script>
         const promptedSaveDomains = new Map();
         let authPollTimer = null;
-
-        async function maybeLoadSavedAuth(task, options) {
-            const response = await fetch('/api/auth/suggest-load', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ task }),
-            });
-            const result = await response.json();
-            if (result.domain && result.has_auth) {
-                const ok = confirm(`检测到 ${result.domain} 已有保存的登录信息，是否本次先加载？`);
-                if (ok) {
-                    options.load_auth_domain = result.domain;
-                }
-            }
-        }
+        let latestAuthPromptDomain = null;
+        let taskRunning = false;
 
         function startAuthPolling() {
             if (authPollTimer) {
@@ -1110,6 +1077,9 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/auth/current');
                 const result = await response.json();
                 if (!result.browser_running) {
+                    if (taskRunning) {
+                        return;
+                    }
                     const closeBtn = document.getElementById('closeBtn');
                     if (closeBtn) closeBtn.style.display = 'none';
                     stopAuthPolling();
@@ -1124,25 +1094,61 @@ HTML_TEMPLATE = """
                     return;
                 }
                 promptedSaveDomains.set(result.domain, promptState);
-                const action = result.has_auth ? '更新保存' : '保存';
-                const ok = confirm(`检测到当前 ${result.domain} 页面可能已有登录状态，是否${action}登录信息？`);
-                if (!ok) {
-                    return;
-                }
+                showAuthSavePrompt(result.domain, result.has_auth);
+            } catch (error) {
+                console.warn('Auth polling failed:', error);
+            }
+        }
+
+        function showAuthSavePrompt(domain, hasAuth) {
+            latestAuthPromptDomain = domain;
+            const panel = document.getElementById('authPrompt');
+            const title = document.getElementById('authPromptTitle');
+            const text = document.getElementById('authPromptText');
+            const saveBtn = document.getElementById('authSaveBtn');
+            const dismissBtn = document.getElementById('authDismissBtn');
+            const action = hasAuth ? 'update saved' : 'save';
+            title.textContent = `Login detected: ${domain}`;
+            text.textContent = `Detected an active ${domain} login. ${action} login info? This will not pause the running task.`;
+            saveBtn.textContent = hasAuth ? 'Update login' : 'Save login';
+            saveBtn.disabled = false;
+            saveBtn.onclick = () => saveAuthFromPrompt(domain);
+            dismissBtn.onclick = () => {
+                panel.style.display = 'none';
+            };
+            panel.style.display = 'block';
+        }
+
+        async function saveAuthFromPrompt(domain) {
+            const panel = document.getElementById('authPrompt');
+            const text = document.getElementById('authPromptText');
+            const saveBtn = document.getElementById('authSaveBtn');
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+            try {
                 const saveResponse = await fetch('/api/auth/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ domain: result.domain }),
+                    body: JSON.stringify({ domain }),
                 });
                 const saved = await saveResponse.json();
                 if (saved.success) {
-                    promptedSaveDomains.set(result.domain, 'has-auth');
-                    alert(`已保存 ${result.domain} 登录信息：${saved.path}`);
+                    promptedSaveDomains.set(domain, 'has-auth');
+                    text.textContent = `Saved login info for ${domain}.`;
+                    setTimeout(() => {
+                        if (latestAuthPromptDomain === domain) {
+                            panel.style.display = 'none';
+                        }
+                    }, 1500);
                 } else {
-                    alert(`保存失败：${saved.error || '未知错误'}`);
+                    text.textContent = `Failed to save login info: ${saved.error || 'unknown error'}`;
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = 'Retry save';
                 }
             } catch (error) {
-                console.warn('Auth polling failed:', error);
+                text.textContent = `Failed to save login info: ${error.message}`;
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Retry save';
             }
         }
 
@@ -1187,8 +1193,12 @@ HTML_TEMPLATE = """
             };
 
             let taskSuccess = false;
+            promptedSaveDomains.clear();
+            taskRunning = true;
+            if (keepOpen) {
+                startAuthPolling();
+            }
             try {
-                await maybeLoadSavedAuth(task, options);
                 const response = await fetch('/api/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1212,12 +1222,12 @@ HTML_TEMPLATE = """
                 status.textContent = '错误';
                 output.innerHTML = `<div class="step error">请求失败: ${error.message}</div>`;
             } finally {
+                taskRunning = false;
                 runBtn.disabled = false;
                 runBtn.innerHTML = '执行';
                 const closeBtn = document.getElementById('closeBtn');
                 if (keepOpen && taskSuccess) {
                     closeBtn.style.display = 'inline-flex';
-                    startAuthPolling();
                 } else {
                     closeBtn.style.display = 'none';
                     stopAuthPolling();
@@ -1615,19 +1625,6 @@ def api_run():
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
-
-
-@app.route("/api/auth/suggest-load", methods=["POST"])
-def api_auth_suggest_load():
-    """Suggest loading saved auth before a GUI task starts."""
-    data = request.json or {}
-    task = data.get("task", "")
-    domain = _domain_from_task(task)
-    if not domain:
-        return jsonify({"domain": None, "has_auth": False})
-
-    am = get_auth_manager()
-    return jsonify({"domain": domain, "has_auth": am.has_auth(domain)})
 
 
 @app.route("/api/auth/current")

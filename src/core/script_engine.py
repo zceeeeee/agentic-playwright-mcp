@@ -13,6 +13,7 @@ import io
 import sys
 import traceback
 from dataclasses import dataclass, field
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from typing import Any, Callable
 from urllib.parse import quote_plus
 
@@ -287,6 +288,106 @@ class ScriptEngine:
             """动态更新面板表单字段。"""
             _pm.set_fields(_get_page().get_page(), fields)
 
+        def _storage_state_logged_in(domain: str) -> bool:
+            bm = self._get_browser_manager()
+            if bm._context is None:
+                return False
+            state = bm._context.storage_state()
+            cookies = {
+                str(cookie.get("name", "")).lower(): str(cookie.get("value", "")).strip()
+                for cookie in state.get("cookies", [])
+            }
+            domain = domain.lower()
+            if domain == "zhihu":
+                return bool(cookies.get("z_c0"))
+            if domain == "xiaohongshu":
+                return bool(
+                    cookies.get("web_session")
+                    and cookies.get("id_token")
+                    and cookies.get("x-rednote-datactry")
+                    and cookies.get("x-rednote-holderctry")
+                )
+            auth_words = (
+                "auth",
+                "login",
+                "session",
+                "token",
+                "uid",
+                "user",
+                "account",
+                "passport",
+                "sso",
+            )
+            if any(any(word in name for word in auth_words) for name in cookies):
+                return True
+            for origin in state.get("origins", []):
+                for item in origin.get("localStorage", []):
+                    name = str(item.get("name", "")).lower()
+                    if any(word in name for word in auth_words):
+                        return True
+            return False
+
+        def _wait_for_manual_login(domain: str, target_url: str | None = None) -> bool:
+            bm = self._get_browser_manager()
+            page = bm.get_page()
+            if target_url:
+                log(f"Open {target_url} and wait for {domain} login")
+                try:
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=10000)
+                except PlaywrightTimeoutError:
+                    log(f"Navigation to {target_url} timed out; keep waiting for login")
+            else:
+                log(f"Wait for {domain} login on current page")
+
+            while True:
+                if _storage_state_logged_in(domain):
+                    log(f"{domain} login detected")
+                    return True
+                page.wait_for_timeout(1000)
+
+        def ensure_auth(domain: str, target_url: str | None = None) -> bool:
+            """Load saved auth when requested, otherwise wait for manual login."""
+            domain = str(domain or "").strip().lower()
+            target_url = str(target_url or "").strip() or None
+            if not domain:
+                log("ensure_auth skipped: empty domain")
+                return False
+
+            from src.core.auth_manager import get_auth_manager
+
+            am = get_auth_manager()
+
+            bm = self._get_browser_manager()
+            if bm.current_domain == domain and _storage_state_logged_in(domain):
+                log(f"{domain} login already loaded")
+                return True
+
+            if am.has_auth(domain):
+                page = bm.get_page()
+                try:
+                    if not _pm.is_injected(page):
+                        page.goto("about:blank")
+                except Exception:
+                    pass
+
+                answer = panel_prompt(
+                    f"Load saved login for {domain} before continuing? [yes] [no]"
+                )
+                if str(answer or "").strip().lower() in {"yes", "y", "1", "true", "\u662f"}:
+                    bm.launch_with_domain(domain=domain)
+                    if _storage_state_logged_in(domain):
+                        log(f"Loaded saved login for {domain}")
+                        return True
+                    log(
+                        f"Saved login for {domain} was loaded but login state was not confirmed"
+                    )
+                else:
+                    log(f"User skipped saved login for {domain}")
+            else:
+                log(f"No saved login info for {domain}")
+
+            return _wait_for_manual_login(domain, target_url)
+
         ns["panel_log"] = panel_log
         ns["panel_prompt"] = panel_prompt
         ns["panel_read"] = panel_read
@@ -295,6 +396,7 @@ class ScriptEngine:
         ns["panel_hide"] = panel_hide
         ns["panel_set_title"] = panel_set_title
         ns["panel_set_fields"] = panel_set_fields
+        ns["ensure_auth"] = ensure_auth
 
         # 注册用户自定义函数（控件层等）
         ns.update(self._extra_globals)
