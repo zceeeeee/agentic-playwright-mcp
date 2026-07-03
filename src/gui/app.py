@@ -195,6 +195,130 @@ def _storage_state_has_session(state: dict, domain: str | None = None) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# 技能库辅助函数
+# ---------------------------------------------------------------------------
+
+# 平台名称映射（英文 → 中文显示名）
+PLATFORM_NAMES = {
+    "baidu": "百度",
+    "google": "Google",
+    "bing": "Bing",
+    "github": "GitHub",
+    "amazon": "Amazon",
+    "youtube": "YouTube",
+    "bilibili": "Bilibili",
+    "weibo": "微博",
+    "taobao": "淘宝",
+    "doubao": "豆包",
+    "csdn": "CSDN",
+    "xiaohongshu": "小红书",
+    "zhihu": "知乎",
+    "gmail": "Gmail",
+    "outlook": "Outlook",
+}
+
+# 操作类型映射（action 字段 → 中文标签）
+ACTION_LABELS = {
+    "search": "搜索",
+    "login": "登录",
+    "send": "发送",
+    "inbox": "收件箱",
+    "publish": "发布",
+    "comment": "评论",
+    "browse": "浏览",
+    "download": "下载",
+    "upload": "上传",
+}
+
+
+def _extract_platform(skill) -> str:
+    """从技能元数据提取平台标识。
+
+    优先级: YAML platform 字段 > id 前缀 > url_patterns。
+    """
+    # 1. 直接使用 platform 字段（如果 SkillMeta 有此属性）
+    platform = getattr(skill, "platform", None)
+    if platform:
+        return platform
+
+    # 2. 从 id 提取（如 "domain/baidu_search" → "baidu"）
+    skill_id = skill.id
+    if "/" in skill_id:
+        prefix = skill_id.split("/")[1]
+        # 去掉常见后缀
+        for suffix in ["_search", "_login", "_send", "_inbox", "_publish", "_comment"]:
+            prefix = prefix.replace(suffix, "")
+        if prefix in PLATFORM_NAMES:
+            return prefix
+
+    # 3. 从 url_patterns 提取
+    for pattern in skill.url_patterns:
+        domain = pattern.strip("*.").split(".")[0]
+        if domain in PLATFORM_NAMES:
+            return domain
+
+    return "other"
+
+
+def _extract_action(skill) -> str:
+    """从技能元数据提取操作类型标签。
+
+    优先级: YAML action 字段 > 技能名称关键词。
+    """
+    # 1. 直接使用 action 字段
+    action = getattr(skill, "action", None)
+    if action and action in ACTION_LABELS:
+        return ACTION_LABELS[action]
+
+    # 2. 从技能名称提取
+    name = skill.name
+    action_keywords = {
+        "搜索": "搜索",
+        "登录": "登录",
+        "发送": "发送",
+        "收件箱": "收件箱",
+        "发布": "发布",
+        "评论": "评论",
+        "浏览": "浏览",
+        "下载": "下载",
+        "上传": "上传",
+        "投稿": "发布",
+        "留言": "评论",
+        "发邮件": "发送",
+        "寄邮件": "发送",
+    }
+    for keyword, label in action_keywords.items():
+        if keyword in name:
+            return label
+
+    return "其他"
+
+
+def _format_time(timestamp: float) -> str:
+    """将时间戳格式化为相对时间字符串。"""
+    if not timestamp:
+        return "未知"
+
+    import time
+
+    now = time.time()
+    diff = now - timestamp
+
+    if diff < 60:
+        return "刚刚"
+    elif diff < 3600:
+        return f"{int(diff / 60)} 分钟前"
+    elif diff < 86400:
+        return f"{int(diff / 3600)} 小时前"
+    elif diff < 604800:
+        return f"{int(diff / 86400)} 天前"
+    else:
+        from datetime import datetime
+
+        return datetime.fromtimestamp(timestamp).strftime("%m月%d日")
+
+
 # HTML 模板 — Mistral AI 设计系统
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -662,8 +786,88 @@ HTML_TEMPLATE = """
             display: block;
         }
 
-        /* ── Skills Grid ── */
+        /* ── View Switcher ── */
+        .view-switcher {
+            display: flex;
+            gap: var(--sp-xs);
+            margin-bottom: var(--sp-lg);
+        }
+        .view-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--sp-xxs);
+            padding: 8px 16px;
+            background: var(--canvas);
+            border: 1px solid var(--hairline-soft);
+            border-radius: var(--radius-full);
+            font-family: var(--font-body);
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--steel);
+            cursor: pointer;
+            transition: all 150ms ease;
+        }
+        .view-btn:hover {
+            color: var(--ink);
+            border-color: var(--stone);
+        }
+        .view-btn.active {
+            background: var(--ink);
+            color: var(--on-primary);
+            border-color: var(--ink);
+        }
+        .view-icon {
+            font-size: 14px;
+        }
+
+        /* ── Platform Grid (按网站视图) ── */
+        .platform-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: var(--sp-md);
+        }
+        .platform-card {
+            padding: var(--sp-lg);
+            background: var(--canvas);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--hairline-soft);
+            transition: box-shadow 150ms ease;
+        }
+        .platform-card:hover {
+            box-shadow: rgba(0,0,0,0.04) 0px 4px 12px 0px;
+        }
+        .platform-name {
+            font-family: var(--font-body);
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--ink);
+            margin-bottom: var(--sp-sm);
+        }
+        .platform-card .tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--sp-xxs);
+        }
+
+        /* ── Skills Grid (按功能视图) ── */
         .skills-grid {
+            display: flex;
+            flex-direction: column;
+            gap: var(--sp-xl);
+        }
+        .skill-group {
+            margin-bottom: var(--sp-sm);
+        }
+        .skill-group-title {
+            font-family: var(--font-body);
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--ink);
+            margin-bottom: var(--sp-md);
+            padding-bottom: var(--sp-xxs);
+            border-bottom: 1px solid var(--hairline-soft);
+        }
+        .skill-group-items {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: var(--sp-md);
@@ -678,9 +882,9 @@ HTML_TEMPLATE = """
         .skill-item:hover {
             box-shadow: rgba(0,0,0,0.04) 0px 4px 12px 0px;
         }
-        .skill-item h3 {
+        .skill-item h4 {
             font-family: var(--font-body);
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 500;
             line-height: 1.40;
             color: var(--ink);
@@ -690,53 +894,98 @@ HTML_TEMPLATE = """
             font-size: 14px;
             color: var(--steel);
             line-height: 1.50;
+            margin-bottom: var(--sp-xs);
         }
-        .skill-item .triggers {
+        .skill-item .tags {
             margin-top: var(--sp-xs);
         }
-        .skill-item .trigger {
+        .skill-item .tag {
             display: inline-block;
             padding: 4px 10px;
-            background: var(--cream-deeper);
+            background: var(--primary-light, #fff5f0);
             border-radius: var(--radius-full);
             font-size: 12px;
-            font-weight: 600;
-            color: var(--ink);
+            font-weight: 500;
+            color: var(--primary);
             margin-right: var(--sp-xxs);
             margin-bottom: var(--sp-xxs);
         }
+        .skill-item .tag-platform {
+            background: transparent;
+            color: var(--steel);
+            border: 1px solid var(--hairline-soft);
+        }
+        .tag-clickable {
+            cursor: pointer;
+            transition: all 150ms ease;
+        }
+        .tag-clickable:hover {
+            background: var(--primary);
+            color: var(--on-primary);
+        }
 
-        /* ── Script Item ── */
-        .script-item {
-            padding: var(--sp-xl);
+        /* ── Script Card ── */
+        .script-card {
+            padding: var(--sp-lg);
             background: var(--canvas);
             border-radius: var(--radius-lg);
             border: 1px solid var(--hairline-soft);
             margin-bottom: var(--sp-sm);
+            transition: box-shadow 150ms ease;
         }
-        .script-item h3 {
-            font-size: 18px;
+        .script-card:hover {
+            box-shadow: rgba(0,0,0,0.04) 0px 4px 12px 0px;
+        }
+        .script-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: var(--sp-xs);
+        }
+        .script-header h4 {
+            font-size: 16px;
             font-weight: 500;
             color: var(--ink);
-            margin-bottom: var(--sp-xxs);
+            margin: 0;
+            flex: 1;
+            margin-right: var(--sp-md);
         }
-        .script-item p {
-            font-size: 14px;
+        .script-time {
+            font-size: 12px;
             color: var(--steel);
+            white-space: nowrap;
         }
-        .script-item details {
+        .script-meta {
+            display: flex;
+            gap: var(--sp-md);
+            margin-bottom: var(--sp-sm);
+        }
+        .script-stat {
+            font-size: 13px;
+            color: var(--stone);
+        }
+        .script-rate {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: var(--radius-full);
+        }
+        .rate-good { background: #e6f4ea; color: #1e7e34; }
+        .rate-mid { background: #fff3cd; color: #856404; }
+        .rate-low { background: #f8d7da; color: #721c24; }
+        .script-preview {
             margin-top: var(--sp-xs);
         }
-        .script-item summary {
+        .script-preview summary {
             cursor: pointer;
             color: var(--primary);
             font-size: 14px;
             font-weight: 500;
         }
-        .script-item summary:hover {
+        .script-preview summary:hover {
             text-decoration: underline;
         }
-        .script-item pre {
+        .script-preview pre {
             background: var(--surface-code);
             color: #d4d4d4;
             padding: var(--sp-md);
@@ -1045,6 +1294,14 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="tab-content active" id="tab-skills">
+                <div class="view-switcher">
+                    <button class="view-btn active" onclick="switchSkillView('platform', this)" data-view="platform">
+                        <span class="view-icon">🌐</span> 按网站
+                    </button>
+                    <button class="view-btn" onclick="switchSkillView('action', this)" data-view="action">
+                        <span class="view-icon">⚡</span> 按功能
+                    </button>
+                </div>
                 <div class="skills-grid" id="skillsGrid">
                     <div class="empty-state">加载中...</div>
                 </div>
@@ -1303,26 +1560,169 @@ HTML_TEMPLATE = """
             document.getElementById(`tab-${name}`).classList.add('active');
         }
 
+        // 平台名称映射
+        const PLATFORM_NAMES = {
+            "baidu": "百度",
+            "google": "Google",
+            "bing": "Bing",
+            "github": "GitHub",
+            "amazon": "Amazon",
+            "youtube": "YouTube",
+            "bilibili": "Bilibili",
+            "weibo": "微博",
+            "taobao": "淘宝",
+            "doubao": "豆包",
+            "csdn": "CSDN",
+            "xiaohongshu": "小红书",
+            "zhihu": "知乎",
+            "gmail": "Gmail",
+            "outlook": "Outlook",
+        };
+
+        // 操作类型中文映射
+        const ACTION_NAMES = {
+            "搜索": "搜索",
+            "登录": "登录",
+            "发送": "发送",
+            "收件箱": "收件箱",
+            "发布": "发布",
+            "评论": "评论",
+            "浏览": "浏览",
+            "下载": "下载",
+            "上传": "上传",
+            "其他": "其他",
+        };
+
+        // 当前技能视图模式
+        let currentSkillView = 'platform';
+        let cachedSkills = null;
+
+        function switchSkillView(view, el) {
+            currentSkillView = view;
+            document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+            el.classList.add('active');
+            if (cachedSkills) {
+                renderSkills(cachedSkills);
+            }
+        }
+
+        function renderSkills(skills) {
+            const grid = document.getElementById('skillsGrid');
+            if (skills.length === 0) {
+                grid.innerHTML = '<div class="empty-state">暂无技能</div>';
+                return;
+            }
+
+            if (currentSkillView === 'platform') {
+                renderByPlatform(skills, grid);
+            } else {
+                renderByAction(skills, grid);
+            }
+        }
+
+        // 点击 tag 填入任务描述
+        function fillTask(platform, action) {
+            const platformName = PLATFORM_NAMES[platform] || platform;
+            let task = '';
+            if (action === '搜索') {
+                task = `在${platformName}搜索`;
+            } else if (action === '登录') {
+                task = `${platformName}登录`;
+            } else if (action === '发送') {
+                task = `用${platformName}发送`;
+            } else if (action === '收件箱') {
+                task = `打开${platformName}收件箱`;
+            } else if (action === '发布') {
+                task = `在${platformName}发布`;
+            } else if (action === '评论') {
+                task = `在${platformName}评论`;
+            } else {
+                task = `${platformName}${action}`;
+            }
+            const input = document.getElementById('taskInput');
+            input.value = task;
+            input.focus();
+            // 滚动到页面顶部
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function renderByPlatform(skills, grid) {
+            // 按 platform 分组，收集每个平台的所有功能
+            const platforms = {};
+            skills.forEach(skill => {
+                const platform = skill.platform || 'other';
+                if (!platforms[platform]) {
+                    platforms[platform] = { actions: new Set(), count: 0 };
+                }
+                platforms[platform].actions.add(skill.action || '其他');
+                platforms[platform].count++;
+            });
+
+            // 定义分组顺序（常用平台优先）
+            const order = ['baidu', 'google', 'bing', 'github', 'bilibili', 'youtube', 'zhihu', 'xiaohongshu', 'weibo', 'taobao', 'amazon', 'gmail', 'outlook', 'csdn', 'doubao'];
+            const sortedKeys = Object.keys(platforms).sort((a, b) => {
+                const ia = order.indexOf(a);
+                const ib = order.indexOf(b);
+                return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+            });
+
+            // 一个网站一张卡片
+            grid.innerHTML = `
+                <div class="platform-grid">
+                    ${sortedKeys.map(platform => `
+                        <div class="platform-card">
+                            <h4 class="platform-name">${PLATFORM_NAMES[platform] || platform}</h4>
+                            <div class="tags">
+                                ${[...platforms[platform].actions].map(action =>
+                                    `<span class="tag tag-clickable" onclick="fillTask('${platform}', '${escapeHtml(action)}')">${escapeHtml(action)}</span>`
+                                ).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function renderByAction(skills, grid) {
+            // 按 action 分组
+            const groups = {};
+            skills.forEach(skill => {
+                const action = skill.action || '其他';
+                if (!groups[action]) groups[action] = [];
+                groups[action].push(skill);
+            });
+
+            // 定义分组顺序
+            const order = ['搜索', '登录', '发送', '发布', '评论', '收件箱', '浏览', '下载', '上传', '其他'];
+            const sortedKeys = Object.keys(groups).sort((a, b) => {
+                const ia = order.indexOf(a);
+                const ib = order.indexOf(b);
+                return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+            });
+
+            grid.innerHTML = sortedKeys.map(action => `
+                <div class="skill-group">
+                    <h3 class="skill-group-title">${ACTION_NAMES[action] || action}</h3>
+                    <div class="skill-group-items">
+                        ${groups[action].map(skill => `
+                            <div class="skill-item">
+                                <h4>${escapeHtml(skill.name)}</h4>
+                                <p>${escapeHtml(skill.description || '')}</p>
+                                <div class="tags">
+                                    <span class="tag tag-platform">${PLATFORM_NAMES[skill.platform] || skill.platform || '其他'}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
         async function loadSkills() {
             try {
                 const response = await fetch('/api/skills');
-                const skills = await response.json();
-                const grid = document.getElementById('skillsGrid');
-                if (skills.length === 0) {
-                    grid.innerHTML = '<div class="empty-state">暂无技能</div>';
-                    return;
-                }
-                grid.innerHTML = skills.map(skill => `
-                    <div class="skill-item">
-                        <h3>${escapeHtml(skill.name)}</h3>
-                        <p>${escapeHtml(skill.description || '')}</p>
-                        <div class="triggers">
-                            ${(skill.triggers || []).map(t =>
-                                `<span class="trigger">${escapeHtml(t)}</span>`
-                            ).join('')}
-                        </div>
-                    </div>
-                `).join('');
+                cachedSkills = await response.json();
+                renderSkills(cachedSkills);
             } catch (error) {
                 document.getElementById('skillsGrid').innerHTML = `<div class="empty-state">加载失败: ${error.message}</div>`;
             }
@@ -1337,16 +1737,29 @@ HTML_TEMPLATE = """
                     list.innerHTML = '<div class="empty-state">暂无脚本</div>';
                     return;
                 }
-                list.innerHTML = scripts.map(script => `
-                    <div class="script-item">
-                        <h3>${escapeHtml(script.task)}</h3>
-                        <p>使用 ${script.use_count} 次，成功率 ${(script.success_rate * 100).toFixed(0)}%</p>
-                        <details>
-                            <summary>查看脚本</summary>
-                            <pre>${escapeHtml(script.script)}</pre>
-                        </details>
-                    </div>
-                `).join('');
+
+                // 按最后使用时间排序（最近使用的在前）
+                scripts.sort((a, b) => (b.last_used_at || b.created_at) - (a.last_used_at || a.created_at));
+
+                list.innerHTML = scripts.map(script => {
+                    const rateClass = script.success_rate >= 0.8 ? 'rate-good' : script.success_rate >= 0.5 ? 'rate-mid' : 'rate-low';
+                    return `
+                        <div class="script-card">
+                            <div class="script-header">
+                                <h4>${escapeHtml(script.task)}</h4>
+                                <span class="script-time">${escapeHtml(script.last_used_at_fmt || script.created_at_fmt)}</span>
+                            </div>
+                            <div class="script-meta">
+                                <span class="script-stat">使用 ${script.use_count} 次</span>
+                                <span class="script-rate ${rateClass}">成功率 ${(script.success_rate * 100).toFixed(0)}%</span>
+                            </div>
+                            <details class="script-preview">
+                                <summary>查看脚本</summary>
+                                <pre>${escapeHtml(script.script)}</pre>
+                            </details>
+                        </div>
+                    `;
+                }).join('');
             } catch (error) {
                 document.getElementById('scriptsList').innerHTML = `<div class="empty-state">加载失败: ${error.message}</div>`;
             }
@@ -1783,6 +2196,8 @@ def api_skills():
                     "triggers": s.triggers,
                     "url_patterns": s.url_patterns,
                     "description": s.description,
+                    "platform": _extract_platform(s),
+                    "action": _extract_action(s),
                 }
                 for s in skills
             ]
@@ -1810,6 +2225,8 @@ def api_scripts():
                     "success_rate": s.success_rate,
                     "created_at": s.created_at,
                     "last_used_at": s.last_used_at,
+                    "created_at_fmt": _format_time(s.created_at),
+                    "last_used_at_fmt": _format_time(s.last_used_at),
                 }
                 for s in scripts
             ]
