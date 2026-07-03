@@ -796,44 +796,6 @@ skills:
           - "知乎\\s*(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
           - "(?:提问|提问题)\\s*[:：]?\\s*(.+)$"
 
-  # ──────────────────────────────────────────────
-  # 通用交互模板
-  # ──────────────────────────────────────────────
-
-  - id: "interaction/login_flow"
-    name: "通用登录"
-    type: "interaction"
-    triggers: ["登录", "login", "sign in", "signin"]
-    url_patterns: []
-    description: "通用登录流程：填写用户名密码并提交"
-    version: "1.0.0"
-    examples:
-      - "登录这个网站"
-      - "帮我登录当前页面的账号"
-
-  - id: "interaction/form_fill"
-    name: "通用表单填写"
-    type: "interaction"
-    triggers: ["表单", "form", "填写", "fill", "注册", "register"]
-    url_patterns: []
-    description: "通用表单填写：批量填写多个表单字段"
-    version: "1.0.0"
-    examples:
-      - "帮我填写这个表单"
-      - "注册一个账号"
-
-  - id: "interaction/pagination"
-    name: "通用分页翻页"
-    type: "interaction"
-    triggers: ["分页", "pagination", "翻页", "next", "下一页"]
-    url_patterns: []
-    description: "通用分页翻页：遍历多页内容"
-    version: "1.0.0"
-    examples:
-      - "翻到下一页"
-      - "继续浏览下一页"
-
-
 # ──────────────────────────────────────────────
 # sources 段 -- 文件映射
 # ──────────────────────────────────────────────
@@ -961,17 +923,4 @@ sources:
 
   - id: "domain/csnd_search"
     file: "search/csnd_search.py"
-    entry: "run"
-
- 
-  - id: "interaction/login_flow"
-    file: "others/login_flow.py"
-    entry: "run"
-
-  - id: "interaction/form_fill"
-    file: "others/form_fill.py"
-    entry: "run"
-
-  - id: "interaction/pagination"
-    file: "others/pagination.py"
     entry: "run"
