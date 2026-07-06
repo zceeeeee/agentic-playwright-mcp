@@ -74,11 +74,41 @@
       "id": "wps_writer_export",
       "name": "WPS 写文章并导出 PDF",
       "type": "domain",
-      "triggers": ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "写docx", "写文章", "导出PDF", "保存PDF", "插入图片", "字体颜色", "斜体"],
+      "triggers": ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "Markdown", "md", "转换", "写docx", "写文章", "导出PDF", "保存PDF", "插入图片", "字体颜色", "斜体"],
       "url_patterns": [],
       "file": "export/wps_writer_export.py",
       "function": "run",
-      "description": "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题和正文，设置字体、颜色、斜体和本地插图，保存 docx 并导出 PDF"
+      "description": "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题、正文或 Markdown 文件，设置字体、颜色、斜体和本地插图，保存 docx 并导出 PDF"
+    },
+    {
+      "id": "wechat_send_contact_message",
+      "name": "微信联系人发消息",
+      "type": "domain",
+      "triggers": ["微信", "wechat", "发送", "发消息", "私信", "联系人", "文件传输助手"],
+      "url_patterns": [],
+      "file": "send/wechat_send_contact_message.py",
+      "function": "run",
+      "description": "打开微信客户端，搜索指定联系人并发送一段消息"
+    },
+    {
+      "id": "wechat_follow_official_account",
+      "name": "微信关注公众号",
+      "type": "domain",
+      "triggers": ["微信", "wechat", "公众号", "服务号", "关注", "订阅", "火眼审阅"],
+      "url_patterns": [],
+      "file": "others/wechat_follow_official_account.py",
+      "function": "run",
+      "description": "打开微信客户端，搜索指定公众号/服务号，选择服务号结果并关注"
+    },
+    {
+      "id": "wechat_send_official_account_message",
+      "name": "微信公众号私信",
+      "type": "domain",
+      "triggers": ["微信", "wechat", "公众号", "服务号", "发送", "私信", "发消息", "发文字", "火眼审阅"],
+      "url_patterns": [],
+      "file": "send/wechat_send_official_account_message.py",
+      "function": "run",
+      "description": "打开微信客户端，搜索指定公众号/服务号并发送一段私信"
     },
     {
       "id": "douyin_login",

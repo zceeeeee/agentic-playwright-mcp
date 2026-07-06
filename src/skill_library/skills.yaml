@@ -96,12 +96,13 @@ skills:
     type: "domain"
     platform: "wps"
     action: "export"
-    triggers: ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "写文章", "导出PDF", "保存PDF", "插入图片", "字体颜色", "斜体"]
+    triggers: ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "Markdown", "md", "转换", "写文章", "导出PDF", "保存PDF", "插入图片", "字体颜色", "斜体"]
     trigger_patterns:
       - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,30}(?:写文章|写文档|新建文档|新建文字|生成文档|导出\\s*pdf|保存\\s*pdf|导出)"
       - "(?:写文章|写文档|新建文档|新建文字|生成文档|导出\\s*pdf|保存\\s*pdf).{0,30}(?:wps|金山办公|金山文档|金山文字|wps客户端)"
       - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,50}(?:写|创建|新建|生成).{0,50}(?:docx|word|文章|文档|文字)"
       - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,80}(?:pdf|导出|保存|路径)"
+      - "(?:\\.md|markdown).{0,80}(?:wps|金山办公|word|文章|文档|转换)"
     url_patterns: []
     description: "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题和正文，设置标题、字体、段落和编号样式，保存 docx 并导出 PDF"
     version: "1.0.0"
@@ -116,8 +117,15 @@ skills:
         description: "文档标题"
       body:
         type: body
-        required: true
+        required: false
         description: "正文内容"
+      markdown_path:
+        type: string
+        required: false
+        description: "Markdown 源文件路径"
+        extract_patterns:
+          - '(?:Markdown路径|md路径|markdown_path|源文件|文件|路径)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.md)'
+          - '["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.md)'
       output_dir:
         type: string
         required: false
@@ -177,6 +185,101 @@ skills:
         description: "需要插入到文档末尾的本地图片路径"
         extract_patterns:
           - '(?:插入图片|图片地址|图片路径|图片|image_path|image)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.(?:jpg|jpeg|png|webp|bmp|gif))'
+
+  # ──────────────────────────────────────────────
+  # 微信客户端
+  # ──────────────────────────────────────────────
+
+  - id: "domain/wechat_send_contact_message"
+    name: "微信联系人发消息"
+    type: "domain"
+    platform: "wechat"
+    action: "send"
+    triggers: ["微信", "wechat", "发送", "发消息", "私信", "联系人", "文件传输助手"]
+    trigger_patterns:
+      - "^(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号)).*(?:给|向).{1,40}(?:发送|发消息|私信|发)"
+    url_patterns: []
+    description: "打开微信客户端，搜索指定联系人并发送一段消息"
+    version: "1.0.0"
+    examples:
+      - "微信给文件传输助手发送你好"
+      - "微信给张三发消息“你好呀”"
+    params:
+      contact_name:
+        type: string
+        required: true
+        description: "微信联系人名称"
+        extract_patterns:
+          - '(?:微信|wechat)\s*(?:给|向)\s*["“]?(.+?)(?:发送|发消息|私信|发)'
+          - '(?:给|向)\s*["“]?(.+?)(?:发送|发消息|私信|发)'
+      message:
+        type: string
+        required: true
+        description: "要发送的消息内容"
+        extract_patterns:
+          - '(?:发送|发消息|私信|发)\s*(?:消息|文字|内容)?\s*(?:是|为|:|：)?\s*["“]?([^"”\n]+)["”]?$'
+
+  - id: "domain/wechat_follow_official_account"
+    name: "微信关注公众号"
+    type: "domain"
+    platform: "wechat"
+    action: "follow"
+    triggers: ["微信", "wechat", "公众号", "服务号", "关注", "订阅", "火眼审阅"]
+    trigger_patterns:
+      - "(?:微信|wechat).{0,40}(?:关注|订阅).{0,40}(?:公众号|服务号)"
+      - "(?:关注|订阅).{0,40}(?:公众号|服务号)"
+    url_patterns: []
+    description: "打开微信客户端，搜索指定公众号/服务号，选择服务号结果并关注"
+    version: "1.0.0"
+    examples:
+      - "关注火眼审阅公众号"
+      - "微信关注火眼审阅服务号"
+    params:
+      account_name:
+        type: string
+        required: true
+        description: "公众号或服务号名称"
+        extract_patterns:
+          - '(?:关注|订阅)\s*["“]?(.+?)(?:公众号|服务号)["”]?$'
+          - '(?:微信|wechat).{0,12}(?:关注|订阅)\s*["“]?(.+?)(?:公众号|服务号)["”]?$'
+          - '(?:公众号|服务号)\s*(?:是|为|:|：)?\s*["“]?([^"”\n]+)'
+      message:
+        type: string
+        required: false
+        description: "关注后可选发送的私信内容"
+        extract_patterns:
+          - '(?:发送|发|私信)\s*(?:消息|文字|内容)?\s*(?:是|为|:|：)?\s*["“]?([^"”\n]+)["”]?$'
+
+  - id: "domain/wechat_send_official_account_message"
+    name: "微信公众号私信"
+    type: "domain"
+    platform: "wechat"
+    action: "send"
+    triggers: ["微信", "wechat", "公众号", "服务号", "发送", "私信", "发消息", "发文字", "火眼审阅"]
+    trigger_patterns:
+      - "(?:给|向).{1,40}(?:公众号|服务号).{0,20}(?:发送|发|私信|发消息)"
+      - "(?:微信|wechat).{0,30}(?:公众号|服务号).{0,30}(?:发送|发|私信|发消息)"
+    url_patterns: []
+    description: "打开微信客户端，搜索指定公众号/服务号并发送一段私信"
+    version: "1.0.0"
+    examples:
+      - "给火眼审阅公众号发送你好呀"
+      - "微信给火眼审阅服务号私信“你好呀”"
+    params:
+      account_name:
+        type: string
+        required: true
+        description: "公众号或服务号名称"
+        extract_patterns:
+          - '(?:给|向)\s*["“]?(.+?)(?:公众号|服务号)\s*(?:发送|发|私信|发消息)'
+          - '(?:微信|wechat).{0,16}(?:给|向)\s*["“]?(.+?)(?:公众号|服务号)\s*(?:发送|发|私信|发消息)'
+          - '(?:公众号|服务号)\s*(?:是|为|:|：)?\s*["“]?([^"”\n]+)'
+      message:
+        type: string
+        required: true
+        description: "私信内容"
+        extract_patterns:
+          - '(?:发送|发|私信|发消息)\s*(?:消息|文字|内容)?\s*(?:是|为|:|：)?\s*["“]?([^"”\n]+)["”]?$'
 
   # ──────────────────────────────────────────────
   # GitHub
@@ -926,6 +1029,18 @@ sources:
 
   - id: "domain/wps_writer_export"
     file: "export/wps_writer_export.py"
+    entry: "run"
+
+  - id: "domain/wechat_send_contact_message"
+    file: "send/wechat_send_contact_message.py"
+    entry: "run"
+
+  - id: "domain/wechat_follow_official_account"
+    file: "others/wechat_follow_official_account.py"
+    entry: "run"
+
+  - id: "domain/wechat_send_official_account_message"
+    file: "send/wechat_send_official_account_message.py"
     entry: "run"
 
   - id: "domain/bing_search"

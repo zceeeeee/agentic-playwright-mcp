@@ -37,3 +37,6 @@ gmail邮箱发送邮件，收件箱是12412639@mail.sustech.edu.cn，标题是wf
 WPS写一个docx文章，标题是“edewvr”，内容是“wewret”，导出为PDF，路径是D:tmptest.pdf，字体是宋体14号(x未完成)
 WPS写一个文章，标题是“edewvr”，内容是“wewret”，导出为PDF，路径是"D:/tmp/test.pdf"，字体是宋体14号
 WPS，标题“edewvr”，内容是“wewret”，，路径是"D:/tmp/test.pdf"，字体是斜体红色宋体14，插入图片"D:\Users\qq275\Pictures\Screenshots\屏幕截图 2026-04-07 180134.png"
+微信给火眼审阅发送你好
+微信关注火眼审阅
+微信给文件传输助手发送你好

@@ -13,6 +13,9 @@ triggers:
   - WPS客户端
   - docx
   - Word文档
+  - Markdown
+  - md
+  - 转换
   - 导出PDF
   - 保存PDF
   - 写文档
@@ -27,8 +30,12 @@ parameters:
     description: 文档标题。
   body:
     type: string
-    required: true
-    description: 正文内容。
+    required: false
+    description: 正文内容；提供 Markdown 文件时可省略。
+  markdown_path:
+    type: string
+    required: false
+    description: Markdown 源文件路径。
   output_dir:
     type: string
     required: false
@@ -79,7 +86,7 @@ steps:
   - action: fill
     target: body
     value: "{{body}}"
-    comment: 写入正文，设置字体、字号、段落缩进，并对列表行应用编号。
+    comment: 写入正文；如果提供 Markdown 文件，则按标题、粗体、斜体等 Markdown 格式写入。
   - action: insert
     target: image
     value: "{{image_path}}"

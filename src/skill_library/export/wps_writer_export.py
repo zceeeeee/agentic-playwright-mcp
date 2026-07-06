@@ -30,6 +30,7 @@ def run(
     docx_path="-1",
     pdf_path="-1",
     file_name="-1",
+    markdown_path="-1",
     font_name="-1",
     font_size="-1",
     font_color="-1",
@@ -42,9 +43,10 @@ def run(
     """Create a WPS/Word article document, save it, and export it as PDF."""
 
     logger = _resolve_log(log_fn)
-    title_text = _value(title) or "未命名文档"
+    md_path = _value(markdown_path)
+    title_text = _value(title) or ("" if md_path else "未命名文档")
     body_text = _value(body)
-    if not body_text:
+    if not body_text and not md_path:
         raise ValueError("WPS export requires body content")
 
     if export_fn is None:
@@ -61,6 +63,7 @@ def run(
         docx_path=_value(docx_path),
         pdf_path=_value(pdf_path),
         file_name=_value(file_name),
+        markdown_path=md_path,
         font_name=_value(font_name),
         font_size=_value(font_size),
         font_color=_value(font_color),
