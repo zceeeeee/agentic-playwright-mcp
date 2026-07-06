@@ -716,6 +716,7 @@ def wps_writer_export(
     docx_path: str | None = None,
     pdf_path: str | None = None,
     file_name: str | None = None,
+    markdown_path: str | None = None,
     font_name: str | None = None,
     font_size: int | str | None = None,
     font_color: int | str | None = None,
@@ -733,12 +734,58 @@ def wps_writer_export(
         docx_path=docx_path,
         pdf_path=pdf_path,
         file_name=file_name,
+        markdown_path=markdown_path,
         font_name=font_name,
         font_size=font_size,
         font_color=font_color,
         italic=italic,
         image_path=image_path,
         keep_open=keep_open,
+    )
+
+
+def wechat_follow_official_account(
+    account_name: str,
+    message: str | None = None,
+    launch_path: str | None = None,
+) -> dict:
+    """Search and follow a WeChat official/service account in the desktop client."""
+    from src.layer_1.wechat_client import follow_official_account
+
+    return follow_official_account(
+        account_name=account_name,
+        message=message,
+        launch_path=launch_path,
+    )
+
+
+def wechat_send_official_account_message(
+    account_name: str,
+    message: str,
+    launch_path: str | None = None,
+) -> dict:
+    """Send a private message to a WeChat official/service account."""
+    from src.layer_1.wechat_client import send_official_account_message
+
+    return send_official_account_message(
+        account_name=account_name,
+        message=message,
+        launch_path=launch_path,
+    )
+
+
+def wechat_send_contact_message(
+    contact_name: str,
+    message: str,
+    launch_path: str | None = None,
+) -> dict:
+    """Send a message to a WeChat contact in the desktop client."""
+    from src.layer_1.wechat_client import send_contact_message
+
+    return send_contact_message(
+        contact_name=contact_name,
+        message=message,
+        launch_path=launch_path,
     )
 
 
@@ -777,6 +824,9 @@ def get_controls_exports() -> Dict[str, Any]:
         "press_key": press_key,
         "upload_file": upload_file,
         "wps_writer_export": wps_writer_export,
+        "wechat_follow_official_account": wechat_follow_official_account,
+        "wechat_send_official_account_message": wechat_send_official_account_message,
+        "wechat_send_contact_message": wechat_send_contact_message,
         # Cookie 持久化
         "save_cookies": save_cookies,
         "load_cookies": load_cookies,

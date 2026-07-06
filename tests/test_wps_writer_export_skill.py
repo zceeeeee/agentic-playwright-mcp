@@ -44,9 +44,20 @@ class FakeSelection:
         self.Range = SimpleNamespace(ListFormat=FakeListFormat())
         self.InlineShapes = FakeInlineShapes()
         self.typed: list[str] = []
+        self.formatted: list[dict[str, object]] = []
 
     def TypeText(self, text: str) -> None:
         self.typed.append(text)
+        self.formatted.append(
+            {
+                "text": text,
+                "font": self.Font.Name,
+                "size": self.Font.Size,
+                "bold": self.Font.Bold,
+                "italic": self.Font.Italic,
+                "color": self.Font.Color,
+            }
+        )
 
     def TypeParagraph(self) -> None:
         self.typed.append("\n")
@@ -166,6 +177,41 @@ def test_export_article_to_pdf_applies_style_file_name_and_image(tmp_path):
     assert result["image_path"] == str(image_path.resolve())
 
 
+def test_export_markdown_file_to_wps_applies_headings_and_inline_styles(tmp_path):
+    app = FakeApplication()
+    md_path = tmp_path / "tmp.md"
+    md_path.write_text(
+        "# 一级标题\n\n正文包含 **加粗** 和 *斜体*。\n\n## 二级标题\n##### 五级标题\n",
+        encoding="utf-8",
+    )
+
+    result = export_article_to_pdf(
+        title="",
+        body="",
+        markdown_path=str(md_path),
+        output_dir=str(tmp_path),
+        keep_open=True,
+        visible=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["success"] is True
+    assert result["title"] == "一级标题"
+    assert result["font_size"] == 14
+    assert result["markdown_path"] == str(md_path.resolve())
+    assert result["heading_count"] == 3
+    assert result["inline_style_count"] >= 2
+    assert "一级标题" in app.Selection.typed
+    assert "正文包含 " in app.Selection.typed
+    bold = next(item for item in app.Selection.formatted if item["text"] == "加粗")
+    italic = next(item for item in app.Selection.formatted if item["text"] == "斜体")
+    h1 = next(item for item in app.Selection.formatted if item["text"] == "一级标题")
+    h2 = next(item for item in app.Selection.formatted if item["text"] == "二级标题")
+    assert bold["bold"] == -1
+    assert italic["italic"] == -1
+    assert h1["font"] != h2["font"]
+
+
 def test_skill_run_calls_registered_export_function():
     calls = []
     logs = []
@@ -192,6 +238,7 @@ def test_skill_run_calls_registered_export_function():
             "docx_path": None,
             "pdf_path": None,
             "file_name": None,
+            "markdown_path": None,
             "font_name": None,
             "font_size": None,
             "font_color": None,
@@ -279,3 +326,14 @@ def test_router_routes_wps_style_and_insert_image_request():
         'image_path="D:\\\\Users\\\\qq275\\\\Pictures\\\\Screenshots\\\\屏幕截图 2026-04-07 180134.png"'
         in decision.script
     )
+
+
+def test_router_routes_markdown_file_to_wps_article():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route(r'把"D:\fagougou\doc\tmp.md转换成wps文章，文件名是“fev”')
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert 'markdown_path="D:\\\\fagougou\\\\doc\\\\tmp.md"' in decision.script
+    assert 'file_name="fev"' in decision.script

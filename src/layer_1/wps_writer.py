@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -61,6 +62,14 @@ FONT_STYLE_TOKENS = (
     "字体",
     "font",
 )
+
+MARKDOWN_HEADING_STYLES = {
+    1: {"font": "\u9ed1\u4f53", "size_add": 12},
+    2: {"font": "Microsoft YaHei", "size_add": 10},
+    3: {"font": "\u6977\u4f53", "size_add": 8},
+    4: {"font": "\u4eff\u5b8b", "size_add": 6},
+    5: {"font": "SimSun", "size_add": 4},
+}
 
 
 def _clean_text(value: str | None) -> str:
@@ -172,7 +181,8 @@ def _resolve_paths(
 
     file_stem = _safe_file_stem(file_name or "")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = file_stem or f"{_safe_filename(title)}_{stamp}"
+    random_suffix = uuid.uuid4().hex[:6]
+    base_name = file_stem or f"{_safe_filename(title)}_{stamp}_{random_suffix}"
     docx = (
         Path(normalized_docx_path).expanduser()
         if normalized_docx_path
@@ -296,6 +306,175 @@ def _type_paragraph(selection: Any, text: str, numbered: bool = False) -> None:
         _remove_numbering(selection)
 
 
+def _markdown_inline_segments(text: str) -> list[dict[str, Any]]:
+    """Parse a small Markdown inline subset into styled text segments."""
+
+    segments: list[dict[str, Any]] = []
+    pattern = re.compile(
+        r"(\*\*\*.+?\*\*\*|\*\*.+?\*\*|__.+?__|\*[^*\n]+?\*|_[^_\n]+?_)",
+        re.DOTALL,
+    )
+    cursor = 0
+    for match in pattern.finditer(text):
+        if match.start() > cursor:
+            segments.append({"text": text[cursor : match.start()], "bold": False, "italic": False})
+
+        token = match.group(0)
+        bold = False
+        italic = False
+        if token.startswith("***") and token.endswith("***"):
+            inner = token[3:-3]
+            bold = True
+            italic = True
+        elif token.startswith("**") and token.endswith("**"):
+            inner = token[2:-2]
+            bold = True
+        elif token.startswith("__") and token.endswith("__"):
+            inner = token[2:-2]
+            bold = True
+        else:
+            inner = token[1:-1]
+            # Markdown single-star normally means italic. The special Chinese
+            # word "加粗" is treated as bold for common natural-language tasks.
+            if "加粗" in inner and "斜体" not in inner:
+                bold = True
+            else:
+                italic = True
+        if inner:
+            segments.append({"text": inner, "bold": bold, "italic": italic})
+        cursor = match.end()
+
+    if cursor < len(text):
+        segments.append({"text": text[cursor:], "bold": False, "italic": False})
+    return [segment for segment in segments if segment["text"]]
+
+
+def _type_rich_paragraph(
+    selection: Any,
+    text: str,
+    font_name: str,
+    size: int,
+    *,
+    bold: bool = False,
+    italic: bool = False,
+    color: int | None = None,
+    alignment: int = 0,
+    first_line_indent: int = 0,
+    numbered: bool = False,
+) -> int:
+    _set_paragraph(selection, alignment=alignment, first_line_indent=first_line_indent)
+    applied_numbering = _apply_numbering(selection) if numbered else False
+    inline_styles = 0
+    for segment in _markdown_inline_segments(text):
+        segment_bold = bool(segment.get("bold"))
+        segment_italic = bool(segment.get("italic"))
+        if segment_bold or segment_italic:
+            inline_styles += 1
+        _set_font(
+            selection,
+            font_name,
+            size,
+            bold or segment_bold,
+            italic=italic or segment_italic,
+            color=color,
+        )
+        _call(selection, "TypeText", segment["text"])
+    _call(selection, "TypeParagraph")
+    if applied_numbering:
+        _remove_numbering(selection)
+    return inline_styles
+
+
+def _read_markdown_file(markdown_path: str | None) -> tuple[str, str] | None:
+    normalized = _normalize_windows_path(markdown_path)
+    if not normalized:
+        return None
+    path = Path(normalized).expanduser().resolve(strict=False)
+    if not path.exists():
+        raise FileNotFoundError(f"Markdown file does not exist: {path}")
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return path.read_text(encoding=encoding), str(path)
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="replace"), str(path)
+
+
+def _first_markdown_heading(markdown_text: str) -> str | None:
+    for line in markdown_text.splitlines():
+        match = re.match(r"^\s{0,3}#{1,5}\s+(.+?)\s*#*\s*$", line)
+        if match:
+            return re.sub(r"[*_`]+", "", match.group(1)).strip() or None
+    return None
+
+
+def _render_markdown(
+    selection: Any,
+    markdown_text: str,
+    *,
+    body_font: str,
+    body_size: int,
+    font_color: int | None = None,
+    base_italic: bool = False,
+) -> dict[str, int]:
+    paragraph_count = 0
+    heading_count = 0
+    inline_style_count = 0
+    list_item_pattern = re.compile(r"^\s*(?:\d+[.)、]|[-*•])\s+(.+)$")
+
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            _call(selection, "TypeParagraph")
+            continue
+
+        heading = re.match(r"^\s{0,3}(#{1,5})\s+(.+?)\s*#*\s*$", raw_line)
+        if heading:
+            level = len(heading.group(1))
+            style = MARKDOWN_HEADING_STYLES.get(level, MARKDOWN_HEADING_STYLES[5])
+            inline_style_count += _type_rich_paragraph(
+                selection,
+                heading.group(2).strip(),
+                str(style["font"]),
+                body_size + int(style["size_add"]),
+                bold=True,
+                color=font_color,
+            )
+            heading_count += 1
+            paragraph_count += 1
+            continue
+
+        list_item = list_item_pattern.match(line)
+        if list_item:
+            inline_style_count += _type_rich_paragraph(
+                selection,
+                list_item.group(1).strip(),
+                body_font,
+                body_size,
+                italic=base_italic,
+                color=font_color,
+                first_line_indent=24,
+                numbered=True,
+            )
+        else:
+            inline_style_count += _type_rich_paragraph(
+                selection,
+                line,
+                body_font,
+                body_size,
+                italic=base_italic,
+                color=font_color,
+                first_line_indent=24,
+            )
+        paragraph_count += 1
+
+    return {
+        "paragraph_count": paragraph_count,
+        "heading_count": heading_count,
+        "inline_style_count": inline_style_count,
+    }
+
+
 def _insert_image(selection: Any, image_path: str | None) -> str | None:
     normalized = _normalize_windows_path(image_path)
     if not normalized:
@@ -363,6 +542,7 @@ def export_article_to_pdf(
     docx_path: str | None = None,
     pdf_path: str | None = None,
     file_name: str | None = None,
+    markdown_path: str | None = None,
     keep_open: bool = True,
     visible: bool = True,
     font_name: str | None = None,
@@ -374,12 +554,17 @@ def export_article_to_pdf(
 ) -> dict[str, Any]:
     """Create a WPS/Word document, apply basic article formatting, and export PDF."""
 
-    title_text = _clean_text(title) or "未命名文档"
+    markdown_data = _read_markdown_file(markdown_path)
+    markdown_text = markdown_data[0] if markdown_data else None
+    normalized_markdown_path = markdown_data[1] if markdown_data else None
+    markdown_title = _first_markdown_heading(markdown_text) if markdown_text else None
+
+    title_text = _clean_text(title) or markdown_title or "未命名文档"
     body_text = _clean_text(body)
-    if not body_text:
+    if not body_text and markdown_text is None:
         raise ValueError("WPS export requires article body content")
     body_font = _normalize_font_name(font_name) or "Microsoft YaHei"
-    body_size = _int_or_default(font_size, 12)
+    body_size = _int_or_default(font_size, 14)
     title_size = max(body_size + 6, 18)
     font_color_value = _font_color_value(font_color)
     italic_enabled = _is_italic(italic)
@@ -392,36 +577,63 @@ def export_article_to_pdf(
     doc = _active_document(app, app.Documents.Add())
     selection = app.Selection
 
-    _set_font(
-        selection,
-        body_font,
-        title_size,
-        True,
-        italic=italic_enabled,
-        color=font_color_value,
-    )
-    _set_paragraph(selection, alignment=1)
-    _type_paragraph(selection, title_text)
-
-    _set_font(
-        selection,
-        body_font,
-        body_size,
-        False,
-        italic=italic_enabled,
-        color=font_color_value,
-    )
-    _set_paragraph(selection, alignment=0, first_line_indent=24)
-
     paragraph_count = 0
-    list_item_pattern = re.compile(r"^\s*(?:\d+[.)、]|[-*•])\s*(.+)$")
-    for paragraph in _paragraphs(body_text):
-        match = list_item_pattern.match(paragraph)
-        if match:
-            _type_paragraph(selection, match.group(1).strip(), numbered=True)
-        else:
-            _type_paragraph(selection, paragraph)
-        paragraph_count += 1
+    heading_count = 0
+    inline_style_count = 0
+    if markdown_text is not None:
+        if _clean_text(title) and not markdown_title:
+            _type_rich_paragraph(
+                selection,
+                title_text,
+                str(MARKDOWN_HEADING_STYLES[1]["font"]),
+                body_size + int(MARKDOWN_HEADING_STYLES[1]["size_add"]),
+                bold=True,
+                color=font_color_value,
+                alignment=1,
+            )
+            paragraph_count += 1
+            heading_count += 1
+        markdown_result = _render_markdown(
+            selection,
+            markdown_text,
+            body_font=body_font,
+            body_size=body_size,
+            font_color=font_color_value,
+            base_italic=italic_enabled,
+        )
+        paragraph_count += markdown_result["paragraph_count"]
+        heading_count += markdown_result["heading_count"]
+        inline_style_count += markdown_result["inline_style_count"]
+    else:
+        _set_font(
+            selection,
+            body_font,
+            title_size,
+            True,
+            italic=italic_enabled,
+            color=font_color_value,
+        )
+        _set_paragraph(selection, alignment=1)
+        _type_paragraph(selection, title_text)
+
+        _set_font(
+            selection,
+            body_font,
+            body_size,
+            False,
+            italic=italic_enabled,
+            color=font_color_value,
+        )
+        _set_paragraph(selection, alignment=0, first_line_indent=24)
+
+        list_item_pattern = re.compile(r"^\s*(?:\d+[.)、]|[-*•])\s*(.+)$")
+        for paragraph in _paragraphs(body_text):
+            match = list_item_pattern.match(paragraph)
+            if match:
+                _type_paragraph(selection, match.group(1).strip(), numbered=True)
+            else:
+                _type_paragraph(selection, paragraph)
+            paragraph_count += 1
 
     inserted_image_path = _insert_image(selection, image_path)
 
@@ -444,10 +656,13 @@ def export_article_to_pdf(
         "docx_path": str(docx),
         "pdf_path": str(pdf),
         "paragraph_count": paragraph_count,
+        "heading_count": heading_count,
+        "inline_style_count": inline_style_count,
         "font_name": body_font,
         "font_size": body_size,
         "font_color": font_color_value,
         "italic": italic_enabled,
         "image_path": inserted_image_path,
+        "markdown_path": normalized_markdown_path,
         "keep_open": keep_open,
     }
