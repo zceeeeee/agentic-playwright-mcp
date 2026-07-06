@@ -89,6 +89,32 @@ def _domain_from_host(host: str) -> str | None:
     return parts[-2] if len(parts) >= 2 else parts[0]
 
 
+def _domain_from_task(task: str) -> str | None:
+    """Best-effort domain detection before running a GUI task."""
+    task_lower = task.lower()
+    aliases = {
+        "zhihu": ("知乎",),
+        "weibo": ("微博",),
+        "douyin": ("抖音",),
+        "xiaohongshu": ("小红书",),
+        "bilibili": ("B站", "b站", "哔哩哔哩", "哔哩", "bilibili"),
+    }
+
+    for domain, names in aliases.items():
+        if any(name in task for name in names):
+            return domain
+
+    for domain, host in _load_domain_hosts().items():
+        if domain.lower() in task_lower or host.lower() in task_lower:
+            return domain
+
+    match = re.search(r"https?://([^/\s，,]+)", task_lower)
+    if match:
+        host = match.group(1).split(":")[0]
+        return _domain_from_host(host)
+
+    return None
+
 
 SITE_LOGIN_COOKIES = {
     "zhihu": {"z_c0"},
