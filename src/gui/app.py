@@ -1345,7 +1345,11 @@ HTML_TEMPLATE = """
             if (authPollTimer) {
                 clearInterval(authPollTimer);
             }
-            authPollTimer = setInterval(checkCurrentAuthState, 3000);
+            // 首次检查延迟 5 秒，之后每 30 秒轮询一次（避免频繁弹窗和页面闪烁）
+            setTimeout(() => {
+                checkCurrentAuthState();
+                authPollTimer = setInterval(checkCurrentAuthState, 30000);
+            }, 5000);
         }
 
         function stopAuthPolling() {
