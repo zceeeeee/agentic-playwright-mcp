@@ -889,11 +889,18 @@ skills:
       - "在知乎发布一篇文章"
       - "知乎发文章 内容是 如何学习编程"
     params:
+      title:
+        type: title
+        required: true
+        description: "文章标题"
+        extract_patterns:
+          - "(?:标题|题目|title)\\s*(?:是|为|:|：)?\\s*['\"“‘]?(.+?)['\"”’]?(?=\\s*(?:内容|正文|文章内容|body|content)\\s*(?:是|为|:|：)?|$)"
       keyword:
         type: content
         required: true
         description: "文章内容"
         extract_patterns:
+          - "(?:内容|正文|文章内容|body|content)\\s*(?:是|为|:|：)?\\s*(.+)$"
           - "(?:在|到)?知乎(?:上)?(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
           - "(?:发布|发表|发|写)(?:文章|帖子|回答)?\\s*[:：]?\\s*(.+)$"
     confirm_before_run: true

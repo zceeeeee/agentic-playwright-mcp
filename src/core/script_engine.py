@@ -374,7 +374,7 @@ class ScriptEngine:
                     f"Load saved login for {domain} before continuing? [yes] [no]"
                 )
                 if str(answer or "").strip().lower() in {"yes", "y", "1", "true", "\u662f"}:
-                    bm.launch_with_domain(domain=domain)
+                    bm.apply_auth_to_current_context(domain=domain)
                     if _storage_state_logged_in(domain):
                         log(f"Loaded saved login for {domain}")
                         return True

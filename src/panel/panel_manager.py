@@ -71,6 +71,7 @@ class PanelManager:
         Returns:
             用户输入的数据字典，无数据时返回 None。
         """
+        self._ensure_page_injected(page)
         return page.evaluate(
             "window.__agentic_panel__ ? window.__agentic_panel__.data : null"
         )
@@ -125,6 +126,7 @@ class PanelManager:
         Returns:
             用户的回答（字符串）。
         """
+        self._ensure_page_injected(page)
         return page.evaluate(
             """(question) => {
                 if (!window.__agentic_panel__) return null;
@@ -132,6 +134,24 @@ class PanelManager:
             }""",
             question,
         )
+
+    def _ensure_page_injected(self, page: Page) -> None:
+        """Ensure the panel exists on the current page, including about:blank."""
+        try:
+            if self.is_injected(page):
+                return
+        except Exception as exc:
+            logger.debug("Panel injection check failed: %s", exc)
+
+        if not _INJECT_JS_PATH.exists():
+            logger.error("inject.js not found at %s", _INJECT_JS_PATH)
+            return
+
+        try:
+            page.add_script_tag(content=_INJECT_JS_PATH.read_text(encoding="utf-8"))
+            logger.debug("Panel injected into current page")
+        except Exception as exc:
+            logger.warning("Failed to inject panel into current page: %s", exc)
 
     def set_fields(self, page: Page, fields: list[dict[str, Any]]) -> None:
         """动态更新面板的表单字段。

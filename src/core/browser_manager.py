@@ -531,6 +531,30 @@ class BrowserManager:
         """当前加载的站点名。"""
         return self._current_domain
 
+    def apply_auth_to_current_context(self, domain: str) -> bool:
+        """Load saved auth cookies into the current context without opening a new page."""
+        if self._context is None:
+            logger.warning("Cannot apply auth: no active context")
+            return False
+
+        am = get_auth_manager()
+        auth_data = am.load_auth(domain)
+        if not auth_data:
+            logger.info("No auth found for domain=%s", domain)
+            return False
+
+        cookies = auth_data.get("cookies") or []
+        if cookies:
+            try:
+                self._context.add_cookies(cookies)
+            except Exception as exc:
+                logger.warning("Failed to apply cookies for domain=%s: %s", domain, exc)
+                return False
+
+        self._current_domain = domain
+        logger.info("Applied auth cookies to current context for domain=%s", domain)
+        return True
+
     def _inject_panel(self) -> None:
         """在当前 context 注入交互面板（内部方法）。"""
         if self._context is None:

@@ -529,23 +529,92 @@ class SkillRouter:
             if extracted.get(param_name, "-1") == "-1" and value and value != "-1":
                 extracted[param_name] = value
 
+        param_lines = []
         args_parts = []
         for param_name in skill.params:
             param_def = skill.params[param_name]
             raw_value = extracted.get(param_name, "-1")
-            if raw_value == "-1" and not param_def.get("required", False):
+            required = bool(param_def.get("required", False))
+            if raw_value == "-1" and not required:
                 continue
             if param_def.get("type") == "boolean" and str(raw_value).lower() in {"true", "false"}:
                 value = "True" if str(raw_value).lower() == "true" else "False"
             else:
                 value = json.dumps(raw_value, ensure_ascii=False)
+            safe_param_name = re.sub(r"\W", "_", param_name)
+            var_name = f"__param_{safe_param_name}"
+            prompt_label = param_def.get("description") or param_name
+            prompt_text = f"请确认技能「{skill.name}」的参数「{prompt_label}」。当前值：{raw_value}。如需修改请输入新值，直接回车则沿用当前值："
+            param_lines.append(
+                f"{var_name} = __agentic_confirm_required_param("
+                f"{json.dumps(param_name, ensure_ascii=False)}, "
+                f"{value}, "
+                f"{json.dumps(prompt_text, ensure_ascii=False)}, "
+                f"{required!r})"
+            )
             if param_def.get("positional", False):
-                args_parts.append(value)
+                args_parts.append(var_name)
             else:
-                args_parts.append(f"{param_name}={value}")
+                args_parts.append(f"{param_name}={var_name}")
 
         args_str = ", ".join(args_parts)
-        return f"{source_code}\n\n# 自动调用\nrun({args_str})"
+        pre_auth = self._build_pre_auth_script(skill)
+        helper = (
+            "\n\n# 自动补全缺失参数\n"
+            "def __agentic_is_missing_param(value):\n"
+            "    return value is None or str(value).strip() in {'', '-1', 'None', 'none', 'null'}\n\n"
+            "def __agentic_confirm_required_param(name, value, question, required):\n"
+            "    attempts = 0\n"
+            "    while required:\n"
+            "        attempts += 1\n"
+            "        answer = panel_prompt(question)\n"
+            "        answer = str(answer or '').strip()\n"
+            "        if answer:\n"
+            "            return answer\n"
+            "        if not __agentic_is_missing_param(value):\n"
+            "            return value\n"
+            "        if attempts >= 3:\n"
+            "            raise RuntimeError(f'缺少必填参数：{name}')\n"
+            "        question = f'参数「{name}」是必填项，请输入后再继续：'\n"
+            "    return value\n"
+        )
+        return (
+            f"{source_code}"
+            f"{helper}"
+            f"{pre_auth}"
+            f"{chr(10).join(param_lines)}\n\n"
+            f"# 自动调用\nrun({args_str})"
+        )
+
+    @staticmethod
+    def _build_pre_auth_script(skill: SkillRouterInfo) -> str:
+        """Build an optional auth prompt that runs before parameter prompts."""
+        marker = " ".join(
+            [
+                skill.id,
+                skill.platform,
+                skill.source_file,
+            ]
+        ).lower()
+
+        domain = ""
+        if "xiaohongshu" in marker or "xhs" in marker:
+            domain = "xiaohongshu"
+        elif "zhihu" in marker or "zhuanlan.zhihu" in marker:
+            domain = "zhihu"
+
+        if not domain:
+            return ""
+
+        return (
+            "\n\n# 自动登录确认先于参数确认\n"
+            "__agentic_sign_url = None\n"
+            "try:\n"
+            "    __agentic_sign_url = SIGN_URL\n"
+            "except Exception:\n"
+            "    pass\n"
+            f"ensure_auth({json.dumps(domain, ensure_ascii=False)}, __agentic_sign_url)\n"
+        )
 
     def _extract_params_with_llm(
         self,
@@ -899,7 +968,18 @@ class SkillRouter:
         keyword = keyword.strip()
 
         if not keyword:
-            return ""
+            keyword = "-1"
+            return (
+                f"{source_code}\n\n# 自动补全缺失关键词\n"
+                f"__param_keyword = {json.dumps(keyword, ensure_ascii=False)}\n"
+                "if __param_keyword is None or str(__param_keyword).strip() in {'', '-1', 'None', 'none', 'null'}:\n"
+                "    __answer = panel_prompt('没有提取到关键词，请输入要使用的关键词：')\n"
+                "    __answer = str(__answer or '').strip()\n"
+                "    if __answer:\n"
+                "        __param_keyword = __answer\n\n"
+                "# 自动调用\n"
+                "run(__param_keyword)"
+            )
 
         return (
             f"{source_code}\n\n# 自动调用\n"

@@ -14,8 +14,8 @@ def _js_string(value: str) -> str:
     return f'"{text}"'
 
 
-def run(keyword: str):
-    """Open Zhihu writer, fill title/body with keyword, and click publish."""
+def run(title: str, keyword: str):
+    """Open Zhihu writer, fill article title/body, and click publish."""
     if not ensure_auth("zhihu", SIGN_URL):
         log("Zhihu login state not confirmed; skip article publish")
         return
@@ -25,7 +25,7 @@ def run(keyword: str):
 
     fill(
         "textarea.Input.i7cW1UcwT6ThdhTakqFm",
-        keyword,
+        title,
         "textarea[placeholder*='100']",
     )
 
@@ -75,4 +75,4 @@ def run(keyword: str):
     click("button.Button--primary")
     wait(2)
 
-    log(f"Zhihu article publish clicked: {keyword}")
+    log(f"Zhihu article publish clicked: {title}")
