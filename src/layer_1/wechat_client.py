@@ -63,8 +63,10 @@ class PywinautoWechatAutomation:
         self._require_window()
         self.window.set_focus()
         self._send_keys("^f")
+        time.sleep(0.2)
+        self._send_keys("^a")
         self._paste_or_type(contact_name)
-        time.sleep(1.0)
+        time.sleep(1.2)
         self._click_contact_result(contact_name)
 
     def follow_current_account(self) -> bool:
@@ -136,15 +138,6 @@ class PywinautoWechatAutomation:
             candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
             return candidates[0][2]
 
-        if desktop is None:
-            return None
-        for pattern in (r".*微信.*", r".*WeChat.*"):
-            try:
-                window = desktop.window(title_re=pattern)
-                if window.exists(timeout=0.5):
-                    return window
-            except Exception:
-                continue
         return None
 
     @classmethod
@@ -170,13 +163,11 @@ class PywinautoWechatAutomation:
     @classmethod
     def _is_wechat_window(cls, window: Any, title_hint: str | None = None) -> bool:
         process_name = cls._window_process_name(window)
-        if process_name in WECHAT_PROCESS_NAMES:
-            return True
+        if process_name:
+            return process_name in WECHAT_PROCESS_NAMES
 
         title = cls._element_text(window)
-        if "微信" in title or "WeChat" in title:
-            return True
-        return bool(title_hint and title_hint in title)
+        return "微信" in title or "WeChat" in title
 
     @staticmethod
     def _window_process_name(window: Any) -> str:
@@ -301,12 +292,18 @@ class PywinautoWechatAutomation:
             target, fallback = self._find_contact_result(contact_name)
             if target is not None:
                 self._click_element_or_parent(target)
+                if self._wait_for_message_edit(timeout=2.0) is not None:
+                    return
+                self._send_keys("{ENTER}")
                 time.sleep(0.8)
                 return
             time.sleep(0.4)
 
         if fallback is not None:
             self._click_element_or_parent(fallback)
+            if self._wait_for_message_edit(timeout=2.0) is not None:
+                return
+            self._send_keys("{ENTER}")
             time.sleep(0.8)
             return
 
@@ -368,6 +365,8 @@ class PywinautoWechatAutomation:
         )
         fallback: Any | None = None
         for item in items:
+            if self._is_search_input(item):
+                continue
             title = self._element_text(item)
             if not title or not name_pattern.search(title):
                 continue
@@ -375,6 +374,8 @@ class PywinautoWechatAutomation:
             combined_by_container = [
                 (container, self._combined_text(container)) for container in containers
             ]
+            if any(self._looks_like_search_container(combined) for _, combined in combined_by_container):
+                continue
             if any(
                 name_pattern.search(combined)
                 and official_pattern.search(combined)
@@ -387,6 +388,15 @@ class PywinautoWechatAutomation:
                     return container, fallback
 
         return None, fallback
+
+    def _wait_for_message_edit(self, timeout: float) -> Any | None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            edit = self._find_message_edit()
+            if edit is not None:
+                return edit
+            time.sleep(0.2)
+        return None
 
     def _wait_for_text_target(
         self,
@@ -495,6 +505,35 @@ class PywinautoWechatAutomation:
             text = ""
         return str(text or "")
 
+    @staticmethod
+    def _element_control_type(item: Any) -> str:
+        try:
+            return str(item.element_info.control_type or "")
+        except Exception:
+            pass
+        try:
+            return str(item.friendly_class_name() or "")
+        except Exception:
+            return ""
+
+    def _is_search_input(self, item: Any) -> bool:
+        if self._element_control_type(item).lower() != "edit":
+            return False
+        combined = " ".join(
+            self._combined_text(container) for container in self._candidate_containers(item)
+        )
+        if self._looks_like_search_container(combined):
+            return True
+        try:
+            rect = item.rectangle()
+            return rect.height() <= 40
+        except Exception:
+            return False
+
+    @staticmethod
+    def _looks_like_search_container(text: str) -> bool:
+        return any(marker in text for marker in ("搜索", "Search", "search"))
+
     def _candidate_containers(self, item: Any, max_depth: int = 4) -> list[Any]:
         containers = [item]
         current = item
@@ -575,14 +614,32 @@ class PywinautoWechatAutomation:
 
     def _find_message_edit(self) -> Any | None:
         self._require_window()
+        candidates = []
         for window in self._windows_to_scan():
             try:
                 edits = window.descendants(control_type="Edit")
             except Exception:
                 continue
-            if edits:
-                self.window = window
-                return edits[-1]
+            for edit in edits:
+                if self._is_search_input(edit):
+                    continue
+                score = 0
+                try:
+                    rect = edit.rectangle()
+                    if rect.height() >= 60:
+                        score += 5
+                    if rect.width() >= 200:
+                        score += 2
+                except Exception:
+                    pass
+                text = self._combined_text(edit)
+                if any(marker in text for marker in ("输入", "发送", "Message", "message")):
+                    score += 2
+                candidates.append((score, window, edit))
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            self.window = candidates[0][1]
+            return candidates[0][2]
         return None
 
 

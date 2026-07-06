@@ -14,6 +14,7 @@ def _is_logged_in() -> bool:
         run_js(
             """() => {
                 const text = document.body ? document.body.innerText : "";
+                const needsLoginRecommendation = text.includes("登录后推荐更懂你的笔记");
                 const hasLoginText =
                     text.includes("登录") ||
                     text.includes("验证码") ||
@@ -33,7 +34,7 @@ def _is_logged_in() -> bool:
                     document.querySelector("a[href*='/explore/']") ||
                     document.querySelector("a[href*='/user/profile/']");
 
-                if (hasLoginInput || (hasLoginText && hasLoginButton && !hasContent)) {
+                if (needsLoginRecommendation || hasLoginInput || (hasLoginText && hasLoginButton && !hasContent)) {
                     return false;
                 }
                 return Boolean(hasSearchPage || hasContent);

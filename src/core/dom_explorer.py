@@ -291,6 +291,17 @@ def summarize_page(page: Any, max_elements: int = 30) -> DomPageSummary:
     return summary
 
 
+def summarize_page_aria(page: Any, max_elements: int = 50) -> dict:
+    """Return an ARIA-style Explore snapshot summary."""
+
+    from src.core.explore.models import ExploreConfig, SnapshotMode
+    from src.core.explore.snapshot import SnapshotGenerator
+
+    config = ExploreConfig(snapshot_max_elements=max_elements)
+    snapshot = SnapshotGenerator(config).snapshot(page, mode=SnapshotMode.COMPACT)
+    return snapshot.model_dump(mode="json")
+
+
 def _to_int(value: Any) -> int:
     try:
         return int(value or 0)

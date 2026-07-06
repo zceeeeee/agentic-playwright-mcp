@@ -22,6 +22,7 @@ Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -42,6 +43,17 @@ from src.core.event_bus import (
     get_event_bus,
 )
 from src.core.experience import ExperienceManager, get_experience_manager
+from src.core.explore.executor import ExploreExecutor
+from src.core.explore.experience import ExperienceManager as ExploreExperienceManager
+from src.core.explore.models import (
+    Action,
+    ActionBatch,
+    ElementInfo,
+    ExploreConfig,
+    ExploreExperience,
+    SnapshotMode,
+)
+from src.core.explore.snapshot import SnapshotGenerator
 from src.core.intent_parser import LLMIntentParser, get_llm_intent_parser
 from src.core.llm_utils import chat_json_with_retry
 from src.core.script_engine import get_script_engine
@@ -95,6 +107,7 @@ class AgentState(str, Enum):
     OBSERVE = "observe"  # DOM 摘要 + 分析页面
     PLAN = "plan"  # 决定下一步
     ACT = "act"  # 执行脚本
+    EXPLORE = "explore"  # ARIA 快照 + Explore 操作
     DONE = "done"  # 任务完成
     FAILED = "failed"  # 任务失败
 
@@ -110,6 +123,7 @@ class AgentStep:
 
     step_number: int
     state: AgentState
+    task: str = ""
     action: str = ""
     script: str = ""
     result: str = ""
@@ -117,6 +131,9 @@ class AgentStep:
     page_summary: str = ""
     error: str = ""
     timestamp: float = 0.0
+    mode: str = ""
+    actions: list[Action] = field(default_factory=list)
+    snapshot: Any | None = None
 
 
 @dataclass
@@ -171,6 +188,13 @@ class AgentLoop:
         self._experience: ExperienceManager | None = None
         self._llm_parser: LLMIntentParser | None = None
         self._task_splitter: TaskSplitter | None = None
+        self._snapshot_gen: SnapshotGenerator | None = None
+        self._explore_executor: ExploreExecutor | None = None
+        self._explore_experience_mgr: ExploreExperienceManager | None = None
+        self._explore_config: ExploreConfig | None = None
+        self._last_explore_snapshot = None
+        self._current_explore_snapshot = None
+        self._last_panel_answer: str | None = None
 
     def run(self, task: str) -> AgentTaskResult:
         """执行一个自然语言任务。
@@ -366,7 +390,12 @@ class AgentLoop:
         state = AgentState.OBSERVE
         step_number = 0
         pending_script: str | None = None  # PLAN 阶段生成的脚本，传递给 ACT
+        pending_actions: list[Action] | None = None
+        pending_mode: str = ""
         task_id = f"task_{int(time.time() * 1000)}"
+        self._last_panel_answer = None
+        self._last_explore_snapshot = None
+        self._current_explore_snapshot = None
 
         # 绑定任务级上下文，所有后续日志自动携带 task_id / task
         with bind_context(task_id=task_id, task=task):
@@ -408,6 +437,7 @@ class AgentLoop:
                     step = AgentStep(
                         step_number=step_number,
                         state=state,
+                        task=task,
                         timestamp=time.time(),
                     )
 
@@ -419,11 +449,21 @@ class AgentLoop:
                             # 将 PLAN 阶段生成的脚本传递给 ACT
                             if step.script:
                                 pending_script = step.script
+                            if step.actions:
+                                pending_actions = step.actions
+                                pending_mode = step.mode
+                        elif state == AgentState.EXPLORE:
+                            state = self._do_explore(step, task)
                         elif state == AgentState.ACT:
                             # 使用 PLAN 阶段生成的脚本
                             if pending_script:
                                 step.script = pending_script
                                 pending_script = None
+                            if pending_actions:
+                                step.actions = pending_actions
+                                step.mode = pending_mode
+                                pending_actions = None
+                                pending_mode = ""
                             state = self._do_act(step)
                     except Exception as exc:
                         step.success = False
@@ -515,6 +555,35 @@ class AgentLoop:
                 else None
             )
             self._task_splitter = get_task_splitter(llm_caller=llm_caller)
+
+        if self._explore_config is None:
+            self._explore_config = self._build_explore_config()
+
+        if self._snapshot_gen is None:
+            self._snapshot_gen = SnapshotGenerator(self._explore_config)
+
+        if self._explore_experience_mgr is None:
+            from src.config import get_config
+
+            storage_dir = get_config().get("EXPERIENCE_STORAGE_DIR")
+            self._explore_experience_mgr = ExploreExperienceManager(storage_dir)
+
+    @staticmethod
+    def _build_explore_config() -> ExploreConfig:
+        from src.config import get_config
+
+        cfg = get_config()
+        return ExploreConfig(
+            max_retries=int(cfg.get("EXPLORE_MAX_RETRIES", 3)),
+            action_timeout=int(cfg.get("EXPLORE_ACTION_TIMEOUT", 15000)),
+            snapshot_max_elements=int(cfg.get("EXPLORE_SNAPSHOT_MAX_ELEMENTS", 50)),
+            experience_upgrade_threshold=int(
+                cfg.get("EXPERIENCE_UPGRADE_THRESHOLD", 3)
+            ),
+            experience_confidence_threshold=float(
+                cfg.get("EXPERIENCE_CONFIDENCE_THRESHOLD", 0.8)
+            ),
+        )
 
     # -------------------------------------------------------------------
     # Event emission helpers
@@ -739,7 +808,35 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        # ── 3. 规则生成脚本 ──
+        # ── 3. Explore 经验复用 ──
+        experience = self._find_explore_experience(task, page_context.get("url", ""))
+        if experience and experience.confidence > 0.7:
+            remapped_actions = self._prepare_explore_experience_actions(experience)
+            if remapped_actions:
+                step.action = f"Reuse Explore experience: {experience.task}"
+                step.mode = "explore_reuse"
+                step.actions = remapped_actions
+                step.result = f"Reuse Explore experience: {experience.task}"
+                logger.info("PLAN: reusing Explore experience '%s'", experience.id)
+                self._bus.emit(
+                    Event(
+                        name=EVENT_AGENT_PLAN,
+                        phase=Phase.AFTER,
+                        data={
+                            "step_number": step.step_number,
+                            "source": "explore_experience",
+                            "experience_id": experience.id,
+                        },
+                        result=step.result,
+                    )
+                )
+                return AgentState.ACT
+            logger.info(
+                "PLAN: Explore experience '%s' could not be remapped",
+                experience.id,
+            )
+            experience = None
+        # ── 4. 规则生成脚本 ──
         script = self._generate_script(task, step.page_summary)
         if script:
             step.action = "生成临时脚本"
@@ -756,18 +853,26 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        # ── 4. 无法规划 ──
-        step.result = "无法规划行动"
-        logger.warning("PLAN: no action could be planned")
-        self._bus.emit(
-            Event(
-                name=EVENT_AGENT_PLAN,
-                phase=Phase.AFTER,
-                data={"step_number": step.step_number, "source": "none"},
-                result=step.result,
-            )
-        )
-        return AgentState.FAILED
+        # ── 5. Explore 模式 ──
+        if self._last_explore_snapshot is not None:
+            batch = self._plan_explore_actions(task)
+            self._last_explore_snapshot = None
+            if batch and batch.actions:
+                step.action = "执行 Explore 操作"
+                step.mode = "explore"
+                step.actions = batch.actions
+                step.result = f"Explore 生成操作: {len(batch.actions)} 个"
+                logger.info("PLAN: Explore generated %d actions", len(batch.actions))
+                return AgentState.ACT
+            step.result = "Explore 模式无法生成操作"
+            logger.warning("PLAN: Explore planner unavailable or returned no actions")
+            return AgentState.FAILED
+
+        step.action = "进入 Explore 模式"
+        step.mode = "explore"
+        step.result = "技能和规则未命中，进入 Explore 模式"
+        logger.info("PLAN: entering Explore mode")
+        return AgentState.EXPLORE
 
     def _generate_script(self, task: str, page_summary: str) -> str | None:
         """根据任务描述生成脚本。
@@ -775,6 +880,293 @@ class AgentLoop:
         使用 ScriptGenerator 进行意图解析和脚本生成。
         """
         return self._script_generator.generate(task, page_summary)
+
+    def _find_explore_experience(
+        self,
+        task: str,
+        url: str,
+    ) -> ExploreExperience | None:
+        if not self._explore_experience_mgr:
+            return None
+        site = self._extract_site(url)
+        if not site:
+            return None
+        return self._explore_experience_mgr.find_similar(task, site)
+
+    def _prepare_explore_experience_actions(
+        self,
+        experience: ExploreExperience,
+    ) -> list[Action] | None:
+        """Remap stored experience refs to the current page snapshot."""
+
+        if not experience.actions:
+            return None
+
+        page = get_browser_manager().get_page()
+        if self._snapshot_gen is None:
+            self._snapshot_gen = SnapshotGenerator(self._explore_config)
+        snapshot = self._snapshot_gen.snapshot(page, mode=SnapshotMode.COMPACT)
+        self._current_explore_snapshot = snapshot
+        self._ensure_explore_executor().update_snapshot(snapshot)
+
+        by_selector: dict[str, str] = {}
+        by_role_name: dict[tuple[str, str], str] = {}
+        for node in self._iter_snapshot_nodes(snapshot.nodes):
+            if not node.ref:
+                continue
+            if node.selector:
+                by_selector[node.selector] = node.ref
+            by_role_name[(node.role, node.name)] = node.ref
+
+        remapped: list[Action] = []
+        for stored in experience.actions:
+            action = Action.model_validate(stored.model_dump(mode="json"))
+            if not action.ref:
+                remapped.append(action)
+                continue
+
+            element = experience.element_map.get(action.ref)
+            new_ref = None
+            if element:
+                new_ref = by_selector.get(element.selector)
+                if not new_ref:
+                    new_ref = by_role_name.get((element.role, element.name))
+            if not new_ref:
+                return None
+
+            action.ref = new_ref
+            action.snapshot_v = snapshot.version
+            remapped.append(action)
+
+        return remapped
+
+    def _save_explore_experience(self, step: AgentStep) -> None:
+        """Persist a successful Explore action sequence for future reuse."""
+
+        if not self._explore_experience_mgr or not step.actions:
+            return
+        config = self._explore_config or ExploreConfig()
+        if len(step.actions) < config.experience_save_threshold:
+            return
+
+        page = get_browser_manager().get_page()
+        current_url = str(getattr(page, "url", "") or "")
+        site = self._extract_site(current_url)
+        if not site:
+            return
+
+        snapshot = self._current_explore_snapshot
+        if snapshot is None:
+            return
+
+        selector_map = self._ensure_explore_executor().get_ref_locator_mapping()
+        snapshot_nodes = {
+            node.ref: node for node in self._iter_snapshot_nodes(snapshot.nodes) if node.ref
+        }
+
+        element_map: dict[str, ElementInfo] = {}
+        for action in step.actions:
+            if not action.ref:
+                continue
+            node = snapshot_nodes.get(action.ref)
+            selector = selector_map.get(action.ref) or (node.selector if node else "")
+            if not selector:
+                continue
+            element_map[action.ref] = ElementInfo(
+                selector=selector,
+                role=node.role if node else "",
+                name=node.name if node else "",
+                tag=node.tag or "" if node else "",
+            )
+
+        if not element_map:
+            return
+
+        persisted_actions = []
+        for action in step.actions:
+            cloned = Action.model_validate(action.model_dump(mode="json"))
+            cloned.snapshot_v = None
+            persisted_actions.append(cloned)
+
+        task = step.task or step.action or "explore task"
+        payload = {
+            "task": task,
+            "site": site,
+            "actions": [a.model_dump(mode="json") for a in persisted_actions],
+        }
+        digest = hashlib.sha1(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:12]
+        experience = ExploreExperience(
+            id=f"explore_{site}_{digest}",
+            task=task,
+            site=site,
+            url_pattern=self._url_pattern(current_url),
+            actions=persisted_actions,
+            action_count=len(persisted_actions),
+            element_map=element_map,
+            snapshot_roles=[node.role for node in self._iter_snapshot_nodes(snapshot.nodes)],
+            snapshot_names=[
+                node.name for node in self._iter_snapshot_nodes(snapshot.nodes) if node.name
+            ],
+        )
+        self._explore_experience_mgr.save(experience)
+
+    def _iter_snapshot_nodes(self, nodes: list[Any]):
+        for node in nodes:
+            yield node
+            yield from self._iter_snapshot_nodes(node.children)
+
+    @staticmethod
+    def _url_pattern(url: str) -> str:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.hostname:
+            return f"{parsed.scheme}://{parsed.hostname}/*"
+        return url
+
+    def _ensure_explore_executor(self) -> ExploreExecutor:
+        page = get_browser_manager().get_page()
+        if self._snapshot_gen is None:
+            self._snapshot_gen = SnapshotGenerator(self._explore_config)
+        if (
+            self._explore_executor is None
+            or getattr(self._explore_executor, "_page", None) is not page
+        ):
+            self._explore_executor = ExploreExecutor(
+                page,
+                self._snapshot_gen,
+                self._explore_config,
+            )
+        return self._explore_executor
+
+    def _do_explore(self, step: AgentStep, task: str) -> AgentState:
+        """Generate an ARIA snapshot for Explore planning."""
+
+        page = get_browser_manager().get_page()
+        if self._snapshot_gen is None:
+            self._snapshot_gen = SnapshotGenerator(self._explore_config)
+        snapshot = self._snapshot_gen.snapshot(page, mode=SnapshotMode.COMPACT)
+        step.snapshot = snapshot
+        self._last_explore_snapshot = snapshot
+        self._current_explore_snapshot = snapshot
+        step.page_summary = json.dumps(snapshot.model_dump(mode="json"), ensure_ascii=False)
+        step.result = (
+            f"Explore 快照: {snapshot.version} "
+            f"(可交互元素 {snapshot.interactive_count} 个)"
+        )
+        self._ensure_explore_executor().update_snapshot(snapshot)
+        return AgentState.PLAN
+
+    def _plan_explore_actions(self, task: str) -> ActionBatch | None:
+        if not self._llm_parser or not self._llm_parser.available:
+            return None
+        if self._last_explore_snapshot is None:
+            return None
+
+        snapshot = self._last_explore_snapshot
+        schema = {
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": [
+                                    "click",
+                                    "fill",
+                                    "hover",
+                                    "select",
+                                    "check",
+                                    "uncheck",
+                                    "goto",
+                                    "back",
+                                    "forward",
+                                    "scroll",
+                                    "wait",
+                                    "screenshot",
+                                    "panel_show",
+                                    "panel_prompt",
+                                    "panel_set_fields",
+                                    "panel_log",
+                                ],
+                            },
+                            "ref": {"type": ["string", "null"]},
+                            "value": {"type": ["string", "null"]},
+                            "url": {"type": ["string", "null"]},
+                            "direction": {"type": ["string", "null"]},
+                            "amount": {"type": ["integer", "null"]},
+                            "condition": {
+                                "type": ["string", "null"],
+                                "enum": [
+                                    "none",
+                                    "load",
+                                    "networkidle",
+                                    "selector_visible",
+                                    "text_visible",
+                                    None,
+                                ],
+                            },
+                            "timeout": {"type": ["integer", "null"]},
+                            "title": {"type": ["string", "null"]},
+                            "fields": {
+                                "type": ["array", "null"],
+                                "items": {"type": "object"},
+                            },
+                            "snapshot_v": {"type": ["string", "null"]},
+                        },
+                        "required": ["action"],
+                    },
+                }
+            },
+            "required": ["actions"],
+        }
+        prompt = (
+            "你是 Explore 模式浏览器操作规划器。根据用户任务和 ARIA 快照，"
+            "输出一个短的原子操作数组。\n\n"
+            f"用户任务: {task}\n\n"
+            f"当前快照版本: {snapshot.version}\n"
+            f"ARIA 快照:\n{json.dumps(snapshot.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+            "规则:\n"
+            "1. 优先使用快照中的 ref 操作元素。\n"
+            "2. click/fill/select/check/uncheck/hover 必须填写 ref。\n"
+            "3. fill/select 必须填写 value。\n"
+            "4. 会导致页面跳转的最后一步请加 condition=load 或 networkidle。\n"
+            "5. 每个使用 ref 的动作都填写 snapshot_v 为当前快照版本。\n"
+            "6. 不要编造快照里不存在的 ref。"
+        )
+        if self._last_panel_answer:
+            prompt += f"\n\n上一次面板回答: {self._last_panel_answer}"
+        prompt += (
+            "\n\n面板规则:\n"
+            "- 遇到登录、验证码、人机验证、缺少必要信息或不确定下一步时，"
+            "可以使用 panel_show/panel_set_fields/panel_prompt/panel_log 打开浏览器内置面板询问用户。\n"
+            "- panel_prompt 的 value 是问题文本，可用 [选项] [选项] 提供快捷选择；"
+            "如果需要用户先回答，panel_prompt 应作为本批次最后一步。\n"
+            "- panel_set_fields 的 fields 是字段数组，字段支持 name/label/type/placeholder/options。"
+        )
+        try:
+            data = chat_json_with_retry(
+                self._llm_parser._client,
+                prompt,
+                system_prompt="只返回 Explore ActionBatch JSON，不要输出解释。",
+                schema=schema,
+                temperature=0,
+                max_tokens=1024,
+            )
+            batch = ActionBatch.model_validate(data)
+        except Exception as exc:
+            logger.warning("Explore planner failed: %s", exc)
+            return None
+
+        for action in batch.actions:
+            if action.ref and not action.snapshot_v:
+                action.snapshot_v = snapshot.version
+        return batch
 
     @staticmethod
     def _extract_login_credentials(task: str) -> tuple[str | None, str | None]:
@@ -1521,6 +1913,14 @@ class AgentLoop:
                     f"4. 只返回修改后的完整 Python 脚本，不要其他文字"
                 )
 
+                modify_prompt += (
+                    "\n5. 可使用浏览器内置面板函数与用户交互："
+                    "panel_show(), panel_set_title(text), panel_log(message), "
+                    "panel_set_fields(fields), panel_prompt(question), panel_read(), panel_read_events()。\n"
+                    "6. 遇到登录、验证码、人机验证、缺少必要信息、或者无法可靠判断下一步时，"
+                    "优先调用 panel_show/panel_prompt 或 panel_set_fields 询问用户，"
+                    "不要静默失败。panel_prompt 的问题可以包含 [选项] [选项] 生成快捷选择。\n"
+                )
                 script = self._llm_parser._call_llm(modify_prompt).strip()
 
                 # 去掉可能的代码块标记
@@ -1561,6 +1961,9 @@ class AgentLoop:
 
     def _do_act(self, step: AgentStep) -> AgentState:
         """执行脚本。"""
+        if step.mode in {"explore", "explore_reuse"} or step.actions:
+            return self._do_explore_act(step)
+
         if not step.script:
             step.result = "无脚本可执行"
             logger.warning("ACT: no script to execute for step %d", step.step_number)
@@ -1655,6 +2058,31 @@ class AgentLoop:
                 return self._try_heal(step)
 
             return AgentState.FAILED
+
+    def _do_explore_act(self, step: AgentStep) -> AgentState:
+        """Execute Explore actions."""
+
+        if not step.actions:
+            step.result = "无 Explore 操作指令"
+            return AgentState.FAILED
+
+        executor = self._ensure_explore_executor()
+        result = executor.execute(ActionBatch(actions=step.actions))
+        if result.success:
+            step.success = True
+            step.result = f"Explore 执行成功: {result.status}"
+            for action_result in result.results:
+                if action_result.action == "panel_prompt" and action_result.value is not None:
+                    self._last_panel_answer = action_result.value
+            if result.need_snapshot:
+                return AgentState.EXPLORE
+            self._save_explore_experience(step)
+            return AgentState.DONE
+
+        step.success = False
+        step.error = result.error or "Explore 执行失败"
+        step.result = f"Explore 执行失败: {step.error[:100]}"
+        return AgentState.FAILED
 
     def _try_heal(self, step: AgentStep) -> AgentState:
         """尝试自愈：用视觉 fallback 重试。"""

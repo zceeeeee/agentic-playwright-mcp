@@ -55,6 +55,7 @@ def _detect_login_state(run_js_fn):
         """
 (() => {
   const PHONE_LOGIN_TEXT = '\\u624b\\u673a\\u53f7\\u767b\\u5f55';
+  const LOGIN_REQUIRED_TEXT = '\\u767b\\u5f55\\u540e\\u63a8\\u8350\\u66f4\\u61c2\\u4f60\\u7684\\u7b14\\u8bb0';
   const visible = (el) => {
     const style = window.getComputedStyle(el);
     return style && style.visibility !== 'hidden' && style.display !== 'none' &&
@@ -63,11 +64,15 @@ def _detect_login_state(run_js_fn):
   const compactText = (el) => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, '');
   const phoneLogin = Array.from(document.querySelectorAll('body,button,[role="button"],a,div,span,p'))
     .some((el) => visible(el) && compactText(el).includes(PHONE_LOGIN_TEXT));
+  const loginRequiredPrompt = Array.from(document.querySelectorAll('body,button,[role="button"],a,div,span,p'))
+    .some((el) => visible(el) && compactText(el).includes(LOGIN_REQUIRED_TEXT));
+  const requiresLogin = phoneLogin || loginRequiredPrompt;
   return {
     success: true,
-    logged_in: !phoneLogin,
+    logged_in: !requiresLogin,
     phone_login: phoneLogin,
     has_phone_login_text: phoneLogin,
+    login_required_prompt: loginRequiredPrompt,
     url: location.href
   };
 })()
@@ -313,7 +318,7 @@ def run(
 
         login_state = _detect_login_state(run_js_fn)
         steps.append({"step": "detect_login_state", "result": login_state})
-        if login_state.get("phone_login"):
+        if not login_state.get("logged_in"):
             log_fn("Please complete Xiaohongshu login in the browser before commenting.")
             wait_result = _wait_for_login_completion(
                 run_js_fn,
@@ -333,6 +338,26 @@ def run(
 
         steps.append({"step": "navigate_note", "result": goto_fn(url)})
         steps.append({"step": "wait_after_note_navigation", "result": _safe_call(wait_fn, "", 2)})
+
+        note_login_state = _detect_login_state(run_js_fn)
+        steps.append({"step": "detect_note_login_state", "result": note_login_state})
+        if not note_login_state.get("logged_in"):
+            log_fn("Please complete Xiaohongshu login in the browser before commenting.")
+            wait_result = _wait_for_login_completion(
+                run_js_fn,
+                wait_fn,
+                steps,
+                max_wait_seconds=max_wait_seconds,
+                interval_seconds=2,
+            )
+            steps.append({"step": "manual_login_completion_after_note_navigation", "result": wait_result})
+            if not wait_result.get("success"):
+                return {
+                    "success": False,
+                    "requires_manual_login": True,
+                    "error": "Please complete Xiaohongshu login before commenting",
+                    "steps": steps,
+                }
 
         find_result = _retry(
             "find_comment_input",

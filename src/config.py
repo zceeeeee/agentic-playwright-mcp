@@ -34,6 +34,12 @@ _DEFAULTS: dict[str, str] = {
     "LOG_FORMAT": "text",
     "OPENAI_BASE_URL": "https://api.openai.com/v1",
     "OPENAI_MODEL": "gpt-4o-mini",
+    "EXPLORE_MAX_RETRIES": "3",
+    "EXPLORE_ACTION_TIMEOUT": "15000",
+    "EXPLORE_SNAPSHOT_MAX_ELEMENTS": "50",
+    "EXPERIENCE_STORAGE_DIR": str(_PROJECT_ROOT / "data" / "explore_experiences"),
+    "EXPERIENCE_UPGRADE_THRESHOLD": "3",
+    "EXPERIENCE_CONFIDENCE_THRESHOLD": "0.8",
 }
 
 

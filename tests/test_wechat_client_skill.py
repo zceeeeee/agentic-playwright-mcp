@@ -46,11 +46,15 @@ class FakeWechatAutomation:
 
 
 class FakeRect:
+    def __init__(self, width: int = 160, height: int = 36) -> None:
+        self._width = width
+        self._height = height
+
     def width(self) -> int:
-        return 160
+        return self._width
 
     def height(self) -> int:
-        return 36
+        return self._height
 
 
 class FakeUiElement:
@@ -59,9 +63,15 @@ class FakeUiElement:
         text: str = "",
         children: list["FakeUiElement"] | None = None,
         process_name: str = "",
+        control_type: str = "",
+        width: int = 160,
+        height: int = 36,
     ) -> None:
         self.text = text
         self.process_name = process_name
+        self.control_type = control_type
+        self.width = width
+        self.height = height
         self.children = children or []
         self.parent_node: FakeUiElement | None = None
         self.clicked = False
@@ -74,7 +84,8 @@ class FakeUiElement:
     def descendants(self, control_type=None):
         result = []
         for child in self.children:
-            result.append(child)
+            if control_type is None or child.control_type == control_type:
+                result.append(child)
             result.extend(child.descendants(control_type=control_type))
         return result
 
@@ -82,10 +93,13 @@ class FakeUiElement:
         return self.parent_node
 
     def rectangle(self):
-        return FakeRect()
+        return FakeRect(self.width, self.height)
 
     def click_input(self) -> None:
         self.clicked = True
+
+    def friendly_class_name(self) -> str:
+        return self.control_type
 
 
 class FakeDesktop:
@@ -94,6 +108,25 @@ class FakeDesktop:
 
     def windows(self):
         return self._windows
+
+
+def test_wechat_window_selection_ignores_browser_title_with_wechat_text():
+    browser = FakeUiElement("微信网页版 - Chrome", process_name="chrome.exe")
+    wechat = FakeUiElement("微信", process_name="WeChat.exe")
+    desktop = FakeDesktop([browser, wechat])
+
+    selected = PywinautoWechatAutomation._find_window(desktop)
+
+    assert selected is wechat
+
+
+def test_wechat_window_selection_returns_none_for_browser_only():
+    browser = FakeUiElement("微信网页版 - Chrome", process_name="chrome.exe")
+    desktop = FakeDesktop([browser])
+
+    selected = PywinautoWechatAutomation._find_window(desktop)
+
+    assert selected is None
 
 
 def test_follow_official_account_searches_service_account_and_follows():
@@ -135,6 +168,54 @@ def test_wechat_clicks_contact_row_and_avoids_official_account_result():
 
     assert contact_row.clicked is True
     assert official_row.clicked is False
+
+
+def test_wechat_contact_search_does_not_click_search_input():
+    search_input = FakeUiElement(
+        "文件传输助手",
+        control_type="Edit",
+        width=180,
+        height=28,
+    )
+    search_container = FakeUiElement("搜索", [search_input])
+    contact_row = FakeUiElement("", [FakeUiElement("文件传输助手")])
+    window = FakeUiElement("", [search_container, contact_row])
+    automation = PywinautoWechatAutomation()
+    automation.window = window
+
+    automation._click_contact_result("文件传输助手")
+
+    assert search_input.clicked is False
+    assert search_container.clicked is False
+    assert contact_row.clicked is True
+
+
+def test_wechat_send_message_uses_chat_input_not_search_input():
+    search_input = FakeUiElement(
+        "文件传输助手",
+        control_type="Edit",
+        width=180,
+        height=28,
+    )
+    search_container = FakeUiElement("搜索", [search_input])
+    message_edit = FakeUiElement(
+        "",
+        control_type="Edit",
+        width=420,
+        height=90,
+    )
+    window = FakeUiElement("", [search_container, message_edit])
+    automation = PywinautoWechatAutomation()
+    automation.window = window
+    sent_keys: list[str] = []
+    automation._paste_or_type = lambda text: sent_keys.append(text)
+    automation._send_keys = lambda keys: sent_keys.append(keys)
+
+    automation.send_message("你好")
+
+    assert search_input.clicked is False
+    assert message_edit.clicked is True
+    assert sent_keys == ["你好", "{ENTER}"]
 
 
 def test_wechat_switches_to_app_ex_window_after_clicking_service_account_result():
