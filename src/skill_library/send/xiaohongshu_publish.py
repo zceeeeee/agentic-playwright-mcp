@@ -144,6 +144,7 @@ def _detect_login_state(run_js_fn):
         """
 (() => {
   const PHONE_LOGIN_TEXT = '\\u624b\\u673a\\u53f7\\u767b\\u5f55';
+  const LOGIN_REQUIRED_TEXT = '\\u767b\\u5f55\\u540e\\u63a8\\u8350\\u66f4\\u61c2\\u4f60\\u7684\\u7b14\\u8bb0';
   const visible = (el) => {
     const style = window.getComputedStyle(el);
     return style && style.visibility !== 'hidden' && style.display !== 'none' &&
@@ -163,23 +164,48 @@ def _detect_login_state(run_js_fn):
   const denied = (text) => /(\\u9a8c\\u8bc1\\u7801|code|\\u5bc6\\u7801|password|\\u641c\\u7d22|search)/i.test(text);
   const hasPhoneLoginText = Array.from(document.querySelectorAll('body,button,[role="button"],a,div,span,p'))
     .some((el) => visible(el) && compactText(el).includes(PHONE_LOGIN_TEXT));
+  const loginRequiredPrompt = Array.from(document.querySelectorAll('body,button,[role="button"],a,div,span,p'))
+    .some((el) => visible(el) && compactText(el).includes(LOGIN_REQUIRED_TEXT));
   const hasPhoneInput = Array.from(document.querySelectorAll('input')).some((el) => {
     const text = labelOf(el);
     return visible(el) && /(\\u624b\\u673a|\\u624b\\u673a\\u53f7|phone|mobile|tel)/i.test(text) &&
       !denied(text);
   });
   const phoneLogin = hasPhoneLoginText || hasPhoneInput;
+  const requiresLogin = phoneLogin || loginRequiredPrompt;
   return {
     success: true,
-    logged_in: !phoneLogin,
+    logged_in: !requiresLogin,
     phone_login: phoneLogin,
     has_phone_login_text: hasPhoneLoginText,
     has_phone_input: hasPhoneInput,
+    login_required_prompt: loginRequiredPrompt,
     url: location.href
   };
 })()
 """,
     )
+
+
+def _wait_for_login_state_completion(run_js_fn, wait_fn, steps, max_wait_seconds, interval_seconds):
+    attempts = max(1, int(max_wait_seconds / interval_seconds) + 1)
+    for attempt in range(1, attempts + 1):
+        state = _detect_login_state(run_js_fn)
+        steps.append({"step": f"wait_login_state_attempt_{attempt}", "result": state})
+        if state.get("logged_in"):
+            return {"success": True, "attempts": attempt, "state": state}
+        if attempt < attempts:
+            steps.append(
+                {
+                    "step": f"wait_before_login_state_attempt_{attempt + 1}",
+                    "result": _safe_call(wait_fn, "", interval_seconds),
+                }
+            )
+    return {
+        "success": False,
+        "requires_manual_login": True,
+        "error": "Timed out waiting for Xiaohongshu login completion",
+    }
 
 
 def _fill_phone(run_js_fn, phone_number):
@@ -2028,7 +2054,7 @@ def run(
 
         phone = None
         if not login_state.get("logged_in"):
-            if phone_number:
+            if phone_number and login_state.get("phone_login"):
                 phone = _normalize_phone_number(phone_number)
 
                 fill_result = _fill_phone(run_js_fn, phone)
@@ -2074,6 +2100,8 @@ def run(
                         "error": "Please complete Xiaohongshu login before publishing",
                         "steps": steps,
                     }
+            else:
+                log_fn("Please complete Xiaohongshu login in the browser before publishing.")
 
         me_result = _wait_for_me_button(
             run_js_fn,
@@ -2093,6 +2121,28 @@ def run(
 
         steps.append({"step": "navigate_publish_editor", "result": goto_fn(publish_url)})
         steps.append({"step": "wait_after_publish_navigation", "result": _safe_call(wait_fn, "", 2)})
+
+        publish_login_state = _detect_login_state(run_js_fn)
+        steps.append({"step": "detect_publish_login_state", "result": publish_login_state})
+        if publish_login_state.get("login_required_prompt"):
+            log_fn("Please complete Xiaohongshu login in the browser before publishing.")
+            wait_result = _wait_for_login_state_completion(
+                run_js_fn,
+                wait_fn,
+                steps,
+                max_wait_seconds=max_wait_seconds,
+                interval_seconds=2,
+            )
+            steps.append({"step": "manual_login_completion_after_publish_navigation", "result": wait_result})
+            if not wait_result.get("success"):
+                return {
+                    "success": False,
+                    "requires_manual_login": True,
+                    "error": "Please complete Xiaohongshu login before publishing",
+                    "steps": steps,
+                }
+            steps.append({"step": "renavigate_publish_editor_after_login", "result": goto_fn(publish_url)})
+            steps.append({"step": "wait_after_publish_renavigation", "result": _safe_call(wait_fn, "", 2)})
 
         if requested_mode == "article":
             # Article mode: click "新的创作", fill title and content
