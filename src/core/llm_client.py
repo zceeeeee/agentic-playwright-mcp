@@ -242,22 +242,10 @@ class LLMClient:
             message = data["choices"][0]["message"]
             content_text = message.get("content") or ""
             reasoning_text = message.get("reasoning_content") or ""
-            # MiMo reasoning model may swap content/reasoning_content.
-            # Try to return the field that contains the actual answer.
-            for candidate in (content_text, reasoning_text):
-                stripped = candidate.strip()
-                if not stripped:
-                    continue
-                # Quick check: if it starts with { or [, it's likely JSON
-                if stripped[0] in ('{', '['):
-                    return candidate
-                # Check if it contains a JSON object
-                if '{"' in stripped or '["' in stripped:
-                    return candidate
-                # Plain text answer (not chain-of-thought reasoning)
-                if len(stripped) < 500 and not stripped.startswith(('首先', 'First', 'Let me', '我需要', '用户', 'The user')):
-                    return candidate
-            # Fallback: return content, then reasoning
+            # Prefer content. If it contains JSON, use it directly.
+            # If content is empty, try reasoning_content.
+            # The caller (chat_json / chat_json_with_retry) handles
+            # extracting JSON from mixed reasoning+JSON text.
             return content_text or reasoning_text
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
@@ -323,16 +311,20 @@ class LLMClient:
 
     @staticmethod
     def _parse_json(raw: str) -> Dict[str, Any]:
-        """从 LLM 回复中提取 JSON。"""
+        """从 LLM 回复中提取 JSON。
+
+        Handles responses that contain chain-of-thought reasoning mixed
+        with a JSON object (common with reasoning models like MiMo).
+        """
         text = raw.strip()
 
-        # 尝试直接解析
+        # 1. Try direct parse
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        # 尝试提取 ```json ``` 块
+        # 2. Try extracting ```json ``` block
         if "```" in text:
             start = text.find("{")
             end = text.rfind("}") + 1
@@ -342,7 +334,23 @@ class LLMClient:
                 except json.JSONDecodeError:
                     pass
 
-        # 尝试提取第一个 { ... } 块
+        # 3. Try extracting the LAST complete { ... } block
+        #    (reasoning models often put reasoning first, JSON last)
+        last_start = text.rfind("{")
+        if last_start != -1:
+            depth = 0
+            for i in range(last_start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(text[last_start : i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+        # 4. Try extracting the FIRST complete { ... } block
         start = text.find("{")
         if start != -1:
             depth = 0
@@ -350,6 +358,21 @@ class LLMClient:
                 if text[i] == "{":
                     depth += 1
                 elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(text[start : i + 1])
+                        except json.JSONDecodeError:
+                            break
+
+        # 5. Try array format [ ... ]
+        start = text.find("[")
+        if start != -1:
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == "[":
+                    depth += 1
+                elif text[i] == "]":
                     depth -= 1
                     if depth == 0:
                         try:
