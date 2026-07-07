@@ -277,6 +277,7 @@ class LLMClient:
             "max_tokens": max_tokens,
             "messages": messages,
             "response_format": {"type": "json_object"},
+            "chat_template_kwargs": {"enable_thinking": False},
         }
 
         headers = {
