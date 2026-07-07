@@ -8,6 +8,7 @@ from src.core.script_engine import ScriptEngine
 from src.core.skill_router import SkillRouter
 from src.layer_1.wechat_client import (
     PywinautoWechatAutomation,
+    WeChatWindowManager,
     follow_official_account,
     send_contact_message,
     send_official_account_message,
@@ -46,9 +47,17 @@ class FakeWechatAutomation:
 
 
 class FakeRect:
-    def __init__(self, width: int = 160, height: int = 36) -> None:
+    def __init__(
+        self,
+        width: int = 160,
+        height: int = 36,
+        left: int = 10,
+        top: int = 20,
+    ) -> None:
         self._width = width
         self._height = height
+        self.left = left
+        self.top = top
 
     def width(self) -> int:
         return self._width
@@ -75,6 +84,9 @@ class FakeUiElement:
         self.children = children or []
         self.parent_node: FakeUiElement | None = None
         self.clicked = False
+        self.focused = False
+        self.moved_to: tuple[int, int, int, int] | None = None
+        self.click_coords = None
         for child in self.children:
             child.parent_node = self
 
@@ -95,8 +107,18 @@ class FakeUiElement:
     def rectangle(self):
         return FakeRect(self.width, self.height)
 
-    def click_input(self) -> None:
+    def click_input(self, coords=None) -> None:
         self.clicked = True
+        self.click_coords = coords
+
+    def set_focus(self) -> None:
+        self.focused = True
+
+    def restore(self) -> None:
+        pass
+
+    def move_window(self, x, y, width, height, repaint=True) -> None:
+        self.moved_to = (x, y, width, height)
 
     def friendly_class_name(self) -> str:
         return self.control_type
@@ -127,6 +149,17 @@ def test_wechat_window_selection_returns_none_for_browser_only():
     selected = PywinautoWechatAutomation._find_window(desktop)
 
     assert selected is None
+
+
+def test_wechat_window_manager_normalizes_window_size():
+    win = FakeUiElement("微信", process_name="WeChat.exe")
+    manager = WeChatWindowManager(FakeDesktop([win]))
+
+    result = manager.normalize(win)
+
+    assert result is win
+    assert win.focused is True
+    assert win.moved_to == (80, 60, 1200, 820)
 
 
 def test_follow_official_account_searches_service_account_and_follows():
@@ -210,6 +243,7 @@ def test_wechat_send_message_uses_chat_input_not_search_input():
     sent_keys: list[str] = []
     automation._paste_or_type = lambda text: sent_keys.append(text)
     automation._send_keys = lambda keys: sent_keys.append(keys)
+    automation._click_relative = lambda win, _rx, _ry: setattr(win, "clicked", True)
 
     automation.send_message("你好")
 
@@ -235,6 +269,25 @@ def test_wechat_switches_to_app_ex_window_after_clicking_service_account_result(
     assert follow_parent.clicked is True
 
 
+def test_wechat_prefers_new_appex_window_after_click():
+    row = FakeUiElement("", [FakeUiElement("火眼审阅"), FakeUiElement("服务号")])
+    main_window = FakeUiElement("微信", [row], process_name="WeChat.exe")
+    old_window = FakeUiElement("旧公众号", process_name="WeChatAppEx.exe")
+    new_window = FakeUiElement("火眼审阅", process_name="WeChatAppEx.exe")
+    automation = PywinautoWechatAutomation()
+    automation.window = main_window
+    automation.desktop = FakeDesktop([main_window, old_window, new_window])
+    automation.window_manager = WeChatWindowManager(automation.desktop)
+    before = {
+        PywinautoWechatAutomation._window_handle(main_window),
+        PywinautoWechatAutomation._window_handle(old_window),
+    }
+
+    automation._click_service_account_result("火眼审阅", before_handles=before)
+
+    assert automation.window is new_window
+
+
 def test_wechat_follow_clicks_parent_for_text_only_follow_control():
     follow_parent = FakeUiElement("", [FakeUiElement("关注")])
     window = FakeUiElement("", [follow_parent])
@@ -243,6 +296,21 @@ def test_wechat_follow_clicks_parent_for_text_only_follow_control():
 
     assert automation.follow_current_account() is True
     assert follow_parent.clicked is True
+
+
+def test_wechat_send_message_uses_relative_input_fallback():
+    window = FakeUiElement("微信", process_name="WeChat.exe", width=1000, height=800)
+    automation = PywinautoWechatAutomation()
+    automation.window = window
+    sent_keys: list[str] = []
+    automation._paste_or_type = lambda text: sent_keys.append(text)
+    automation._send_keys = lambda keys: sent_keys.append(keys)
+    automation._click_relative = lambda win, _rx, _ry: setattr(win, "clicked", True)
+
+    automation.send_message("你好")
+
+    assert sent_keys == ["你好", "{ENTER}"]
+    assert window.clicked is True
 
 
 def test_send_official_account_message_searches_and_sends():
@@ -259,6 +327,7 @@ def test_send_official_account_message_searches_and_sends():
     assert fake.calls == [
         ("open", None),
         ("search", "火眼审阅"),
+        ("follow", None),
         ("send", "你好呀"),
     ]
 
@@ -417,7 +486,8 @@ def test_router_routes_wechat_follow_official_account():
 
     assert decision.skill is not None
     assert decision.skill.id == "domain/wechat_follow_official_account"
-    assert 'account_name="火眼审阅"' in decision.script
+    assert '__param_account_name = __agentic_confirm_required_param("account_name", "火眼审阅"' in decision.script
+    assert "run(account_name=__param_account_name)" in decision.script
 
 
 def test_router_routes_wechat_send_contact_message():
@@ -427,8 +497,9 @@ def test_router_routes_wechat_send_contact_message():
 
     assert decision.skill is not None
     assert decision.skill.id == "domain/wechat_send_contact_message"
-    assert 'contact_name="文件传输助手"' in decision.script
-    assert 'message="你好"' in decision.script
+    assert '__param_contact_name = __agentic_confirm_required_param("contact_name", "文件传输助手"' in decision.script
+    assert '__param_message = __agentic_confirm_required_param("message", "你好"' in decision.script
+    assert "run(contact_name=__param_contact_name, message=__param_message)" in decision.script
 
 
 def test_router_routes_wechat_send_official_account_message():
@@ -438,5 +509,6 @@ def test_router_routes_wechat_send_official_account_message():
 
     assert decision.skill is not None
     assert decision.skill.id == "domain/wechat_send_official_account_message"
-    assert 'account_name="火眼审阅"' in decision.script
-    assert 'message="你好呀"' in decision.script
+    assert '__param_account_name = __agentic_confirm_required_param("account_name", "火眼审阅"' in decision.script
+    assert '__param_message = __agentic_confirm_required_param("message", "你好呀"' in decision.script
+    assert "run(account_name=__param_account_name, message=__param_message)" in decision.script

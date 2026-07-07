@@ -12,6 +12,156 @@ WECHAT_EXE_CANDIDATES = (
     r"C:\Program Files (x86)\Tencent\WeChat\WeChat.exe",
 )
 WECHAT_PROCESS_NAMES = {"wechat.exe", "wechatappex.exe"}
+DEFAULT_WINDOW_RECT = (80, 60, 1200, 820)
+DEFAULT_APPEX_RECT = (120, 70, 1100, 820)
+CHAT_INPUT_REL = (0.58, 0.88)
+
+
+class WeChatWindowManager:
+    """Manage the WeChat desktop window family, including WeChatAppEx windows."""
+
+    MAIN_CLASS = "WeChatMainWndForPC"
+
+    def __init__(self, desktop: Any) -> None:
+        self.desktop = desktop
+
+    def list_windows(self, title_hint: str | None = None) -> list[Any]:
+        return PywinautoWechatAutomation._iter_wechat_windows(
+            self.desktop,
+            title_hint=title_hint,
+        )
+
+    def snapshot_handles(self) -> set[int]:
+        return {
+            PywinautoWechatAutomation._window_handle(window)
+            for window in self.list_windows()
+        }
+
+    def find_main_window(self) -> Any | None:
+        windows = self.list_windows()
+        for window in windows:
+            try:
+                if window.element_info.class_name == self.MAIN_CLASS:
+                    return window
+            except Exception:
+                pass
+
+        for window in windows:
+            process_name = PywinautoWechatAutomation._window_process_name(window)
+            title = PywinautoWechatAutomation._element_text(window)
+            if process_name == "wechat.exe" and ("微信" in title or "WeChat" in title):
+                return window
+
+        return PywinautoWechatAutomation._find_window(self.desktop)
+
+    def latest_new_appex(
+        self,
+        before_handles: set[int],
+        *,
+        title_hint: str | None = None,
+        timeout: float = 6.0,
+    ) -> Any | None:
+        deadline = time.time() + timeout
+        fallback: Any | None = None
+        while time.time() < deadline:
+            for window in self.list_windows(title_hint=title_hint):
+                process_name = PywinautoWechatAutomation._window_process_name(window)
+                if process_name != "wechatappex.exe":
+                    continue
+                handle = PywinautoWechatAutomation._window_handle(window)
+                if handle not in before_handles:
+                    return window
+                if title_hint and self._window_contains(window, title_hint):
+                    fallback = window
+            if fallback is not None:
+                return fallback
+            time.sleep(0.25)
+        return fallback
+
+    def normalize(self, window: Any, *, app_ex: bool = False) -> Any:
+        x, y, width, height = DEFAULT_APPEX_RECT if app_ex else DEFAULT_WINDOW_RECT
+        try:
+            window.restore()
+        except Exception:
+            pass
+        try:
+            window.move_window(x=x, y=y, width=width, height=height, repaint=True)
+        except Exception:
+            pass
+        try:
+            window.set_focus()
+        except Exception:
+            pass
+        time.sleep(0.2)
+        return window
+
+    @staticmethod
+    def _window_contains(window: Any, text: str) -> bool:
+        if not text:
+            return False
+        title = PywinautoWechatAutomation._element_text(window)
+        if text in title:
+            return True
+        try:
+            descendants = window.descendants()
+        except Exception:
+            descendants = []
+        return any(text in PywinautoWechatAutomation._element_text(item) for item in descendants[:120])
+
+
+class ElementLocator:
+    """Small UIA-first locator with click and relative-coordinate fallbacks."""
+
+    def __init__(self, timeout: float = 8.0) -> None:
+        self.timeout = timeout
+
+    def descendants(self, root: Any, *, control_type: str | None = None) -> list[Any]:
+        try:
+            if control_type:
+                return list(root.descendants(control_type=control_type))
+            return list(root.descendants())
+        except Exception:
+            return []
+
+    def find_by_name(
+        self,
+        root: Any,
+        names: str | tuple[str, ...] | list[str],
+        *,
+        control_types: tuple[str, ...] | list[str] | None = None,
+        exact: bool = False,
+        timeout: float | None = None,
+    ) -> Any | None:
+        if isinstance(names, str):
+            names = (names,)
+        deadline = time.time() + (timeout if timeout is not None else self.timeout)
+        while time.time() < deadline:
+            for item in self.descendants(root):
+                title = PywinautoWechatAutomation._element_text(item)
+                if not title:
+                    continue
+                if control_types:
+                    control_type = PywinautoWechatAutomation._element_control_type(item)
+                    if control_type not in control_types:
+                        continue
+                for name in names:
+                    if (title == name) if exact else (name in title):
+                        return item
+            time.sleep(0.2)
+        return None
+
+    @staticmethod
+    def click(item: Any) -> None:
+        last_exc: Exception | None = None
+        for method_name in ("invoke", "click_input", "select"):
+            try:
+                getattr(item, method_name)()
+                return
+            except Exception as exc:
+                last_exc = exc
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Unable to click WeChat UI element")
 
 
 class PywinautoWechatAutomation:
@@ -23,6 +173,8 @@ class PywinautoWechatAutomation:
         self.app: Any = None
         self.desktop: Any = None
         self.window: Any = None
+        self.window_manager: WeChatWindowManager | None = None
+        self.locator = ElementLocator(timeout=8.0)
 
     def open(self) -> None:
         try:
@@ -34,34 +186,38 @@ class PywinautoWechatAutomation:
             ) from exc
 
         self.desktop = Desktop(backend="uia")
-        self.window = self._find_window(self.desktop)
+        self.window_manager = WeChatWindowManager(self.desktop)
+        self.window = self.window_manager.find_main_window()
         if self.window is not None:
-            self.window.set_focus()
+            self.window = self.window_manager.normalize(self.window)
             return
 
         exe_path = self._resolve_executable()
         self.app = Application(backend="uia").start(str(exe_path))
         deadline = time.time() + self.wait_timeout
         while time.time() < deadline:
-            self.window = self._find_window(self.desktop)
+            self.window = self.window_manager.find_main_window()
             if self.window is not None:
-                self.window.set_focus()
+                self.window = self.window_manager.normalize(self.window)
                 return
             time.sleep(0.5)
         raise RuntimeError("Unable to find WeChat window after launch")
 
     def search_official_account(self, account_name: str) -> None:
         self._require_window()
-        self.window.set_focus()
+        self._normalize_current_window()
+        before_handles = self._snapshot_window_handles()
         self._send_keys("^f")
+        time.sleep(0.2)
+        self._send_keys("^a")
         self._paste_or_type(account_name)
         self._send_keys("{ENTER}")
         time.sleep(1.5)
-        self._click_service_account_result(account_name)
+        self._click_service_account_result(account_name, before_handles=before_handles)
 
     def search_contact(self, contact_name: str) -> None:
         self._require_window()
-        self.window.set_focus()
+        self._normalize_current_window()
         self._send_keys("^f")
         time.sleep(0.2)
         self._send_keys("^a")
@@ -71,6 +227,7 @@ class PywinautoWechatAutomation:
 
     def follow_current_account(self) -> bool:
         self._require_window()
+        self._normalize_current_window()
         target = self._wait_for_text_target(
             title_patterns=(
                 r".*关注.*",
@@ -79,18 +236,36 @@ class PywinautoWechatAutomation:
             ),
             timeout=10.0,
         )
+        clicked_follow = False
         if target is None:
-            return False
-        self._click_element_or_parent(target)
-        time.sleep(0.8)
-        return True
+            clicked_follow = False
+        else:
+            self._click_element_or_parent(target)
+            clicked_follow = True
+            time.sleep(0.8)
+
+        enter_target = self._wait_for_text_target(
+            title_patterns=(
+                r".*进入公众号.*",
+                r".*发消息.*",
+                r".*发送消息.*",
+                r".*Message.*",
+            ),
+            timeout=1.0,
+        )
+        if enter_target is not None:
+            self._click_element_or_parent(enter_target)
+            time.sleep(0.8)
+        return clicked_follow
 
     def send_message(self, message: str) -> None:
         self._require_window()
+        self._normalize_current_window()
         edit = self._find_message_edit()
-        if edit is None:
-            raise RuntimeError("Unable to find WeChat message input box")
-        edit.click_input()
+        if edit is not None:
+            edit.click_input()
+        else:
+            self._click_relative(self.window, *CHAT_INPUT_REL)
         self._paste_or_type(message)
         self._send_keys("{ENTER}")
         time.sleep(0.5)
@@ -190,7 +365,33 @@ class PywinautoWechatAutomation:
         return PywinautoWechatAutomation._process_name(int(pid))
 
     @staticmethod
+    def _window_handle(window: Any) -> int:
+        for attr in ("handle",):
+            try:
+                value = getattr(window, attr)
+                if callable(value):
+                    value = value()
+                if value:
+                    return int(value)
+            except Exception:
+                pass
+        try:
+            value = window.element_info.handle
+            if value:
+                return int(value)
+        except Exception:
+            pass
+        return id(window)
+
+    @staticmethod
     def _process_name(pid: int) -> str:
+        try:
+            import psutil  # type: ignore[import-not-found]
+
+            return psutil.Process(pid).name().lower()
+        except Exception:
+            pass
+
         try:
             import ctypes
             from ctypes import wintypes
@@ -219,6 +420,38 @@ class PywinautoWechatAutomation:
     def _require_window(self) -> None:
         if self.window is None:
             raise RuntimeError("WeChat window is not open")
+
+    def _normalize_current_window(self) -> None:
+        self._require_window()
+        manager = self._get_window_manager(create=False)
+        if manager is None:
+            try:
+                self.window.set_focus()
+            except Exception:
+                pass
+            return
+        self.window = manager.normalize(
+            self.window,
+            app_ex=self._window_process_name(self.window) == "wechatappex.exe",
+        )
+
+    def _get_window_manager(self, *, create: bool = True) -> WeChatWindowManager | None:
+        if self.window_manager is not None:
+            return self.window_manager
+        desktop = self._get_desktop(create=create)
+        if desktop is None:
+            return None
+        self.window_manager = WeChatWindowManager(desktop)
+        return self.window_manager
+
+    def _snapshot_window_handles(self) -> set[int]:
+        manager = self._get_window_manager(create=False)
+        if manager is not None:
+            return manager.snapshot_handles()
+        return {
+            self._window_handle(window)
+            for window in self._windows_to_scan()
+        }
 
     def _send_keys(self, keys: str) -> None:
         from pywinauto.keyboard import send_keys  # type: ignore[import-not-found]
@@ -261,8 +494,13 @@ class PywinautoWechatAutomation:
                 return item
         return None
 
-    def _click_service_account_result(self, account_name: str) -> None:
+    def _click_service_account_result(
+        self,
+        account_name: str,
+        before_handles: set[int] | None = None,
+    ) -> None:
         self._require_window()
+        before_handles = before_handles or self._snapshot_window_handles()
         deadline = time.time() + 10.0
         fallback = None
         while time.time() < deadline:
@@ -270,19 +508,19 @@ class PywinautoWechatAutomation:
             if target is not None:
                 self._click_element_or_parent(target)
                 time.sleep(1.2)
-                self._switch_to_account_window(account_name)
+                self._switch_to_account_window(account_name, before_handles=before_handles)
                 return
             time.sleep(0.4)
 
         if fallback is not None:
             self._click_element_or_parent(fallback)
             time.sleep(1.2)
-            self._switch_to_account_window(account_name)
+            self._switch_to_account_window(account_name, before_handles=before_handles)
             return
 
         self._send_keys("{ENTER}")
         time.sleep(1.0)
-        self._switch_to_account_window(account_name)
+        self._switch_to_account_window(account_name, before_handles=before_handles)
 
     def _click_contact_result(self, contact_name: str) -> None:
         self._require_window()
@@ -429,7 +667,23 @@ class PywinautoWechatAutomation:
             time.sleep(0.4)
         return None
 
-    def _switch_to_account_window(self, account_name: str, timeout: float = 6.0) -> bool:
+    def _switch_to_account_window(
+        self,
+        account_name: str,
+        timeout: float = 6.0,
+        before_handles: set[int] | None = None,
+    ) -> bool:
+        manager = self._get_window_manager(create=False)
+        if manager is not None:
+            new_appex = manager.latest_new_appex(
+                before_handles or set(),
+                title_hint=account_name,
+                timeout=min(timeout, 1.5),
+            )
+            if new_appex is not None:
+                self.window = manager.normalize(new_appex, app_ex=True)
+                return True
+
         desktop = self._get_desktop(create=False)
         if desktop is None:
             return False
@@ -444,28 +698,28 @@ class PywinautoWechatAutomation:
                     combined = self._combined_text(window)
                     has_account_hint = account_name in combined
                 if process_name == "wechatappex.exe":
-                    self.window = window
-                    try:
-                        self.window.set_focus()
-                    except Exception:
-                        pass
+                    self.window = (
+                        manager.normalize(window, app_ex=True)
+                        if manager is not None
+                        else window
+                    )
                     return True
                 if has_account_hint:
                     fallback = window
             if fallback is not None and time.time() + 0.3 >= deadline:
-                self.window = fallback
-                try:
-                    self.window.set_focus()
-                except Exception:
-                    pass
+                self.window = (
+                    manager.normalize(fallback)
+                    if manager is not None
+                    else fallback
+                )
                 return True
             time.sleep(0.3)
         if fallback is not None:
-            self.window = fallback
-            try:
-                self.window.set_focus()
-            except Exception:
-                pass
+            self.window = (
+                manager.normalize(fallback)
+                if manager is not None
+                else fallback
+            )
             return True
         return False
 
@@ -612,15 +866,38 @@ class PywinautoWechatAutomation:
             raise last_exc
         raise RuntimeError("Unable to click WeChat UI element")
 
+    def _click_relative(self, window: Any, rx: float, ry: float) -> None:
+        try:
+            rect = window.rectangle()
+            x = rect.left + int(rect.width() * rx)
+            y = rect.top + int(rect.height() * ry)
+        except Exception as exc:
+            raise RuntimeError("Unable to calculate WeChat relative click point") from exc
+
+        try:
+            from pywinauto.mouse import click  # type: ignore[import-not-found]
+
+            click(button="left", coords=(x, y))
+            return
+        except Exception:
+            pass
+
+        try:
+            window.click_input(coords=(x, y))
+        except Exception as exc:
+            raise RuntimeError("Unable to click WeChat relative input area") from exc
+
     def _find_message_edit(self) -> Any | None:
         self._require_window()
         candidates = []
         for window in self._windows_to_scan():
-            try:
-                edits = window.descendants(control_type="Edit")
-            except Exception:
-                continue
-            for edit in edits:
+            controls = []
+            for control_type in ("Edit", "Document"):
+                try:
+                    controls.extend(window.descendants(control_type=control_type))
+                except Exception:
+                    continue
+            for edit in controls:
                 if self._is_search_input(edit):
                     continue
                 score = 0
@@ -686,6 +963,7 @@ def send_official_account_message(
     client = automation or PywinautoWechatAutomation(launch_path=launch_path)
     client.open()
     client.search_official_account(account)
+    client.follow_current_account()
     client.send_message(text)
     return {"success": True, "account_name": account, "message": text}
 
