@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from src.core.browser_manager import get_browser_manager
 from src.core.dom_explorer import summarize_page
@@ -66,6 +68,53 @@ from src.logging import bind_context, get_logger, log_timing
 from src.skill_library.registry import SkillRegistry, get_skill_registry
 
 logger = get_logger(__name__)
+
+
+_EXPLORE_ENTRYPOINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "gmail",
+        "https://mail.google.com/mail/u/0/#inbox",
+        ("gmail", "谷歌邮箱", "google mail"),
+    ),
+    ("github", "https://github.com/", ("github",)),
+    (
+        "xiaohongshu",
+        "https://www.xiaohongshu.com/",
+        ("小红书", "xiaohongshu", "rednote"),
+    ),
+    ("zhihu", "https://www.zhihu.com/", ("知乎", "zhihu")),
+    (
+        "bilibili",
+        "https://www.bilibili.com/",
+        ("bilibili", "哔哩哔哩", "哔哩", "b站"),
+    ),
+    ("douyin", "https://www.douyin.com/", ("douyin", "抖音")),
+    ("baidu", "https://www.baidu.com/", ("baidu", "百度")),
+    ("google", "https://www.google.com/", ("google", "谷歌")),
+    ("bing", "https://www.bing.com/", ("bing", "必应")),
+    ("weibo", "https://weibo.com/", ("weibo", "微博")),
+    ("taobao", "https://www.taobao.com/", ("taobao", "淘宝")),
+    ("jd", "https://www.jd.com/", ("jd", "京东")),
+)
+
+_PLATFORM_ACTION_WORDS = (
+    "搜索",
+    "搜",
+    "查找",
+    "查询",
+    "登录",
+    "登陆",
+    "发布",
+    "发送",
+    "发",
+    "评论",
+    "留言",
+    "打开",
+    "进入",
+    "问",
+    "提问",
+    "写",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +244,7 @@ class AgentLoop:
         self._last_explore_snapshot = None
         self._current_explore_snapshot = None
         self._last_panel_answer: str | None = None
+        self._explore_entry_bootstrap_attempted: set[str] = set()
 
     def run(self, task: str) -> AgentTaskResult:
         """执行一个自然语言任务。
@@ -396,6 +446,7 @@ class AgentLoop:
         self._last_panel_answer = None
         self._last_explore_snapshot = None
         self._current_explore_snapshot = None
+        self._explore_entry_bootstrap_attempted = set()
 
         # 绑定任务级上下文，所有后续日志自动携带 task_id / task
         with bind_context(task_id=task_id, task=task):
@@ -421,6 +472,8 @@ class AgentLoop:
                 logger.error("Agent task aborted: browser not launched")
                 self._emit_task_after(result, task_id)
                 return result
+
+            self._bootstrap_initial_page(task)
 
             with log_timing("agent_task", task=task) as task_meta:
                 while state not in (AgentState.DONE, AgentState.FAILED):
@@ -584,6 +637,225 @@ class AgentLoop:
                 cfg.get("EXPERIENCE_CONFIDENCE_THRESHOLD", 0.8)
             ),
         )
+
+    def _bootstrap_initial_page(self, task: str) -> str | None:
+        """Navigate away from about:blank before the first observe when possible."""
+
+        bm = get_browser_manager()
+        page = bm.get_page()
+        if not self._is_blank_page(getattr(page, "url", "")):
+            return None
+
+        target_url = self._resolve_initial_entry_url(task)
+        if not target_url and self._should_resolve_entry_with_llm(task):
+            self._explore_entry_bootstrap_attempted.add(task)
+            target_url = self._resolve_initial_entry_url_via_llm(task)
+        if not target_url:
+            return None
+
+        return self._goto_initial_entry_url(target_url)
+
+    def _bootstrap_explore_entry_page(self, task: str) -> str | None:
+        """Use LLM target-page resolution before entering Explore from a blank page."""
+
+        if task in self._explore_entry_bootstrap_attempted:
+            return None
+
+        bm = get_browser_manager()
+        page = bm.get_page()
+        if not self._is_blank_page(getattr(page, "url", "")):
+            return None
+
+        self._explore_entry_bootstrap_attempted.add(task)
+        target_url = (
+            self._resolve_initial_entry_url(task)
+            or (
+                self._resolve_initial_entry_url_via_llm(task)
+                if self._should_resolve_entry_with_llm(task)
+                else None
+            )
+        )
+        if not target_url:
+            return None
+
+        return self._goto_initial_entry_url(target_url)
+
+    def _goto_initial_entry_url(self, target_url: str) -> str | None:
+        page = get_browser_manager().get_page()
+        try:
+            try:
+                page.goto(target_url, wait_until="load")
+            except TypeError:
+                page.goto(target_url)
+        except Exception as exc:
+            logger.warning("Explore bootstrap navigation failed: %s", exc)
+            return None
+
+        logger.info("Explore bootstrap navigated to %s", target_url)
+        return target_url
+
+    @staticmethod
+    def _is_blank_page(url: str | None) -> bool:
+        value = (url or "").strip().lower()
+        return value in {"", "about:blank"} or value.startswith("about:blank?")
+
+    @classmethod
+    def _resolve_initial_entry_url(cls, task: str) -> str | None:
+        explicit_url = cls._extract_first_url(task)
+        if explicit_url:
+            return explicit_url
+
+        platform = cls._infer_target_platform(task)
+        if platform:
+            for name, url, _aliases in _EXPLORE_ENTRYPOINTS:
+                if name == platform:
+                    return url
+        return None
+
+    @staticmethod
+    def _extract_first_url(task: str) -> str | None:
+        match = re.search(r"https?://[^\s<>'\"，。；、]+", task)
+        if not match:
+            match = re.search(r"\bwww\.[^\s<>'\"，。；、]+", task, re.IGNORECASE)
+        if not match:
+            return None
+
+        url = match.group(0).rstrip(").,，。；;、]】\"'")
+        if not re.match(r"^https?://", url, re.IGNORECASE):
+            url = f"https://{url}"
+        return url
+
+    @classmethod
+    def _infer_target_platform(cls, task: str) -> str | None:
+        mentions: list[tuple[int, str]] = []
+        action_pattern = "|".join(re.escape(word) for word in _PLATFORM_ACTION_WORDS)
+
+        for platform, _url, aliases in _EXPLORE_ENTRYPOINTS:
+            for alias in sorted(aliases, key=len, reverse=True):
+                alias_pattern = re.escape(alias)
+                patterns = (
+                    rf"(?:在|到|用|打开|进入|去)\s*{alias_pattern}(?:上|里|中)?",
+                    rf"{alias_pattern}(?:上|里|中)?\s*(?:{action_pattern})",
+                )
+                for pattern in patterns:
+                    for match in re.finditer(pattern, task, re.IGNORECASE):
+                        mentions.append((match.start(), platform))
+
+        if mentions:
+            return max(mentions, key=lambda item: item[0])[1]
+
+        lowered = task.lower()
+        for platform, _url, aliases in _EXPLORE_ENTRYPOINTS:
+            if any(alias.lower() in lowered for alias in aliases):
+                return platform
+        return None
+
+    @classmethod
+    def _should_resolve_entry_with_llm(cls, task: str) -> bool:
+        if cls._extract_first_url(task) or cls._infer_target_platform(task):
+            return False
+        return cls._extract_web_target_phrase(task) is not None
+
+    @staticmethod
+    def _extract_web_target_phrase(task: str) -> str | None:
+        actions = (
+            r"搜索|搜|查找|查询|查|找|询问|问|提问|登录|登陆|打开|进入|访问|"
+            r"search|ask|login|open|visit"
+        )
+        patterns = (
+            rf"(?:在|到|去|打开|进入|用)\s*([^，。,.；;\s]{{2,40}})\s*(?:上|里|中|网站)?\s*(?:{actions})",
+            rf"^\s*([^，。,.；;\s]{{2,40}})\s*(?:上|里|中|网站)?\s*(?:{actions})",
+        )
+        blocked = {
+            "帮我",
+            "请帮我",
+            "搜索",
+            "查询",
+            "查找",
+            "打开",
+            "进入",
+            "访问",
+            "本地",
+            "微信",
+            "wps",
+            "WPS",
+        }
+        for pattern in patterns:
+            match = re.search(pattern, task, re.IGNORECASE)
+            if not match:
+                continue
+            phrase = match.group(1).strip(" “\"'`")
+            if phrase and phrase not in blocked:
+                return phrase
+        return None
+
+    def _resolve_initial_entry_url_via_llm(self, task: str) -> str | None:
+        if not self._llm_parser or not self._llm_parser.available:
+            return None
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "should_open": {"type": "boolean"},
+                "url": {"type": ["string", "null"]},
+                "confidence": {"type": "number"},
+                "reason": {"type": "string"},
+            },
+            "required": ["should_open", "url", "confidence", "reason"],
+        }
+        prompt = (
+            "你是浏览器 Explore 模式的起始网页解析器。当前页面是 about:blank，"
+            "技能库和固定规则没有命中。请判断执行用户任务前是否需要先打开某个网页。\n\n"
+            f"用户任务: {task}\n\n"
+            "要求:\n"
+            "1. 如果任务明确提到某个网站、平台、购物网站、AI 对话网站或 Web 服务，返回它的官方入口 URL。\n"
+            "2. 购物网站搜索商品时，返回该购物网站主页，不要返回搜索引擎。\n"
+            "3. AI 网站询问问题时，优先返回该网站的对话/聊天入口；不知道具体对话入口时返回主页。\n"
+            "4. 如果任务是本地软件、微信/WPS/桌面客户端操作，或无法可靠判断网站，should_open=false。\n"
+            "5. 不要把未知站点任务转成百度/Google/Bing 搜索；目标是打开相关网站本身。\n"
+            "6. 如果只确定域名，也可以返回裸域名，系统会自动补 https://。\n"
+            "7. 不要编造不存在的网站；url 必须是相关网站的域名或完整 http/https 地址。\n"
+        )
+        try:
+            data = chat_json_with_retry(
+                self._llm_parser._client,
+                prompt,
+                system_prompt="只返回起始网页判断 JSON，不要输出解释。",
+                schema=schema,
+                temperature=0,
+                max_tokens=512,
+            )
+        except Exception as exc:
+            logger.warning("Explore entry URL LLM resolution failed: %s", exc)
+            return None
+
+        if not data.get("should_open"):
+            return None
+        try:
+            confidence = float(data.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0
+        if confidence < 0.55:
+            return None
+        return self._normalize_entry_url(data.get("url"))
+
+    @staticmethod
+    def _normalize_entry_url(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        url = value.strip().strip("'\"")
+        if not url:
+            return None
+        if not re.match(r"^https?://", url, re.IGNORECASE):
+            url = f"https://{url}"
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None
+        if "." not in parsed.hostname and parsed.hostname not in {"localhost"}:
+            return None
+        if not parsed.path:
+            url = f"{url}/"
+        return url
 
     # -------------------------------------------------------------------
     # Event emission helpers
@@ -836,8 +1108,32 @@ class AgentLoop:
                 experience.id,
             )
             experience = None
+
+        bootstrap_url = self._bootstrap_explore_entry_page(task)
+        if bootstrap_url:
+            step.action = "Explore 前打开目标网页"
+            step.mode = "explore"
+            step.result = f"技能和规则未命中，Explore 前打开: {bootstrap_url}"
+            logger.info("PLAN: Explore bootstrap opened %s", bootstrap_url)
+            self._bus.emit(
+                Event(
+                    name=EVENT_AGENT_PLAN,
+                    phase=Phase.AFTER,
+                    data={
+                        "step_number": step.step_number,
+                        "source": "explore_entry_bootstrap",
+                        "url": bootstrap_url,
+                    },
+                    result=step.result,
+                )
+            )
+            return AgentState.OBSERVE
+
         # ── 4. 规则生成脚本 ──
         script = self._generate_script(task, step.page_summary)
+        if script and self._should_skip_generated_script_for_explore(task, script):
+            logger.info("PLAN: skipped generic script for site-scoped Explore task")
+            script = None
         if script:
             step.action = "生成临时脚本"
             step.script = script
@@ -880,6 +1176,18 @@ class AgentLoop:
         使用 ScriptGenerator 进行意图解析和脚本生成。
         """
         return self._script_generator.generate(task, page_summary)
+
+    def _should_skip_generated_script_for_explore(self, task: str, script: str) -> bool:
+        if not self._should_resolve_entry_with_llm(task):
+            return False
+        try:
+            page_url = get_browser_manager().get_page().url
+        except Exception:
+            page_url = ""
+        if not self._is_blank_page(page_url):
+            return False
+        lowered_script = script.lower()
+        return "baidu.com" in lowered_script or "https://www.baidu.com" in lowered_script
 
     def _find_explore_experience(
         self,
@@ -1027,7 +1335,8 @@ class AgentLoop:
         return url
 
     def _ensure_explore_executor(self) -> ExploreExecutor:
-        page = get_browser_manager().get_page()
+        bm = get_browser_manager()
+        page = bm.get_page()
         if self._snapshot_gen is None:
             self._snapshot_gen = SnapshotGenerator(self._explore_config)
         if (
@@ -1038,6 +1347,7 @@ class AgentLoop:
                 page,
                 self._snapshot_gen,
                 self._explore_config,
+                browser_manager=bm,
             )
         return self._explore_executor
 
@@ -1137,7 +1447,10 @@ class AgentLoop:
             "3. fill/select 必须填写 value。\n"
             "4. 会导致页面跳转的最后一步请加 condition=load 或 networkidle。\n"
             "5. 每个使用 ref 的动作都填写 snapshot_v 为当前快照版本。\n"
-            "6. 不要编造快照里不存在的 ref。"
+            "6. 不要编造快照里不存在的 ref。\n"
+            "7. 如果任务是在当前网站搜索商品/内容，优先找到搜索框，fill 搜索关键词，再按 Enter 或点击搜索按钮。\n"
+            "8. 如果任务是在 AI/问答/聊天网站询问问题，优先找到消息输入框，fill 用户问题，再按 Enter 或点击发送按钮。\n"
+            "9. 如果刚完成登录或页面发生变化，不要继续使用旧页面假设；等待重新快照后再规划。"
         )
         if self._last_panel_answer:
             prompt += f"\n\n上一次面板回答: {self._last_panel_answer}"

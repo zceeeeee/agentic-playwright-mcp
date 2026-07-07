@@ -13,12 +13,14 @@ import io
 import sys
 import traceback
 from dataclasses import dataclass, field
+from functools import wraps
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from typing import Any, Callable
 from urllib.parse import quote_plus
 
 from src.core.browser_manager import get_browser_manager
 from src.core.event_bus import EVENT_SCRIPT_EXECUTE, Event, Phase, get_event_bus
+from src.core.login_guard import GenericLoginGuard
 from src.layer_1.actions import do_click, do_fill, do_goto, do_screenshot
 
 # ---------------------------------------------------------------------------
@@ -144,7 +146,7 @@ class ScriptEngine:
         screenshots: list[str] = []
 
         # 构建受限命名空间
-        namespace = self._build_namespace(output_buffer, screenshots)
+        namespace = self._build_namespace(output_buffer, screenshots, script_code)
 
         try:
             sys.stdout = output_buffer
@@ -183,6 +185,7 @@ class ScriptEngine:
         self,
         output_buffer: io.StringIO,
         screenshots: list[str],
+        script_code: str = "",
     ) -> dict[str, Any]:
         """构建受限命名空间。
 
@@ -327,6 +330,25 @@ class ScriptEngine:
                         return True
             return False
 
+        login_guard = GenericLoginGuard(
+            self._get_browser_manager().get_page,
+            browser_manager=self._get_browser_manager(),
+            log_fn=log,
+            panel_manager_getter=lambda: _pm,
+            enabled=not GenericLoginGuard.script_has_explicit_login_flow(script_code),
+        )
+
+        def _guarded_browser_action(action_name: str, func: Callable) -> Callable:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                if action_name not in {"goto", "go_back", "go_forward", "reload"}:
+                    login_guard.maybe_wait(f"before_{action_name}")
+                result = func(*args, **kwargs)
+                login_guard.maybe_wait(f"after_{action_name}")
+                return result
+
+            return wrapper
+
         def _wait_for_manual_login(domain: str, target_url: str | None = None) -> bool:
             bm = self._get_browser_manager()
             page = bm.get_page()
@@ -400,6 +422,30 @@ class ScriptEngine:
 
         # 注册用户自定义函数（控件层等）
         ns.update(self._extra_globals)
+
+        guarded_action_names = {
+            "goto",
+            "click",
+            "fill",
+            "go_back",
+            "go_forward",
+            "reload",
+            "smart_click",
+            "smart_fill",
+            "smart_login",
+            "smart_search",
+            "smart_fill_form",
+            "wait_for_navigation",
+            "wait_for_element",
+            "mouse_click",
+            "type_text",
+            "press_key",
+            "upload_file",
+        }
+        for action_name in guarded_action_names:
+            func = ns.get(action_name)
+            if callable(func):
+                ns[action_name] = _guarded_browser_action(action_name, func)
 
         return ns
 

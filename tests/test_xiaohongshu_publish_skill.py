@@ -22,7 +22,6 @@ from src.skill_library.send.xiaohongshu_publish import (
     _click_text_to_image,
     _click_upload_image,
     _click_upload_video,
-    _detect_login_state,
     _detect_image_edit,
     _detect_preview_image,
     _enable_scheduled_publish,
@@ -255,66 +254,6 @@ def test_xiaohongshu_publish_requests_code_and_waits_for_about_us():
     assert any(step.startswith("wait_about_us_attempt_") for step in steps)
     assert logs[0] == "Please enter the Xiaohongshu SMS verification code in the browser."
     assert logs[-1] == "Xiaohongshu publish button clicked"
-
-
-def test_xiaohongshu_publish_detects_recommendation_login_prompt():
-    html = """
-    <body>
-      <div style="width:320px;height:40px">\u767b\u5f55\u540e\u63a8\u8350\u66f4\u61c2\u4f60\u7684\u7b14\u8bb0</div>
-    </body>
-    """
-
-    def assert_page(page):
-        result = _detect_login_state(lambda code: page.evaluate(code))
-
-        assert result["success"] is True
-        assert result["phone_login"] is False
-        assert result["login_required_prompt"] is True
-        assert result["logged_in"] is False
-
-    _with_page(html, assert_page)
-
-
-def test_xiaohongshu_publish_waits_on_recommendation_prompt_without_filling_phone():
-    detect_calls = {"count": 0}
-    logs = []
-
-    def run_js(code):
-        if "phone_login:" in code:
-            detect_calls["count"] += 1
-            if detect_calls["count"] == 1:
-                return {
-                    "success": True,
-                    "logged_in": False,
-                    "phone_login": False,
-                    "login_required_prompt": True,
-                }
-            return {
-                "success": True,
-                "logged_in": True,
-                "phone_login": False,
-                "login_required_prompt": False,
-            }
-        return _mock_publish_run_js(logged_in=True)(code)
-
-    result = run(
-        keyword="娴嬭瘯鍥炬枃鍐呭",
-        phone_number="13574133406",
-        max_wait_seconds=2,
-        goto_fn=_noop,
-        run_js_fn=run_js,
-        wait_fn=_noop,
-        get_url_fn=lambda: "https://www.xiaohongshu.com/explore",
-        get_text_fn=lambda: "",
-        log_fn=lambda message: logs.append(message),
-    )
-
-    assert result["success"] is True
-    steps = [step["step"] for step in result["steps"]]
-    assert "fill_phone" not in steps
-    assert "click_get_code" not in steps
-    assert "login_me_button_confirmation" in steps
-    assert logs[0] == "Please complete Xiaohongshu login in the browser before publishing."
 
 
 def test_xiaohongshu_publish_without_phone_waits_for_existing_login():

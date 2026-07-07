@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -995,6 +996,229 @@ class TestAgentLoop:
         result = agent.run("截图")
 
         assert result.success is True
+
+    def test_bootstrap_initial_page_opens_explicit_url_from_blank(self, mock_browser):
+        """Should navigate before the first observe when task contains a URL."""
+        _bm, page = mock_browser
+        page.url = "about:blank"
+
+        agent = AgentLoop(max_steps=3)
+        target = agent._bootstrap_initial_page("打开 https://example.com/dashboard")
+
+        assert target == "https://example.com/dashboard"
+        page.goto.assert_called_once_with(
+            "https://example.com/dashboard", wait_until="load"
+        )
+
+    def test_bootstrap_initial_page_opens_platform_entry_from_blank(self, mock_browser):
+        """Should use the target platform, not a platform mentioned inside the query."""
+        _bm, page = mock_browser
+        page.url = "about:blank"
+
+        agent = AgentLoop(max_steps=3)
+        target = agent._bootstrap_initial_page(
+            "帮我搜索在小红书上有哪些典型的人群，在知乎上。"
+        )
+
+        assert target == "https://www.zhihu.com/"
+        page.goto.assert_called_once_with("https://www.zhihu.com/", wait_until="load")
+
+    def test_resolve_initial_entry_uses_last_platform_phrase(self):
+        assert (
+            AgentLoop._resolve_initial_entry_url("帮我搜索怎么看知乎，在小红书上。")
+            == "https://www.xiaohongshu.com/"
+        )
+
+    def test_bootstrap_initial_page_keeps_existing_page(self, mock_browser):
+        """Should not overwrite a page the user already opened."""
+        _bm, page = mock_browser
+        page.url = "https://already-open.example/"
+
+        agent = AgentLoop(max_steps=3)
+        target = agent._bootstrap_initial_page("在知乎上搜索 Python")
+
+        assert target is None
+        page.goto.assert_not_called()
+
+    def test_explore_bootstrap_uses_llm_entry_url_from_blank(self, mock_browser):
+        """Should ask the LLM for an unknown site's Explore entry page."""
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def chat_json(self, prompt, **kwargs):
+                self.calls.append((prompt, kwargs))
+                return {
+                    "should_open": True,
+                    "url": "https://chat.example-ai.com/",
+                    "confidence": 0.91,
+                    "reason": "AI chat site",
+                }
+
+        _bm, page = mock_browser
+        page.url = "about:blank"
+        client = FakeClient()
+        agent = AgentLoop(max_steps=3)
+        agent._llm_parser = SimpleNamespace(available=True, _client=client)
+
+        target = agent._bootstrap_explore_entry_page("在 ExampleAI 询问怎么写周报")
+
+        assert target == "https://chat.example-ai.com/"
+        assert "起始网页解析器" in client.calls[0][0]
+        page.goto.assert_called_once_with(
+            "https://chat.example-ai.com/", wait_until="load"
+        )
+
+    def test_initial_bootstrap_uses_llm_for_unknown_site_before_observe(
+        self, mock_browser
+    ):
+        class FakeClient:
+            def chat_json(self, _prompt, **_kwargs):
+                return {
+                    "should_open": True,
+                    "url": "leetcode.cn",
+                    "confidence": 0.95,
+                    "reason": "target site",
+                }
+
+        _bm, page = mock_browser
+        page.url = "about:blank"
+        agent = AgentLoop(max_steps=3)
+        agent._llm_parser = SimpleNamespace(available=True, _client=FakeClient())
+
+        target = agent._bootstrap_initial_page("力扣搜索数独的题目")
+
+        assert target == "https://leetcode.cn/"
+        page.goto.assert_called_once_with("https://leetcode.cn/", wait_until="load")
+
+    def test_explore_bootstrap_rejects_low_confidence_llm_entry(self, mock_browser):
+        class FakeClient:
+            def chat_json(self, _prompt, **_kwargs):
+                return {
+                    "should_open": True,
+                    "url": "https://maybe.example.com/",
+                    "confidence": 0.2,
+                    "reason": "not sure",
+                }
+
+        _bm, page = mock_browser
+        page.url = "about:blank"
+        agent = AgentLoop(max_steps=3)
+        agent._llm_parser = SimpleNamespace(available=True, _client=FakeClient())
+
+        target = agent._bootstrap_explore_entry_page("处理本地文件")
+
+        assert target is None
+        page.goto.assert_not_called()
+
+    def test_plan_bootstraps_entry_before_entering_explore(self, mock_browser):
+        class FakeClient:
+            def chat_json(self, _prompt, **_kwargs):
+                return {
+                    "should_open": True,
+                    "url": "https://shop.example.com/",
+                    "confidence": 0.88,
+                    "reason": "shopping site",
+                }
+
+        _bm, page = mock_browser
+        page.url = "about:blank"
+        agent = AgentLoop(max_steps=3)
+        agent._llm_parser = SimpleNamespace(available=True, _client=FakeClient())
+        agent._skill_router = SimpleNamespace(
+            route=lambda *_args, **_kwargs: SimpleNamespace(
+                skill=None,
+                script="",
+                source="none",
+                confidence=0,
+            )
+        )
+        agent._find_skill_via_llm = lambda _task: None
+        agent._find_explore_experience = lambda _task, _url: None
+        agent._generate_script = lambda _task, _summary: None
+        step = AgentStep(
+            step_number=2,
+            state=AgentState.PLAN,
+            page_summary="about:blank",
+        )
+
+        state = agent._do_plan(step, "在 ExampleShop 上搜索无线耳机")
+
+        assert state == AgentState.OBSERVE
+        assert "Explore 前打开" in step.result
+        page.goto.assert_called_once_with("https://shop.example.com/", wait_until="load")
+
+    def test_plan_bootstrap_beats_generic_baidu_script_for_unknown_site(
+        self, mock_browser
+    ):
+        class FakeClient:
+            def chat_json(self, _prompt, **_kwargs):
+                return {
+                    "should_open": True,
+                    "url": "leetcode.cn",
+                    "confidence": 0.93,
+                    "reason": "programming practice site",
+                }
+
+        _bm, page = mock_browser
+        page.url = "about:blank"
+        agent = AgentLoop(max_steps=3)
+        agent._llm_parser = SimpleNamespace(available=True, _client=FakeClient())
+        agent._skill_router = SimpleNamespace(
+            route=lambda *_args, **_kwargs: SimpleNamespace(
+                skill=None,
+                script="",
+                source="none",
+                confidence=0,
+            )
+        )
+        agent._find_skill_via_llm = lambda _task: None
+        agent._find_explore_experience = lambda _task, _url: None
+        agent._generate_script = lambda _task, _summary: 'goto("https://www.baidu.com")'
+        step = AgentStep(
+            step_number=2,
+            state=AgentState.PLAN,
+            page_summary="about:blank",
+        )
+
+        state = agent._do_plan(step, "在 leetcode 上搜索 two sum")
+
+        assert state == AgentState.OBSERVE
+        assert step.script == ""
+        assert "https://leetcode.cn/" in step.result
+        page.goto.assert_called_once_with("https://leetcode.cn/", wait_until="load")
+
+    def test_plan_skips_generic_baidu_script_for_unknown_site_when_llm_unavailable(
+        self, mock_browser
+    ):
+        _bm, page = mock_browser
+        page.url = "about:blank"
+        agent = AgentLoop(max_steps=3)
+        agent._llm_parser = SimpleNamespace(available=False, _client=None)
+        agent._skill_router = SimpleNamespace(
+            route=lambda *_args, **_kwargs: SimpleNamespace(
+                skill=None,
+                script="",
+                source="none",
+                confidence=0,
+            )
+        )
+        agent._find_skill_via_llm = lambda _task: None
+        agent._find_explore_experience = lambda _task, _url: None
+        agent._generate_script = lambda _task, _summary: 'goto("https://www.baidu.com")'
+        step = AgentStep(
+            step_number=2,
+            state=AgentState.PLAN,
+            page_summary="about:blank",
+        )
+
+        state = agent._do_plan(step, "力扣搜索数独的题目")
+
+        assert state == AgentState.EXPLORE
+        assert step.script == ""
+        assert "进入 Explore 模式" in step.result
+        page.goto.assert_not_called()
 
     def test_observe_uses_dom_explorer(self, mock_browser):
         """Should observe with a DOM summary before any vision fallback."""

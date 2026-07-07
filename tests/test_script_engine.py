@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.login_guard import GenericLoginGuard
 from src.core.script_engine import (
     ScriptEngine,
     ScriptResult,
@@ -222,6 +223,140 @@ class TestBrowserPrimitives:
         assert result.success is True
         assert "https://injected.example" in result.output
         bm.get_page.assert_called_once()
+
+    def test_generic_login_popup_waits_for_cookie_before_continuing(self):
+        """Generic browser actions should pause when a login modal appears."""
+
+        class FakeContext:
+            def __init__(self):
+                self.logged_in = False
+
+            def storage_state(self):
+                if not self.logged_in:
+                    return {"cookies": [], "origins": []}
+                return {
+                    "cookies": [
+                        {
+                            "name": "session",
+                            "value": "abc123",
+                            "domain": "example.com",
+                        }
+                    ],
+                    "origins": [],
+                }
+
+        class FakePage:
+            def __init__(self, context):
+                self.context = context
+                self.url = "https://example.com"
+                self.login_required = False
+                self.waits = 0
+
+            def evaluate(self, code):
+                if "GENERIC_LOGIN_PROMPT_DETECTOR" in code:
+                    return {
+                        "success": True,
+                        "login_required": self.login_required,
+                        "url": self.url,
+                    }
+                return None
+
+            def wait_for_timeout(self, milliseconds):
+                self.waits += 1
+                self.login_required = False
+                self.context.logged_in = True
+
+        class FakeBrowserManager:
+            def __init__(self):
+                self._context = FakeContext()
+                self.page = FakePage(self._context)
+                self.current_domain = None
+                self.saved_domains = []
+
+            def get_page(self):
+                return self.page
+
+            def save_auth(self, domain=None):
+                self.saved_domains.append(domain)
+                return True
+
+        bm = FakeBrowserManager()
+        engine = ScriptEngine(bm)
+
+        def fake_goto(url):
+            bm.page.url = url
+            bm.page.login_required = True
+            return "ok"
+
+        engine.register_function("goto", fake_goto)
+        result = engine.execute("goto('https://example.com/protected')\nprint('after login')")
+
+        assert result.success is True
+        assert "after login" in result.output
+        assert "Detected login popup" in result.output
+        assert bm.page.waits == 1
+        assert bm.saved_domains == ["example"]
+
+    def test_explicit_login_script_skips_generic_login_wait(self):
+        """Scripts with their own login flow should not be intercepted."""
+
+        bm = MagicMock()
+        page = MagicMock()
+        page.url = "https://example.com"
+        page.evaluate.return_value = {
+            "success": True,
+            "login_required": True,
+            "url": page.url,
+        }
+        bm.get_page.return_value = page
+        bm._context.storage_state.return_value = {"cookies": [], "origins": []}
+        bm.current_domain = None
+
+        engine = ScriptEngine(bm)
+        engine.register_function("goto", lambda url: "ok")
+        result = engine.execute(
+            "PHONE_LOGIN_TEXT = '手机号登录'\n"
+            "goto('https://example.com/login')\n"
+            "print('login flow continues')"
+        )
+
+        assert result.success is True
+        assert "login flow continues" in result.output
+        page.wait_for_timeout.assert_not_called()
+
+    def test_generic_login_guard_reports_closed_page_cleanly(self):
+        class FakeContext:
+            def storage_state(self):
+                return {"cookies": [], "origins": []}
+
+        class FakePage:
+            url = "https://example.com"
+            context = FakeContext()
+
+            def __init__(self):
+                self.closed = False
+
+            def evaluate(self, code):
+                if "GENERIC_LOGIN_PROMPT_DETECTOR" in code:
+                    return {
+                        "success": True,
+                        "login_required": True,
+                        "url": self.url,
+                    }
+                return None
+
+            def wait_for_timeout(self, _milliseconds):
+                self.closed = True
+                raise RuntimeError("TargetClosedError: page closed")
+
+            def is_closed(self):
+                return self.closed
+
+        page = FakePage()
+        guard = GenericLoginGuard(lambda: page)
+
+        with pytest.raises(RuntimeError, match="Page closed while waiting"):
+            guard.maybe_wait("after_goto")
 
 
 # ---------------------------------------------------------------------------

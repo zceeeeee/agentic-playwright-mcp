@@ -68,24 +68,6 @@ def test_xiaohongshu_comment_detects_phone_login_text():
     _with_page(html, assert_page)
 
 
-def test_xiaohongshu_comment_detects_recommendation_login_prompt():
-    html = """
-    <body>
-      <div style="width:320px;height:40px">\u767b\u5f55\u540e\u63a8\u8350\u66f4\u61c2\u4f60\u7684\u7b14\u8bb0</div>
-    </body>
-    """
-
-    def assert_page(page):
-        result = _detect_login_state(lambda code: page.evaluate(code))
-
-        assert result["success"] is True
-        assert result["phone_login"] is False
-        assert result["login_required_prompt"] is True
-        assert result["logged_in"] is False
-
-    _with_page(html, assert_page)
-
-
 def test_xiaohongshu_comment_dom_flow_fills_and_sends():
     html = """
     <body>
@@ -187,39 +169,6 @@ def test_xiaohongshu_comment_waits_for_manual_login_before_opening_note():
     assert "manual_login_completion" in steps
     assert steps.index("manual_login_completion") < steps.index("navigate_note")
     assert waits[:2] == [1, 2]
-
-
-def test_xiaohongshu_comment_waits_when_note_shows_recommendation_login_prompt():
-    urls = []
-    login_states = [
-        {"success": True, "logged_in": True, "phone_login": False, "login_required_prompt": False},
-        {"success": True, "logged_in": False, "phone_login": False, "login_required_prompt": True},
-        {"success": True, "logged_in": False, "phone_login": False, "login_required_prompt": True},
-        {"success": True, "logged_in": True, "phone_login": False, "login_required_prompt": False},
-    ]
-
-    def run_js(code):
-        if "PHONE_LOGIN_TEXT" in code:
-            return login_states.pop(0)
-        return _mock_comment_run_js()(code)
-
-    result = run(
-        "dwfebfer",
-        note_url="https://www.xiaohongshu.com/explore/698af8b4000000001b01c20b",
-        max_wait_seconds=4,
-        goto_fn=lambda url: urls.append(url) or "ok",
-        run_js_fn=run_js,
-        wait_fn=_noop,
-        get_url_fn=lambda: urls[-1],
-        get_text_fn=lambda: "",
-        log_fn=lambda message: None,
-    )
-
-    assert result["success"] is True
-    steps = [step["step"] for step in result["steps"]]
-    assert "detect_note_login_state" in steps
-    assert "manual_login_completion_after_note_navigation" in steps
-    assert steps.index("manual_login_completion_after_note_navigation") < steps.index("find_comment_input")
 
 
 def test_xiaohongshu_comment_source_runs_inside_script_engine():

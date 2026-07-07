@@ -216,6 +216,85 @@ def test_sequential_execution():
     assert page.calls == [("fill", "e2", "python"), ("click", "e1")]
 
 
+def test_login_popup_waits_for_cookie_then_requests_new_snapshot():
+    class FakeContext:
+        def __init__(self):
+            self.logged_in = False
+
+        def storage_state(self):
+            if not self.logged_in:
+                return {"cookies": [], "origins": []}
+            return {
+                "cookies": [
+                    {
+                        "name": "session",
+                        "value": "abc123",
+                        "domain": "example.com",
+                    }
+                ],
+                "origins": [],
+            }
+
+    class LoginPage(FakePage):
+        def __init__(self, context):
+            super().__init__()
+            self.context = context
+            self.url = "https://example.com"
+            self.login_required = False
+
+        def goto(self, url, wait_until=None):
+            self.url = url
+            self.login_required = True
+            super().goto(url, wait_until=wait_until)
+
+        def evaluate(self, code):
+            if "GENERIC_LOGIN_PROMPT_DETECTOR" in code:
+                return {
+                    "success": True,
+                    "login_required": self.login_required,
+                    "url": self.url,
+                }
+            return None
+
+        def wait_for_timeout(self, timeout):
+            super().wait_for_timeout(timeout)
+            self.login_required = False
+            self.context.logged_in = True
+
+    class FakeBrowserManager:
+        def __init__(self):
+            self._context = FakeContext()
+            self.page = LoginPage(self._context)
+            self.current_domain = None
+            self.saved_domains = []
+
+        def save_auth(self, domain=None):
+            self.saved_domains.append(domain)
+            return True
+
+    bm = FakeBrowserManager()
+    executor = ExploreExecutor(bm.page, browser_manager=bm)
+    executor.update_snapshot(_snapshot())
+
+    result = executor.execute(
+        ActionBatch(
+            actions=[
+                Action(action="goto", url="https://example.com/protected"),
+                Action(action="fill", ref="e2", value="python"),
+            ]
+        )
+    )
+
+    assert result.success is True
+    assert result.status == "login_completed"
+    assert result.need_snapshot is True
+    assert bm.saved_domains == ["example"]
+    assert bm.page.calls == [
+        ("goto", "https://example.com/protected", "load"),
+        ("timeout", 1000),
+    ]
+
+
 def test_panel_prompt_is_terminator_and_skips_following_actions():
     executor, page = _executor()
     panel = FakePanelManager()
