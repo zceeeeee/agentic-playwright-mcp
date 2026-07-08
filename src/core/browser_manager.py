@@ -245,8 +245,17 @@ class BrowserManager:
         Raises:
             RuntimeError: 浏览器尚未启动时抛出。
         """
-        if self._page is None:
+        if self._context is None:
             raise RuntimeError("浏览器尚未启动，请先调用 launch() 方法。")
+        if self._page is None or self._page.is_closed():
+            remaining = [p for p in self._context.pages if not p.is_closed()]
+            if remaining:
+                self._page = remaining[-1]
+                logger.info("Auto-switched to live tab: %s", self._page.url)
+            else:
+                self._page = self._context.new_page()
+                logger.info("Current page was closed, opened a replacement tab")
+                self._inject_panel()
         return self._page
 
     def new_tab(self) -> Page:

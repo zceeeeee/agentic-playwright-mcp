@@ -278,6 +278,124 @@ class SkillRouter:
             if skill.source_file
         ][:limit]
 
+    def _build_zhihu_article_param_script(
+        self,
+        source_code: str,
+        skill: SkillRouterInfo,
+        extracted: Dict[str, str],
+    ) -> str:
+        """Build Zhihu article prompts with optional AI generation."""
+        pre_auth = self._build_pre_auth_script(skill)
+        title_value = json.dumps(extracted.get("title", "-1"), ensure_ascii=False)
+        keyword_value = json.dumps(extracted.get("keyword", "-1"), ensure_ascii=False)
+        title_ai_generate = bool(skill.params.get("title", {}).get("ai_generate", False))
+        keyword_ai_generate = bool(
+            skill.params.get("keyword", {}).get("ai_generate", False)
+        )
+        helper = (
+            "\n\n# Zhihu article AI/manual parameter confirmation\n"
+            "def __agentic_is_missing_param(value):\n"
+            "    return value is None or str(value).strip() in {'', '-1', 'None', 'none', 'null'}\n\n"
+            "def __agentic_confirm_required_param(name, value, question, required):\n"
+            "    attempts = 0\n"
+            "    while required:\n"
+            "        attempts += 1\n"
+            "        answer = panel_prompt(question)\n"
+            "        answer = str(answer or '').strip()\n"
+            "        if answer:\n"
+            "            return answer\n"
+            "        if not __agentic_is_missing_param(value):\n"
+            "            return value\n"
+            "        if attempts >= 3:\n"
+            "            raise RuntimeError(f'缺少必填参数：{name}')\n"
+            "        question = f'参数「{name}」是必填项，请输入后再继续：'\n"
+            "    return value\n\n"
+            "def __agentic_required_input(question, name):\n"
+            "    attempts = 0\n"
+            "    while True:\n"
+            "        attempts += 1\n"
+            "        answer = panel_prompt(question)\n"
+            "        answer = str(answer or '').strip()\n"
+            "        if answer:\n"
+            "            return answer\n"
+            "        if attempts >= 3:\n"
+            "            raise RuntimeError(f'缺少必填参数：{name}')\n"
+            "        question = f'{name}不能为空，请重新输入：'\n\n"
+            "def __agentic_is_ai_mode(answer):\n"
+            "    text = str(answer or '').strip().lower()\n"
+            "    return text in {'ai', 'ai生成', '生成', '自动生成', 'yes', 'y', '1', 'true', '是'}\n\n"
+            "def __agentic_generate_text(prompt, name):\n"
+            "    try:\n"
+            "        text = llm_generate_text(prompt)\n"
+            "    except Exception as exc:\n"
+            "        raise RuntimeError(f'AI生成{name}失败：{exc}')\n"
+            "    text = str(text or '').strip()\n"
+            "    if not text:\n"
+            "        raise RuntimeError(f'AI生成{name}失败：返回为空')\n"
+            "    return text\n\n"
+            "def __agentic_prepare_zhihu_content(current, allow_ai):\n"
+            "    if allow_ai:\n"
+            "        mode = panel_prompt('知乎文章内容请选择输入方式：[AI生成] [手动输入/确认]')\n"
+            "    else:\n"
+            "        mode = '手动输入/确认'\n"
+            "    if allow_ai and __agentic_is_ai_mode(mode):\n"
+            "        topic = __agentic_required_input('请输入文章主题：', '文章主题')\n"
+            "        count = __agentic_required_input('请输入正文字数（例如 800）：', '正文字数')\n"
+            "        prompt = (\n"
+            "            f'请围绕主题“{topic}”生成一篇适合发布在知乎的中文文章正文，'\n"
+            "            f'字数约{count}字。要求结构清晰、表达自然、有观点和细节。'\n"
+            "            '只输出正文，不要输出标题、说明、Markdown代码块。'\n"
+            "        )\n"
+            "        try:\n"
+            "            return __agentic_generate_text(prompt, '文章内容')\n"
+            "        except Exception as exc:\n"
+            "            fallback = panel_prompt(f'AI生成文章内容失败：{exc}。请手动输入文章内容后继续：')\n"
+            "            fallback = str(fallback or '').strip()\n"
+            "            if fallback:\n"
+            "                return fallback\n"
+            "            return __agentic_required_input('请手动输入文章内容：', '文章内容')\n"
+            "    return __agentic_confirm_required_param(\n"
+            "        'keyword',\n"
+            "        current,\n"
+            "        f'请确认技能「知乎发布」的参数「文章内容」。当前值：{current}。如需修改请输入新值，直接回车则沿用当前值：',\n"
+            "        True,\n"
+            "    )\n\n"
+            "def __agentic_prepare_zhihu_title(current, content, allow_ai):\n"
+            "    if allow_ai:\n"
+            "        mode = panel_prompt('知乎文章标题请选择输入方式：[AI生成] [手动输入/确认]')\n"
+            "    else:\n"
+            "        mode = '手动输入/确认'\n"
+            "    if allow_ai and __agentic_is_ai_mode(mode):\n"
+            "        count = __agentic_required_input('请输入标题字数限制（例如 20）：', '标题字数')\n"
+            "        prompt = (\n"
+            "            f'请根据下面文章正文生成一个适合知乎发布的中文标题，标题不超过{count}字。'\n"
+            "            '要求准确、有吸引力，不要夸张营销。只输出标题。\\n\\n正文：\\n'\n"
+            "            f'{content}'\n"
+            "        )\n"
+            "        try:\n"
+            "            return __agentic_generate_text(prompt, '文章标题')\n"
+            "        except Exception as exc:\n"
+            "            fallback = panel_prompt(f'AI生成文章标题失败：{exc}。请手动输入文章标题后继续：')\n"
+            "            fallback = str(fallback or '').strip()\n"
+            "            if fallback:\n"
+            "                return fallback\n"
+            "            return __agentic_required_input('请手动输入文章标题：', '文章标题')\n"
+            "    return __agentic_confirm_required_param(\n"
+            "        'title',\n"
+            "        current,\n"
+            "        f'请确认技能「知乎发布」的参数「文章标题」。当前值：{current}。如需修改请输入新值，直接回车则沿用当前值：',\n"
+            "        True,\n"
+            "    )\n"
+        )
+        return (
+            f"{source_code}"
+            f"{helper}"
+            f"{pre_auth}"
+            f"__param_keyword = __agentic_prepare_zhihu_content({keyword_value}, {keyword_ai_generate!r})\n"
+            f"__param_title = __agentic_prepare_zhihu_title({title_value}, __param_keyword, {title_ai_generate!r})\n\n"
+            f"# 自动调用\nrun(title=__param_title, keyword=__param_keyword)"
+        )
+
     @staticmethod
     def _is_gmail_send_intent(query_lower: str) -> bool:
         if "gmail" not in query_lower:
@@ -529,6 +647,9 @@ class SkillRouter:
             if extracted.get(param_name, "-1") == "-1" and value and value != "-1":
                 extracted[param_name] = value
 
+        if skill.id == "domain/zhihu_send":
+            return self._build_zhihu_article_param_script(source_code, skill, extracted)
+
         param_lines = []
         args_parts = []
         for param_name in skill.params:
@@ -545,12 +666,16 @@ class SkillRouter:
             var_name = f"__param_{safe_param_name}"
             prompt_label = param_def.get("description") or param_name
             prompt_text = f"请确认技能「{skill.name}」的参数「{prompt_label}」。当前值：{raw_value}。如需修改请输入新值，直接回车则沿用当前值："
+            ai_generate = bool(param_def.get("ai_generate", False))
             param_lines.append(
-                f"{var_name} = __agentic_confirm_required_param("
+                f"{var_name} = __agentic_prepare_param("
+                f"{json.dumps(skill.name, ensure_ascii=False)}, "
                 f"{json.dumps(param_name, ensure_ascii=False)}, "
+                f"{json.dumps(prompt_label, ensure_ascii=False)}, "
                 f"{value}, "
                 f"{json.dumps(prompt_text, ensure_ascii=False)}, "
-                f"{required!r})"
+                f"{required!r}, "
+                f"{ai_generate!r})"
             )
             if param_def.get("positional", False):
                 args_parts.append(var_name)
@@ -558,6 +683,44 @@ class SkillRouter:
                 args_parts.append(f"{param_name}={var_name}")
 
         args_str = ", ".join(args_parts)
+        generic_ai_helper = (
+            "\n\n# Generic AI parameter generation\n"
+            "def __agentic_is_ai_mode(answer):\n"
+            "    text = str(answer or '').strip().lower()\n"
+            "    return text in {'ai', 'ai生成', '生成', '自动生成', 'yes', 'y', '1', 'true', '是'}\n\n"
+            "def __agentic_generate_text(prompt, label):\n"
+            "    try:\n"
+            "        text = llm_generate_text(prompt)\n"
+            "    except Exception as exc:\n"
+            "        raise RuntimeError(f'AI生成{label}失败：{exc}')\n"
+            "    text = str(text or '').strip()\n"
+            "    if not text:\n"
+            "        raise RuntimeError(f'AI生成{label}失败：返回为空')\n"
+            "    return text\n\n"
+            "def __agentic_prepare_param(skill_name, name, label, value, question, required, allow_ai):\n"
+            "    if allow_ai:\n"
+            "        mode = panel_prompt(f'参数「{label}」请选择输入方式：[AI生成] [手动输入/确认]')\n"
+            "        if __agentic_is_ai_mode(mode):\n"
+            "            requirement = panel_prompt(f'请描述要生成的「{label}」要求。当前值：{value}。可以写主题、字数、风格等：')\n"
+            "            requirement = str(requirement or '').strip()\n"
+            "            if not requirement and not __agentic_is_missing_param(value):\n"
+            "                requirement = str(value)\n"
+            "            if not requirement:\n"
+            "                requirement = f'生成适合参数「{label}」的内容'\n"
+            "            prompt = (\n"
+            "                f'你正在为自动化技能「{skill_name}」生成参数「{label}」（内部名：{name}）。'\n"
+            "                f'用户要求：{requirement}。'\n"
+            "                '请只输出最终要填入该参数的内容，不要解释，不要 Markdown 代码块。'\n"
+            "            )\n"
+            "            try:\n"
+            "                return __agentic_generate_text(prompt, label)\n"
+            "            except Exception as exc:\n"
+            "                fallback = panel_prompt(f'AI生成「{label}」失败：{exc}。请手动输入该参数后继续：')\n"
+            "                fallback = str(fallback or '').strip()\n"
+            "                if fallback:\n"
+            "                    return fallback\n"
+            "    return __agentic_confirm_required_param(name, value, question, required)\n"
+        )
         pre_auth = self._build_pre_auth_script(skill)
         helper = (
             "\n\n# 自动补全缺失参数\n"
@@ -581,6 +744,7 @@ class SkillRouter:
         return (
             f"{source_code}"
             f"{helper}"
+            f"{generic_ai_helper}"
             f"{pre_auth}"
             f"{chr(10).join(param_lines)}\n\n"
             f"# 自动调用\nrun({args_str})"

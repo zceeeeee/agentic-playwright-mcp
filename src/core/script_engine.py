@@ -265,7 +265,13 @@ class ScriptEngine:
 
         def panel_prompt(question: str) -> str:
             """向用户提问并等待回答。"""
-            return _pm.prompt(_get_page().get_page(), str(question))
+            try:
+                return _pm.prompt(_get_page().get_page(), str(question))
+            except Exception as exc:
+                if "Target page, context or browser has been closed" not in str(exc):
+                    raise
+                log("Panel prompt target was closed; reopening page and retrying")
+                return _pm.prompt(_get_page().get_page(), str(question))
 
         def panel_read() -> dict:
             """读取用户通过面板输入的最新数据。"""
@@ -290,6 +296,19 @@ class ScriptEngine:
         def panel_set_fields(fields: list) -> None:
             """动态更新面板表单字段。"""
             _pm.set_fields(_get_page().get_page(), fields)
+
+        def llm_generate_text(prompt: str) -> str:
+            """Generate free-form text with the configured LLM."""
+            from src.core.llm_client import get_llm_client
+
+            client = get_llm_client()
+            if not client.available:
+                raise RuntimeError("LLM API key is not configured")
+            text = client.chat(str(prompt), temperature=0.7, max_tokens=4096)
+            text = str(text or "").strip()
+            if not text:
+                raise RuntimeError("LLM returned empty text")
+            return text
 
         def _storage_state_logged_in(domain: str) -> bool:
             bm = self._get_browser_manager()
@@ -419,6 +438,7 @@ class ScriptEngine:
         ns["panel_set_title"] = panel_set_title
         ns["panel_set_fields"] = panel_set_fields
         ns["ensure_auth"] = ensure_auth
+        ns["llm_generate_text"] = llm_generate_text
 
         # 注册用户自定义函数（控件层等）
         ns.update(self._extra_globals)
