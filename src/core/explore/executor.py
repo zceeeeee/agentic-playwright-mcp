@@ -20,6 +20,24 @@ from .models import (
     WaitCondition,
 )
 
+# 需要 ref 的动作类型
+_REF_REQUIRED_ACTIONS = frozenset({
+    ActionType.CLICK,
+    ActionType.FILL,
+    ActionType.HOVER,
+    ActionType.SELECT,
+    ActionType.CHECK,
+    ActionType.UNCHECK,
+    ActionType.DOUBLE_CLICK,
+    ActionType.DRAG,
+    ActionType.UPLOAD,
+})
+
+# 用户输入类终止符（页面不变，不需要重新快照）
+_USER_INPUT_TERMINATORS = frozenset({
+    ActionType.PAUSE_FOR_INPUT,
+})
+
 
 class ExploreError(Exception):
     """Base Explore execution error."""
@@ -162,22 +180,29 @@ class ExploreExecutor:
         for action in batch.actions:
             if not action.action:
                 raise ExploreError("缺少 action 字段", ErrorCode.INVALID_FORMAT)
-            if action.action in {
-                ActionType.CLICK,
-                ActionType.FILL,
-                ActionType.HOVER,
-                ActionType.SELECT,
-                ActionType.CHECK,
-                ActionType.UNCHECK,
-            } and not action.ref:
+            if action.action in _REF_REQUIRED_ACTIONS and not action.ref:
                 raise ExploreError(
                     f"操作 {action.action} 缺少 ref",
                     ErrorCode.INVALID_FORMAT,
                 )
             if action.action == ActionType.FILL and action.value is None:
                 raise ExploreError("fill 操作缺少 value", ErrorCode.INVALID_FORMAT)
+            if action.action == ActionType.TYPE and action.value is None:
+                raise ExploreError("type 操作缺少 value", ErrorCode.INVALID_FORMAT)
             if action.action == ActionType.GOTO and not action.url:
                 raise ExploreError("goto 操作缺少 url", ErrorCode.INVALID_FORMAT)
+            if action.action == ActionType.KEYBOARD and not action.value:
+                raise ExploreError("keyboard 操作缺少 value", ErrorCode.INVALID_FORMAT)
+            if action.action == ActionType.UPLOAD and not action.value:
+                raise ExploreError("upload 操作缺少 value (文件路径)", ErrorCode.INVALID_FORMAT)
+            if action.action == ActionType.DRAG and not action.value:
+                raise ExploreError("drag 操作缺少 value (目标 ref)", ErrorCode.INVALID_FORMAT)
+            if action.action == ActionType.CLICK_AT and (
+                action.x is None or action.y is None
+            ):
+                raise ExploreError("click_at 操作缺少 x/y 坐标", ErrorCode.INVALID_FORMAT)
+            if action.action == ActionType.DIALOG and not action.dialog_action:
+                raise ExploreError("dialog 操作缺少 dialog_action (accept/dismiss)", ErrorCode.INVALID_FORMAT)
 
     def _validate_version(self, actions: list[Action]) -> None:
         if not self._current_snapshot:
@@ -192,10 +217,14 @@ class ExploreExecutor:
             if action.ref and action.ref not in self._valid_refs:
                 snapshot_v = self._current_snapshot.version if self._current_snapshot else "unknown"
                 raise RefExpiredError(action.ref, snapshot_v)
+            # drag 的 value 是目标 ref，也需要校验
+            if action.action == ActionType.DRAG and action.value and action.value not in self._valid_refs:
+                snapshot_v = self._current_snapshot.version if self._current_snapshot else "unknown"
+                raise RefExpiredError(action.value, snapshot_v)
 
     def _find_terminator(self, actions: list[Action]) -> int | None:
         for idx, action in enumerate(actions):
-            if action.action == ActionType.PANEL_PROMPT:
+            if action.action in _USER_INPUT_TERMINATORS:
                 return idx
             if action.condition in (WaitCondition.LOAD, WaitCondition.NETWORKIDLE):
                 return idx
@@ -207,7 +236,7 @@ class ExploreExecutor:
         return None
 
     def _terminator_status(self, action: Action) -> str:
-        if action.action == ActionType.PANEL_PROMPT:
+        if action.action in _USER_INPUT_TERMINATORS:
             return "user_input_received"
         return "navigation_occurred"
 
@@ -218,10 +247,11 @@ class ExploreExecutor:
                 ActionType.GOTO,
                 ActionType.BACK,
                 ActionType.FORWARD,
-                ActionType.PANEL_SHOW,
-                ActionType.PANEL_SET_FIELDS,
-                ActionType.PANEL_LOG,
-                ActionType.PANEL_PROMPT,
+                ActionType.EVALUATE,
+                ActionType.DIALOG,
+                ActionType.SCREENSHOT,
+                ActionType.SNAPSHOT,
+                ActionType.PAUSE_FOR_INPUT,
             }:
                 if self._login_guard.maybe_wait(f"before_{action.action}"):
                     self._needs_snapshot = True
@@ -260,14 +290,26 @@ class ExploreExecutor:
             elif action.action == ActionType.SNAPSHOT:
                 if self._snapshot_gen is not None:
                     self.update_snapshot(self._snapshot_gen.snapshot(self._page))
-            elif action.action == ActionType.PANEL_SHOW:
-                self._panel_show(action)
-            elif action.action == ActionType.PANEL_SET_FIELDS:
-                self._panel_set_fields(action)
-            elif action.action == ActionType.PANEL_LOG:
-                self._panel_log(action)
-            elif action.action == ActionType.PANEL_PROMPT:
-                answer = self._panel_prompt(action)
+            # ── 新增动作类型 ──
+            elif action.action == ActionType.DOUBLE_CLICK:
+                self._double_click(action.ref or "")
+            elif action.action == ActionType.KEYBOARD:
+                self._keyboard(action.value or "", action.delay)
+            elif action.action == ActionType.DRAG:
+                self._drag(action.ref or "", action.value or "")
+            elif action.action == ActionType.UPLOAD:
+                self._upload(action.ref or "", action.value or "")
+            elif action.action == ActionType.EVALUATE:
+                eval_result = self._evaluate(action.value or "")
+                return ActionResult(
+                    action=action.action,
+                    ref=action.ref,
+                    success=True,
+                    value=str(eval_result) if eval_result is not None else None,
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+            elif action.action == ActionType.PAUSE_FOR_INPUT:
+                answer = self._pause_for_input(action)
                 return ActionResult(
                     action=action.action,
                     ref=action.ref,
@@ -275,6 +317,12 @@ class ExploreExecutor:
                     value=answer,
                     duration_ms=int((time.time() - start) * 1000),
                 )
+            elif action.action == ActionType.CLICK_AT:
+                self._click_at(action.x or 0, action.y or 0)
+            elif action.action == ActionType.TYPE:
+                self._type(action.ref or "", action.value or "", action.delay)
+            elif action.action == ActionType.DIALOG:
+                self._handle_dialog(action)
             else:
                 raise ExploreError(
                     f"未知操作类型: {action.action}",
@@ -282,12 +330,11 @@ class ExploreExecutor:
                 )
 
             if action.action not in {
-                ActionType.PANEL_SHOW,
-                ActionType.PANEL_SET_FIELDS,
-                ActionType.PANEL_LOG,
-                ActionType.PANEL_PROMPT,
                 ActionType.SCREENSHOT,
                 ActionType.SNAPSHOT,
+                ActionType.EVALUATE,
+                ActionType.DIALOG,
+                ActionType.PAUSE_FOR_INPUT,
             }:
                 if self._login_guard.maybe_wait(f"after_{action.action}"):
                     self._needs_snapshot = True
@@ -367,34 +414,69 @@ class ExploreExecutor:
 
         return get_panel_manager()
 
-    def _panel_show(self, action: Action) -> None:
-        pm = self._get_panel_manager()
-        if action.title:
-            pm.set_title(self._page, action.title)
-        if action.value:
-            pm.log(self._page, action.value)
-        pm.toggle(self._page, True)
+    # ── 新增动作执行方法 ──
 
-    def _panel_prompt(self, action: Action) -> str:
+    def _double_click(self, ref: str) -> None:
+        self._get_locator(ref).dblclick(timeout=self._action_timeout())
+
+    def _keyboard(self, value: str, delay: int | None = None) -> None:
+        kwargs: dict[str, Any] = {}
+        if delay:
+            kwargs["delay"] = delay
+        self._page.keyboard.press(value, **kwargs)
+
+    def _drag(self, source_ref: str, target_ref: str) -> None:
+        source = self._get_locator(source_ref)
+        target = self._get_locator(target_ref)
+        source.drag_to(target, timeout=self._action_timeout())
+
+    def _upload(self, ref: str, file_path: str) -> None:
+        self._get_locator(ref).set_input_files(file_path, timeout=self._action_timeout())
+
+    def _evaluate(self, expression: str) -> Any:
+        return self._page.evaluate(expression)
+
+    def _pause_for_input(self, action: Action) -> str:
+        """暂停等待用户输入，页面不变（不触发 need_snapshot）。
+
+        支持两种交互模式：
+        - 简单提问: value 是问题文本，弹出输入框
+        - 结构化表单: fields 提供字段定义，弹出表单
+        """
         pm = self._get_panel_manager()
         if action.title:
             pm.set_title(self._page, action.title)
         pm.toggle(self._page, True)
-        question = action.value or "Please provide the information needed to continue."
+        # 结构化表单模式
+        if action.fields:
+            pm.set_fields(self._page, action.fields)
+            return str(pm.prompt(self._page, action.value or "请填写以下信息") or "")
+        # 简单提问模式
+        question = action.value or "请提供需要的信息以继续。"
         return str(pm.prompt(self._page, question) or "")
 
-    def _panel_set_fields(self, action: Action) -> None:
-        pm = self._get_panel_manager()
-        if action.title:
-            pm.set_title(self._page, action.title)
-        pm.set_fields(self._page, action.fields or [])
-        pm.toggle(self._page, True)
+    def _click_at(self, x: int, y: int) -> None:
+        self._page.mouse.click(x, y)
 
-    def _panel_log(self, action: Action) -> None:
-        pm = self._get_panel_manager()
-        if action.title:
-            pm.set_title(self._page, action.title)
-        pm.log(self._page, action.value or "")
+    def _type(self, ref: str, value: str, delay: int | None = None) -> None:
+        kwargs: dict[str, Any] = {}
+        if delay:
+            kwargs["delay"] = delay
+        self._get_locator(ref).press_sequentially(value, **kwargs)
+
+    def _handle_dialog(self, action: Action) -> None:
+        """响应浏览器原生对话框 (alert/confirm/prompt)。"""
+        # 等待对话框出现（短超时）
+        try:
+            dialog = self._page.wait_for_event(
+                "dialog", timeout=action.timeout or 3000
+            )
+        except Exception:
+            return  # 没有对话框出现，忽略
+        if action.dialog_action == "accept":
+            dialog.accept(action.value or "")
+        else:
+            dialog.dismiss()
 
     def update_snapshot(self, snapshot: SnapshotResponse) -> None:
         self._current_snapshot = snapshot

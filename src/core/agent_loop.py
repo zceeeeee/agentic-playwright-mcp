@@ -1597,10 +1597,15 @@ class AgentLoop:
                                     "scroll",
                                     "wait",
                                     "screenshot",
-                                    "panel_show",
-                                    "panel_prompt",
-                                    "panel_set_fields",
-                                    "panel_log",
+                                    "double_click",
+                                    "keyboard",
+                                    "drag",
+                                    "upload",
+                                    "evaluate",
+                                    "pause_for_input",
+                                    "click_at",
+                                    "type",
+                                    "dialog",
                                 ],
                             },
                             "ref": {"type": ["string", "null"]},
@@ -1626,6 +1631,12 @@ class AgentLoop:
                                 "items": {"type": "object"},
                             },
                             "snapshot_v": {"type": ["string", "null"]},
+                            "intent": {"type": ["string", "null"]},
+                            "reasoning": {"type": ["string", "null"]},
+                            "x": {"type": ["integer", "null"]},
+                            "y": {"type": ["integer", "null"]},
+                            "dialog_action": {"type": ["string", "null"]},
+                            "delay": {"type": ["integer", "null"]},
                         },
                         "required": ["action"],
                     },
@@ -1641,25 +1652,25 @@ class AgentLoop:
             f"ARIA 快照:\n{json.dumps(snapshot.model_dump(mode='json'), ensure_ascii=False)}\n\n"
             "规则:\n"
             "1. 优先使用快照中的 ref 操作元素。\n"
-            "2. click/fill/select/check/uncheck/hover 必须填写 ref。\n"
-            "3. fill/select 必须填写 value。\n"
-            "4. 会导致页面跳转的最后一步请加 condition=load 或 networkidle。\n"
-            "5. 每个使用 ref 的动作都填写 snapshot_v 为当前快照版本。\n"
-            "6. 不要编造快照里不存在的 ref。\n"
-            "7. 如果任务是在当前网站搜索商品/内容，优先找到搜索框，fill 搜索关键词，再按 Enter 或点击搜索按钮。\n"
-            "8. 如果任务是在 AI/问答/聊天网站询问问题，优先找到消息输入框，fill 用户问题，再按 Enter 或点击发送按钮。\n"
-            "9. 如果刚完成登录或页面发生变化，不要继续使用旧页面假设；等待重新快照后再规划。"
+            "2. click/double_click/fill/select/check/uncheck/hover/drag/upload 必须填写 ref。\n"
+            "3. fill/select/type/upload 必须填写 value。\n"
+            "4. keyboard 的 value 是按键名（Enter, Escape, Tab, Control+a 等）。\n"
+            "5. drag 的 ref 是源元素，value 是目标元素的 ref。\n"
+            "6. click_at 需要 x, y 视口坐标（用于 canvas 等无 ref 元素）。\n"
+            "7. 会导致页面跳转的最后一步请加 condition=load 或 networkidle。\n"
+            "8. 每个使用 ref 的动作都填写 snapshot_v 为当前快照版本。\n"
+            "9. 不要编造快照里不存在的 ref。\n"
+            "10. 如果任务是在当前网站搜索商品/内容，优先找到搜索框，fill 搜索关键词，再 keyboard(Enter) 或 click 搜索按钮。\n"
+            "11. 如果任务是在 AI/问答/聊天网站询问问题，优先找到消息输入框，fill 用户问题，再 keyboard(Enter) 或 click 发送按钮。\n"
+            "12. 如果刚完成登录或页面发生变化，不要继续使用旧页面假设；等待重新快照后再规划。\n"
+            "13. 遇到登录、验证码、人机验证、缺少必要信息或不确定下一步时，"
+            "使用 pause_for_input 暂停询问用户。pause_for_input 的 value 是问题文本，"
+            "可用 [选项] 提供快捷选择；如需结构化输入可填写 fields。\n"
+            "14. pause_for_input 应作为本批次最后一步。\n"
+            "15. 每个动作尽量填写 intent（意图）和 reasoning（推理）帮助调试。"
         )
         if self._last_panel_answer:
-            prompt += f"\n\n上一次面板回答: {self._last_panel_answer}"
-        prompt += (
-            "\n\n面板规则:\n"
-            "- 遇到登录、验证码、人机验证、缺少必要信息或不确定下一步时，"
-            "可以使用 panel_show/panel_set_fields/panel_prompt/panel_log 打开浏览器内置面板询问用户。\n"
-            "- panel_prompt 的 value 是问题文本，可用 [选项] [选项] 提供快捷选择；"
-            "如果需要用户先回答，panel_prompt 应作为本批次最后一步。\n"
-            "- panel_set_fields 的 fields 是字段数组，字段支持 name/label/type/placeholder/options。"
-        )
+            prompt += f"\n\n上一次用户回答: {self._last_panel_answer}"
         try:
             data = chat_json_with_retry(
                 self._llm_parser._client,
@@ -2583,7 +2594,7 @@ class AgentLoop:
             step.success = True
             step.result = f"Explore 执行成功: {result.status}"
             for action_result in result.results:
-                if action_result.action == "panel_prompt" and action_result.value is not None:
+                if action_result.action in ("panel_prompt", "pause_for_input") and action_result.value is not None:
                     self._last_panel_answer = action_result.value
             if result.need_snapshot:
                 return AgentState.EXPLORE
