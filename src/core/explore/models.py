@@ -32,10 +32,16 @@ class ActionType(str, Enum):
     SNAPSHOT = "snapshot"
     WAIT = "wait"
     SCREENSHOT = "screenshot"
-    PANEL_SHOW = "panel_show"
-    PANEL_PROMPT = "panel_prompt"
-    PANEL_SET_FIELDS = "panel_set_fields"
-    PANEL_LOG = "panel_log"
+    # Phase 1: 新增动作类型
+    DOUBLE_CLICK = "double_click"
+    KEYBOARD = "keyboard"
+    DRAG = "drag"
+    UPLOAD = "upload"
+    EVALUATE = "evaluate"
+    PAUSE_FOR_INPUT = "pause_for_input"
+    CLICK_AT = "click_at"
+    TYPE = "type"
+    DIALOG = "dialog"
 
 
 class WaitCondition(str, Enum):
@@ -113,6 +119,16 @@ class Action(BaseModel):
     snapshot_v: Optional[str] = None
     snapshot_mode: Optional[SnapshotMode] = None
     focus: Optional[FocusTarget] = None
+    # 模型意图与推理
+    intent: Optional[str] = Field(None, description="模型对这步操作的意图说明")
+    reasoning: Optional[str] = Field(None, description="模型的推理过程")
+    # click_at 专用：视口坐标
+    x: Optional[int] = Field(None, description="click_at 视口 X 坐标")
+    y: Optional[int] = Field(None, description="click_at 视口 Y 坐标")
+    # dialog 专用：对话框响应
+    dialog_action: Optional[str] = Field(None, description="dialog 动作: accept / dismiss")
+    # keyboard 专用：按键延迟
+    delay: Optional[int] = Field(None, description="keyboard 逐键延迟(ms)")
 
 
 class ActionBatch(BaseModel):
@@ -120,6 +136,8 @@ class ActionBatch(BaseModel):
 
     actions: list[Action]
     task_id: Optional[str] = None
+    plan_intent: Optional[str] = Field(None, description="本批次的整体意图描述")
+    steps_description: Optional[str] = Field(None, description="步骤说明")
 
 
 class ActionResult(BaseModel):
