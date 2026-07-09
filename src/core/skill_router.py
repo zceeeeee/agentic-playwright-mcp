@@ -521,6 +521,7 @@ class SkillRouter:
                 prompt,
                 schema=schema,
                 system_prompt="你是任务路由器。根据用户输入，从候选 skill 中选最匹配的一个。",
+                max_tokens=2048,
             )
         except Exception as exc:
             logger.warning("LLM 精排失败: %s", exc)
@@ -859,6 +860,7 @@ class SkillRouter:
                 prompt,
                 schema=schema,
                 system_prompt="You extract declared browser automation parameters and return only structured values.",
+                max_tokens=2048,
             )
         except Exception as exc:
             logger.warning("LLM param extraction failed: %s", exc)

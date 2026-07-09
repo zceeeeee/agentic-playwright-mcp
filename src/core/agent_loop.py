@@ -155,7 +155,7 @@ class AgentLoop:
 
     def __init__(
         self,
-        max_steps: int = 10,
+        max_steps: int = 20,
         library_dir: str | None = None,
         on_step: Callable[[AgentStep], None] | None = None,
         event_bus: EventBus | None = None,
@@ -409,7 +409,7 @@ class AgentLoop:
                 self._emit_task_after(result, task_id)
                 return result
 
-            self._bootstrap_initial_page(task)
+            # 不在这里导航，script 模式 goto 在脚本里，Explore 模式在 PLAN 阶段导航
 
             with log_timing("agent_task", task=task) as task_meta:
                 while state not in (AgentState.DONE, AgentState.FAILED):
@@ -787,6 +787,32 @@ class AgentLoop:
             step.mode = "explore"
             step.result = "刚完成入口跳转，跳过技能匹配，直接 Explore"
             logger.info("PLAN: just navigated to entry, skipping to Explore")
+            return AgentState.EXPLORE
+
+        # ── 0.5. 如果已有 Explore 快照（刚拍完），直接用 Explore 规划操作，
+        #     跳过技能匹配，避免在已导航的目标站点上误匹配通用技能 ──
+        if explore_agent.has_pending_snapshot:
+            batch = explore_agent.plan_actions(task)
+            if batch and batch.actions:
+                step.action = "执行 Explore 操作"
+                step.mode = "explore"
+                step.actions = batch.actions
+                step.result = f"Explore 规划了 {len(batch.actions)} 个操作"
+                # 输出规划的具体操作，方便调试
+                for i, a in enumerate(batch.actions):
+                    logger.info(
+                        "PLAN: Explore action[%d]: %s ref=%s value=%s url=%s",
+                        i, a.action, a.ref, a.value, a.url,
+                    )
+                return AgentState.ACT
+            # Explore planner 失败，但已有快照 → 不 fall through 到技能匹配，
+            # 而是重新进入 Explore 模式拍新快照再试
+            logger.info("PLAN: Explore planner failed with pending snapshot, retrying Explore")
+            return AgentState.EXPLORE
+
+        # ── 0.6. 如果整个任务处于 Explore 模式，跳过所有技能匹配，直接进入 Explore ──
+        if explore_agent.explore_mode_active:
+            logger.info("PLAN: Explore mode active, skipping skill matching, entering Explore")
             return AgentState.EXPLORE
 
         # ── 1. SkillRouter 严格关键词匹配 ──
@@ -1617,6 +1643,7 @@ class AgentLoop:
                 prompt,
                 system_prompt="你是一个技能路由器。从候选技能列表中选出最匹配用户指令的技能。",
                 schema=schema,
+                max_tokens=2048,
             )
             chosen_id = data.get("skill_id", "")
             try:
@@ -1687,7 +1714,11 @@ class AgentLoop:
 
         try:
             raw = self._llm_parser._client.chat(match_prompt)
-            chosen_id = raw.strip().strip('"').strip("'")
+            chosen_id = self._extract_skill_id(raw, all_skills)
+
+            if not chosen_id:
+                logger.warning("LLM 意图解析无法从响应中提取技能 ID: %s", raw[:200])
+                return None
 
             chosen_skill = self._skill_router.get_skill(chosen_id)
             if not chosen_skill:
@@ -1763,6 +1794,30 @@ class AgentLoop:
         except Exception as exc:
             logger.warning("LLM 意图解析失败: %s", exc)
             return None
+
+    @staticmethod
+    def _extract_skill_id(raw: str, all_skills: list) -> str | None:
+        """从 LLM 响应中提取技能 ID。
+
+        LLM 常返回整段推理文本而非纯 ID，此方法从响应中精确匹配已知技能 ID。
+        """
+        raw = raw.strip().strip('"').strip("'")
+        # 收集所有已知技能 ID
+        known_ids = {s.id for s in all_skills}
+        # 1. 精确匹配（LLM 遵守指令只返回 ID）
+        if raw in known_ids:
+            return raw
+        # 2. 在文本中搜索已知技能 ID（优先匹配最长的）
+        for sid in sorted(known_ids, key=len, reverse=True):
+            if sid in raw:
+                return sid
+        # 3. 用正则匹配 domain/xxx 或 xxx_search 模式
+        match = re.search(r"(domain/[\w]+|[\w]+_search)", raw)
+        if match:
+            candidate = match.group(0)
+            if candidate in known_ids:
+                return candidate
+        return None
 
     def _extract_site(self, url: str) -> str:
         """从 URL 中提取站点名称。"""
@@ -2002,7 +2057,7 @@ class AgentLoop:
 
 def run_task(
     task: str,
-    max_steps: int = 10,
+    max_steps: int = 20,
     library_dir: str | None = None,
 ) -> AgentTaskResult:
     """执行一个自然语言任务的便捷函数。

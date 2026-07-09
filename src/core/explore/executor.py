@@ -100,12 +100,16 @@ class ExploreExecutor:
         self._current_snapshot: SnapshotResponse | None = None
         self._valid_refs: set[str] = set()
         self._ref_locator_cache: dict[str, Any] = {}
+        self._ref_role_map: dict[str, tuple[str, str]] = {}  # ref → (role, name)
         self._needs_snapshot = False
+        # Explore 模式禁用 login_guard，因为 Explore 本身有 pause_for_input 机制处理登录
+        # login_guard 会误检测页面上的"登录"文字，导致所有操作被跳过
         self._login_guard = GenericLoginGuard(
             lambda: self._page,
             browser_manager=browser_manager,
             log_fn=lambda message: None,
             panel_manager_getter=self._get_panel_manager,
+            enabled=False,
         )
 
     def execute(self, batch: ActionBatch | dict[str, Any]) -> ExecutionResult:
@@ -259,6 +263,8 @@ class ExploreExecutor:
                 ActionType.SCREENSHOT,
                 ActionType.SNAPSHOT,
                 ActionType.PAUSE_FOR_INPUT,
+                ActionType.REQUEST_DEEP_SCAN,
+                ActionType.COMPLETE,
             }:
                 if self._login_guard.maybe_wait(f"before_{action.action}"):
                     self._needs_snapshot = True
@@ -297,6 +303,29 @@ class ExploreExecutor:
             elif action.action == ActionType.SNAPSHOT:
                 if self._snapshot_gen is not None:
                     self.update_snapshot(self._snapshot_gen.snapshot(self._page))
+            elif action.action == ActionType.REQUEST_DEEP_SCAN:
+                if self._snapshot_gen is not None:
+                    self.update_snapshot(self._snapshot_gen.force_deep_scan(self._page))
+                    self._needs_snapshot = True
+                    return ActionResult(
+                        action=action.action,
+                        ref=action.ref,
+                        success=True,
+                        value="deep_scan_completed",
+                        duration_ms=int((time.time() - start) * 1000),
+                    )
+                raise ExploreError(
+                    "深度扫描不可用: SnapshotGenerator 未配置",
+                    ErrorCode.EXECUTION_FAILED,
+                )
+            elif action.action == ActionType.COMPLETE:
+                return ActionResult(
+                    action=action.action,
+                    ref=action.ref,
+                    success=True,
+                    value=action.value or "task_completed",
+                    duration_ms=int((time.time() - start) * 1000),
+                )
             # ── 新增动作类型 ──
             elif action.action == ActionType.DOUBLE_CLICK:
                 self._double_click(action.ref or "")
@@ -342,6 +371,8 @@ class ExploreExecutor:
                 ActionType.EVALUATE,
                 ActionType.DIALOG,
                 ActionType.PAUSE_FOR_INPUT,
+                ActionType.REQUEST_DEEP_SCAN,
+                ActionType.COMPLETE,
             }:
                 if self._login_guard.maybe_wait(f"after_{action.action}"):
                     self._needs_snapshot = True
@@ -374,6 +405,7 @@ class ExploreExecutor:
     def _get_locator(self, ref: str) -> Any:
         if ref in self._ref_locator_cache:
             return self._ref_locator_cache[ref]
+        # 优先用 data-explore-ref 属性定位（由 _sync_refs_to_dom 添加）
         locator = self._page.locator(f'[data-explore-ref="{ref}"]')
         self._ref_locator_cache[ref] = locator
         return locator
@@ -488,6 +520,7 @@ class ExploreExecutor:
     def update_snapshot(self, snapshot: SnapshotResponse) -> None:
         self._current_snapshot = snapshot
         self._valid_refs = self._extract_all_refs(snapshot.nodes)
+        self._ref_role_map = self._build_ref_role_map(snapshot.nodes)
         self._ref_locator_cache.clear()
 
     def _extract_all_refs(self, nodes) -> set[str]:
@@ -497,6 +530,19 @@ class ExploreExecutor:
                 refs.add(node.ref)
             refs.update(self._extract_all_refs(node.children))
         return refs
+
+    def _build_ref_role_map(self, nodes) -> dict[str, tuple[str, str]]:
+        """建立 ref → (role, name) 映射，用于 get_by_role 定位。"""
+        mapping: dict[str, tuple[str, str]] = {}
+        for node in self._iter_nodes(nodes):
+            if node.ref:
+                mapping[node.ref] = (node.role, node.name)
+        return mapping
+
+    def _iter_nodes(self, nodes):
+        for node in nodes:
+            yield node
+            yield from self._iter_nodes(node.children)
 
     def get_ref_locator_mapping(self) -> dict[str, str]:
         mapping = {}

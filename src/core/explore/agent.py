@@ -84,6 +84,7 @@ class ExploreAgent:
         self._last_panel_answer: str | None = None
         self._entry_bootstrap_attempted: set[str] = set()
         self.just_navigated_to_entry = False
+        self.explore_mode_active = False  # 整个任务生命周期内标记 Explore 模式
 
     def _get_browser_manager(self):
         return self._browser_manager_getter()
@@ -99,6 +100,8 @@ class ExploreAgent:
             snapshot_max_elements=int(cfg.get("EXPLORE_SNAPSHOT_MAX_ELEMENTS", 50)),
             experience_upgrade_threshold=int(cfg.get("EXPERIENCE_UPGRADE_THRESHOLD", 3)),
             experience_confidence_threshold=float(cfg.get("EXPERIENCE_CONFIDENCE_THRESHOLD", 0.8)),
+            min_interactive_threshold=int(cfg.get("EXPLORE_MIN_INTERACTIVE_THRESHOLD", 5)),
+            deep_scan_max_elements=int(cfg.get("EXPLORE_DEEP_SCAN_MAX_ELEMENTS", 150)),
         )
 
     @property
@@ -152,6 +155,7 @@ class ExploreAgent:
         self._last_panel_answer = None
         self._entry_bootstrap_attempted = set()
         self.just_navigated_to_entry = False
+        self.explore_mode_active = False
 
     def should_skip_generated_script(self, task: str, script: str) -> bool:
         if not self.should_resolve_entry_with_llm(task):
@@ -278,6 +282,14 @@ class ExploreAgent:
             f"Explore 快照: {snapshot.version} "
             f"(可交互元素 {snapshot.interactive_count} 个)"
         )
+        # 输出快照中的交互元素列表，方便调试
+        interactive = [
+            f"  [{n.ref}] {n.role} \"{n.name}\""
+            for n in self._iter_snapshot_nodes(snapshot.nodes)
+            if n.ref
+        ]
+        if interactive:
+            logger.info("Explore 快照交互元素:\n%s", "\n".join(interactive))
         self.ensure_executor().update_snapshot(snapshot)
 
     def plan_actions(self, task: str) -> ActionBatch | None:
@@ -319,6 +331,8 @@ class ExploreAgent:
                                     "click_at",
                                     "type",
                                     "dialog",
+                                    "request_deep_scan",
+                                    "complete",
                                 ],
                             },
                             "ref": {"type": ["string", "null"]},
@@ -352,6 +366,7 @@ class ExploreAgent:
             "输出一个短的原子操作数组。\n\n"
             f"用户任务: {task}\n\n"
             f"当前快照版本: {snapshot.version}\n"
+            f"深度扫描: {'是' if snapshot.deep_scanned else '否'}\n"
             f"ARIA 快照:\n{json.dumps(snapshot.model_dump(mode='json'), ensure_ascii=False)}\n\n"
             "规则:\n"
             "2. click/double_click/fill/select/check/uncheck/hover/drag/upload 必须填写 ref。\n"
@@ -370,6 +385,21 @@ class ExploreAgent:
             "可用 [选项] 提供快捷选择；如需结构化输入可填写 fields。\n"
             "14. pause_for_input 应作为本批次最后一步。\n"
             "15. 每个动作尽量填写 intent（意图）和 reasoning（推理）帮助调试。\n"
+            "16. 每个 action 必须是包含 action/ref/value 等字段的对象，"
+            "不要用字符串或 null 代替。不需要的字段直接省略，不要填 null 或 \"string\"。\n"
+            "17. request_deep_scan 只用于当前页面确实有目标元素但快照没检测到的情况。"
+            "如果当前页面还没有导航到目标页面（比如需要先点击链接进入某个页面），"
+            "应该先执行导航操作（click 链接/按钮），而不是 request_deep_scan。\n"
+            "18. request_deep_scan 应作为本批次唯一动作。深度扫描完成后会重新拍快照，你再基于新快照规划。\n"
+            "19. 如果快照已经标记 deep_scanned=true，说明已经深度扫描过，不要再 request_deep_scan。"
+            "此时仍找不到目标元素，使用 pause_for_input 问用户。\n"
+            "20. 当任务完成时（例如：已经找到并操作了目标元素，或者已经获取到所需信息），"
+            "使用 complete 动作结束任务。complete 的 value 可以填写任务完成的摘要。\n"
+            "21. complete 应作为本批次最后一步。\n"
+            '{"actions": ['
+            '{"action": "fill", "ref": "e12", "value": "台风", "snapshot_v": "v1"}, '
+            '{"action": "keyboard", "value": "Enter", "condition": "networkidle"}'
+            "]}\n"
         )
         if self._last_panel_answer:
             prompt += f"\n\n上一次用户回答: {self._last_panel_answer}"
@@ -380,7 +410,7 @@ class ExploreAgent:
                 system_prompt="只返回 Explore ActionBatch JSON，不要输出解释。",
                 schema=schema,
                 temperature=0,
-                max_tokens=1024,
+                max_tokens=2048,
             )
             data = self.normalize_action_batch_data(data)
             batch = ActionBatch.model_validate(data)
@@ -409,6 +439,17 @@ class ExploreAgent:
                 normalized = dict(data)
                 normalized["actions"] = [actions]
                 return normalized
+            # 过滤掉 LLM 返回的非字典项（如 "string"、"null" 等 schema 类型名字面量）
+            if isinstance(actions, list):
+                filtered = [a for a in actions if isinstance(a, dict)]
+                if len(filtered) != len(actions):
+                    logger.warning(
+                        "normalize: filtered %d non-dict action items",
+                        len(actions) - len(filtered),
+                    )
+                normalized = dict(data)
+                normalized["actions"] = filtered
+                return normalized
             return data
 
         if "action" in data:
@@ -436,10 +477,14 @@ class ExploreAgent:
             for action_result in result.results:
                 if action_result.action in ("panel_prompt", "pause_for_input") and action_result.value is not None:
                     self._last_panel_answer = action_result.value
-            if result.need_snapshot:
-                return "explore"
+                # 如果执行了 complete 动作，任务完成
+                if action_result.action == "complete":
+                    self.save_experience(step)
+                    return "done"
             self.save_experience(step)
-            return "done"
+            # 执行成功后，返回 "explore" 让程序继续拍快照、规划下一步操作
+            # 只有当任务明确完成时才返回 "done"
+            return "explore"
 
         step.success = False
         step.error = result.error or "Explore 执行失败"
@@ -541,6 +586,7 @@ class ExploreAgent:
 
         logger.info("Explore bootstrap navigated to %s", target_url)
         self.just_navigated_to_entry = True
+        self.explore_mode_active = True  # 标记整个任务进入 Explore 模式
         return target_url
 
     def _resolve_initial_entry_url_via_llm(self, task: str) -> str | None:
@@ -577,7 +623,7 @@ class ExploreAgent:
                 system_prompt="只返回起始网页判断 JSON，不要输出解释。",
                 schema=schema,
                 temperature=0,
-                max_tokens=512,
+                max_tokens=1024,
             )
         except Exception as exc:
             logger.warning("Explore entry URL LLM resolution failed: %s", exc)
@@ -661,7 +707,7 @@ class ExploreAgent:
                 system_prompt="只返回 JSON，不要输出解释。",
                 schema=schema,
                 temperature=0,
-                max_tokens=256,
+                max_tokens=1024,
             )
         except Exception as exc:
             logger.warning("LLM search result selection failed: %s", exc)

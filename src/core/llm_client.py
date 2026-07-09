@@ -51,11 +51,14 @@ class LLMConfig:
     temperature: float = 0
     max_tokens: int = 1024
     timeout: float = 30.0
+    thinking_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> LLMConfig:
         """从环境变量加载配置。"""
         provider = os.getenv("LLM_PROVIDER", "openai").lower()
+
+        thinking_enabled = os.getenv("LLM_THINKING_ENABLED", "true").lower() == "true"
 
         if provider == "anthropic":
             return cls(
@@ -66,6 +69,7 @@ class LLMConfig:
                 temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
                 max_tokens=int(os.getenv("LLM_MAX_TOKENS", "1024")),
                 timeout=float(os.getenv("LLM_TIMEOUT", "30")),
+                thinking_enabled=thinking_enabled,
             )
 
         return cls(
@@ -78,6 +82,7 @@ class LLMConfig:
             temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "1024")),
             timeout=float(os.getenv("LLM_TIMEOUT", "30")),
+            thinking_enabled=thinking_enabled,
         )
 
 
@@ -226,6 +231,7 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "messages": messages,
+            "thinking": {"type": "enabled" if cfg.thinking_enabled else "disabled"},
         }
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
@@ -277,7 +283,7 @@ class LLMClient:
             "max_tokens": max_tokens,
             "messages": messages,
             "response_format": {"type": "json_object"},
-            "chat_template_kwargs": {"enable_thinking": False},
+            "thinking": {"type": "enabled" if cfg.thinking_enabled else "disabled"},
         }
 
         headers = {

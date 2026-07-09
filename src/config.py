@@ -40,6 +40,7 @@ _DEFAULTS: dict[str, str] = {
     "EXPERIENCE_STORAGE_DIR": str(_PROJECT_ROOT / "data" / "explore_experiences"),
     "EXPERIENCE_UPGRADE_THRESHOLD": "3",
     "EXPERIENCE_CONFIDENCE_THRESHOLD": "0.8",
+    "LLM_THINKING_ENABLED": "true",
 }
 
 

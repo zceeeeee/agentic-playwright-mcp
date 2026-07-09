@@ -42,6 +42,8 @@ class ActionType(str, Enum):
     CLICK_AT = "click_at"
     TYPE = "type"
     DIALOG = "dialog"
+    REQUEST_DEEP_SCAN = "request_deep_scan"
+    COMPLETE = "complete"
 
 
 class WaitCondition(str, Enum):
@@ -89,6 +91,7 @@ class SnapshotResponse(BaseModel):
     nodes: list[AriaNode] = Field(default_factory=list)
     interactive_count: int = 0
     has_modal: bool = False
+    deep_scanned: bool = Field(False, description="是否经过深度扫描")
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
@@ -226,6 +229,8 @@ class ExploreConfig(BaseModel):
     experience_upgrade_threshold: int = 3
     experience_confidence_threshold: float = 0.8
     experience_deprecated_threshold: float = 0.3
+    min_interactive_threshold: int = 5
+    deep_scan_max_elements: int = 150
     interactive_roles: list[str] = Field(
         default_factory=lambda: [
             "button",
