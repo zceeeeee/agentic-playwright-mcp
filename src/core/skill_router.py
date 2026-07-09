@@ -521,6 +521,7 @@ class SkillRouter:
                 prompt,
                 schema=schema,
                 system_prompt="你是任务路由器。根据用户输入，从候选 skill 中选最匹配的一个。",
+                max_tokens=2048,
             )
         except Exception as exc:
             logger.warning("LLM 精排失败: %s", exc)
@@ -667,22 +668,32 @@ class SkillRouter:
             prompt_label = param_def.get("description") or param_name
             prompt_text = f"请确认技能「{skill.name}」的参数「{prompt_label}」。当前值：{raw_value}。如需修改请输入新值，直接回车则沿用当前值："
             ai_generate = bool(param_def.get("ai_generate", False))
-            param_lines.append(
-                f"{var_name} = __agentic_prepare_param("
-                f"{json.dumps(skill.name, ensure_ascii=False)}, "
-                f"{json.dumps(param_name, ensure_ascii=False)}, "
-                f"{json.dumps(prompt_label, ensure_ascii=False)}, "
-                f"{value}, "
-                f"{json.dumps(prompt_text, ensure_ascii=False)}, "
-                f"{required!r}, "
-                f"{ai_generate!r})"
+            should_confirm_param = self._should_confirm_param(
+                skill,
+                param_def=param_def,
+                raw_value=raw_value,
+                required=required,
             )
+            if should_confirm_param:
+                param_lines.append(
+                    f"{var_name} = __agentic_prepare_param("
+                    f"{json.dumps(skill.name, ensure_ascii=False)}, "
+                    f"{json.dumps(param_name, ensure_ascii=False)}, "
+                    f"{json.dumps(prompt_label, ensure_ascii=False)}, "
+                    f"{value}, "
+                    f"{json.dumps(prompt_text, ensure_ascii=False)}, "
+                    f"{required!r}, "
+                    f"{ai_generate!r})"
+                )
+            else:
+                param_lines.append(f"{var_name} = {value}")
             if param_def.get("positional", False):
                 args_parts.append(var_name)
             else:
                 args_parts.append(f"{param_name}={var_name}")
 
         args_str = ", ".join(args_parts)
+        needs_param_helper = any("__agentic_prepare_param(" in line for line in param_lines)
         generic_ai_helper = (
             "\n\n# Generic AI parameter generation\n"
             "def __agentic_is_ai_mode(answer):\n"
@@ -743,12 +754,28 @@ class SkillRouter:
         )
         return (
             f"{source_code}"
-            f"{helper}"
-            f"{generic_ai_helper}"
+            f"{helper if needs_param_helper else ''}"
+            f"{generic_ai_helper if needs_param_helper else ''}"
             f"{pre_auth}"
             f"{chr(10).join(param_lines)}\n\n"
             f"# 自动调用\nrun({args_str})"
         )
+
+    @staticmethod
+    def _should_confirm_param(
+        skill: SkillRouterInfo,
+        *,
+        param_def: Dict[str, Any],
+        raw_value: str,
+        required: bool,
+    ) -> bool:
+        if raw_value == "-1":
+            return required
+        if param_def.get("confirm", True) is False:
+            return False
+        if skill.platform.lower() == "wechat":
+            return False
+        return True
 
     @staticmethod
     def _build_pre_auth_script(skill: SkillRouterInfo) -> str:
@@ -833,6 +860,7 @@ class SkillRouter:
                 prompt,
                 schema=schema,
                 system_prompt="You extract declared browser automation parameters and return only structured values.",
+                max_tokens=2048,
             )
         except Exception as exc:
             logger.warning("LLM param extraction failed: %s", exc)

@@ -308,7 +308,7 @@ def analyze_page(question: str = "") -> str:
 
 
 @mcp.tool()
-def run_task(task: str, max_steps: int = 10) -> str:
+def run_task(task: str, max_steps: int = 20) -> str:
     """Execute a natural language task using the autonomous Agent loop.
 
     The Agent will automatically:
@@ -337,7 +337,7 @@ def run_task(task: str, max_steps: int = 10) -> str:
     try:
         from src.core.agent_loop import run_task as _run_task
 
-        result = _run_task(task, max_steps=max_steps)
+        result = _run_task(task, max_steps=max(max_steps, 20))
     except Exception as exc:
         return f"Agent loop error: {exc}"
 

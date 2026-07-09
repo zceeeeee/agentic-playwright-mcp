@@ -24,6 +24,18 @@ from src.core.login_guard import GenericLoginGuard
 from src.layer_1.actions import do_click, do_fill, do_goto, do_screenshot
 
 # ---------------------------------------------------------------------------
+# 全角 → 半角清洗表（LLM 常生成全角标点导致 exec SyntaxError）
+# ---------------------------------------------------------------------------
+_FULLWIDTH_MAP: dict[str, str] = str.maketrans(
+    # 全角标点
+    "，。；：？！（）【】｛｝＝＋－＊／＼｜＆＾％＄＃＠～｀＜＞＂＇、"
+    # 智能引号（弯引号，LLM 极常生成）
+    "“”‘’",
+    ",.;:?!()[]{}=+-*/\\|&^%$#@~`<>\"'"
+    "\"\"''.",
+)
+
+# ---------------------------------------------------------------------------
 # 数据模型
 # ---------------------------------------------------------------------------
 
@@ -137,6 +149,9 @@ class ScriptEngine:
 
         # Allow hooks to modify the script code
         script_code = before_event.data.get("code", script_code)
+
+        # 清洗全角标点（LLM 常生成全角字符导致 SyntaxError）
+        script_code = script_code.translate(_FULLWIDTH_MAP)
 
         # 捕获 print 输出
         output_buffer = io.StringIO()
