@@ -44,6 +44,11 @@ class ActionType(str, Enum):
     DIALOG = "dialog"
     REQUEST_DEEP_SCAN = "request_deep_scan"
     COMPLETE = "complete"
+    # Tab 管理
+    TAB_LIST = "tab_list"
+    TAB_NEW = "tab_new"
+    TAB_SWITCH = "tab_switch"
+    TAB_CLOSE = "tab_close"
 
 
 class WaitCondition(str, Enum):
@@ -92,6 +97,7 @@ class SnapshotResponse(BaseModel):
     interactive_count: int = 0
     has_modal: bool = False
     deep_scanned: bool = Field(False, description="是否经过深度扫描")
+    pending_dialog: Optional[PendingDialog] = Field(None, description="待处理的浏览器对话框")
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
@@ -169,6 +175,33 @@ class ExecutionResult(BaseModel):
     error_code: Optional[ErrorCode] = None
     need_snapshot: bool = False
     new_snapshot: Optional[SnapshotResponse] = None
+    tabs: Optional[list[TabInfo]] = Field(None, description="tab_list 返回的标签页列表")
+    downloads: Optional[list[DownloadInfo]] = Field(None, description="本次执行触发的下载事件")
+
+
+class TabInfo(BaseModel):
+    """单个 tab 的信息。"""
+
+    index: int = Field(..., description="tab 在 context.pages 中的索引")
+    url: str = Field("", description="当前 URL")
+    title: str = Field("", description="页面标题")
+    is_active: bool = Field(False, description="是否为当前活跃 tab")
+
+
+class PendingDialog(BaseModel):
+    """待处理的浏览器对话框。"""
+
+    dialog_type: str = Field(..., description="alert, confirm, prompt, beforeunload")
+    message: str = Field("", description="对话框消息文本")
+    default_value: str = Field("", description="prompt 对话框的默认值")
+
+
+class DownloadInfo(BaseModel):
+    """下载事件信息。"""
+
+    url: str = Field(..., description="下载 URL")
+    suggested_filename: str = Field("", description="建议的文件名")
+    path: str = Field("", description="本地保存路径")
 
 
 class ElementInfo(BaseModel):

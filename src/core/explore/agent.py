@@ -273,14 +273,22 @@ class ExploreAgent:
 
     def snapshot(self, step: Any) -> None:
         page = self._get_browser_manager().get_page()
-        snapshot = self._snapshot_generator().snapshot(page, mode=SnapshotMode.COMPACT)
+        executor = self.ensure_executor()
+        # 从 executor 获取待处理的 dialog 信息，注入到快照中
+        pending_dialog = executor.get_pending_dialog_info()
+        snapshot = self._snapshot_generator().snapshot(
+            page, mode=SnapshotMode.COMPACT, pending_dialog=pending_dialog,
+        )
         step.snapshot = snapshot
         self._last_snapshot = snapshot
         self._current_snapshot = snapshot
         step.page_summary = json.dumps(snapshot.model_dump(mode="json"), ensure_ascii=False)
+        dialog_hint = ""
+        if snapshot.pending_dialog:
+            dialog_hint = f" [⚠ 待处理对话框: {snapshot.pending_dialog.dialog_type}: {snapshot.pending_dialog.message[:50]}]"
         step.result = (
             f"Explore 快照: {snapshot.version} "
-            f"(可交互元素 {snapshot.interactive_count} 个)"
+            f"(可交互元素 {snapshot.interactive_count} 个){dialog_hint}"
         )
         # 输出快照中的交互元素列表，方便调试
         interactive = [
@@ -290,7 +298,7 @@ class ExploreAgent:
         ]
         if interactive:
             logger.info("Explore 快照交互元素:\n%s", "\n".join(interactive))
-        self.ensure_executor().update_snapshot(snapshot)
+        executor.update_snapshot(snapshot)
 
     def plan_actions(self, task: str) -> ActionBatch | None:
         if not self._llm_parser or not self._llm_parser.available:
@@ -333,6 +341,10 @@ class ExploreAgent:
                                     "dialog",
                                     "request_deep_scan",
                                     "complete",
+                                    "tab_list",
+                                    "tab_new",
+                                    "tab_switch",
+                                    "tab_close",
                                 ],
                             },
                             "ref": {"type": ["string", "null"]},
@@ -396,6 +408,14 @@ class ExploreAgent:
             "20. 当任务完成时（例如：已经找到并操作了目标元素，或者已经获取到所需信息），"
             "使用 complete 动作结束任务。complete 的 value 可以填写任务完成的摘要。\n"
             "21. complete 应作为本批次最后一步。\n"
+            "22. tab_list 可查看所有打开的标签页及其 URL 和标题。\n"
+            "23. tab_new 可打开新标签页，可选填 url 直接导航。\n"
+            "24. tab_switch 可切换到指定标签页（value 为 tab 索引），切换后会自动重新拍快照。\n"
+            "25. tab_close 可关闭当前标签页，会自动切换到其他标签页。\n"
+            "26. 当操作导致新标签页打开（如 OAuth 跳转、点击 target=_blank 链接），先 tab_list 查看，再 tab_switch 切换过去。\n"
+            "27. 如果快照中包含 pending_dialog，说明有浏览器对话框等待处理。"
+            "使用 dialog 动作：dialog_action=\"accept\" 或 \"dismiss\"，prompt 对话框的 value 填写回复内容。\n"
+            "28. alert 对话框会被自动接受，但其消息会在快照中报告，可以忽略。\n"
             '{"actions": ['
             '{"action": "fill", "ref": "e12", "value": "台风", "snapshot_v": "v1"}, '
             '{"action": "keyboard", "value": "Enter", "condition": "networkidle"}'
@@ -474,6 +494,13 @@ class ExploreAgent:
         if result.success:
             step.success = True
             step.result = f"Explore 执行成功: {result.status}"
+            # 附加下载信息
+            if result.downloads:
+                download_msgs = [
+                    f"  📥 {d.suggested_filename} ← {d.url}" + (f" → {d.path}" if d.path else "")
+                    for d in result.downloads
+                ]
+                step.result += "\n下载:\n" + "\n".join(download_msgs)
             for action_result in result.results:
                 if action_result.action in ("panel_prompt", "pause_for_input") and action_result.value is not None:
                     self._last_panel_answer = action_result.value
@@ -481,6 +508,9 @@ class ExploreAgent:
                 if action_result.action == "complete":
                     self.save_experience(step)
                     return "done"
+                # tab 操作后需要重新拍快照
+                if action_result.action in ("tab_new", "tab_switch", "tab_close"):
+                    return "explore"
             self.save_experience(step)
             # 执行成功后，返回 "explore" 让程序继续拍快照、规划下一步操作
             # 只有当任务明确完成时才返回 "done"

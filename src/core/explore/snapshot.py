@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .models import AriaNode, FocusTarget, SnapshotMode, SnapshotResponse
+from .models import AriaNode, FocusTarget, PendingDialog, SnapshotMode, SnapshotResponse
 from .ref_generator import RefGenerator
 
 
@@ -415,6 +415,7 @@ class SnapshotGenerator:
         page: Any,
         mode: SnapshotMode = SnapshotMode.COMPACT,
         focus: FocusTarget | None = None,
+        pending_dialog: PendingDialog | None = None,
     ) -> SnapshotResponse:
         self._version_counter += 1
         version = f"snapshot_v{self._version_counter}"
@@ -439,6 +440,7 @@ class SnapshotGenerator:
             nodes=nodes,
             interactive_count=interactive_count,
             has_modal=state.get("has_modal", False),
+            pending_dialog=pending_dialog,
         )
 
     def _extract_aria_tree(self, page: Any, focus: FocusTarget | None = None) -> dict:

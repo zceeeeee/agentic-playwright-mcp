@@ -14,9 +14,12 @@ from .models import (
     ActionBatch,
     ActionResult,
     ActionType,
+    DownloadInfo,
     ErrorCode,
     ExecutionResult,
+    PendingDialog,
     SnapshotResponse,
+    TabInfo,
     WaitCondition,
 )
 
@@ -102,6 +105,20 @@ class ExploreExecutor:
         self._ref_locator_cache: dict[str, Any] = {}
         self._ref_role_map: dict[str, tuple[str, str]] = {}  # ref → (role, name)
         self._needs_snapshot = False
+        # Dialog 自动追踪
+        self._pending_dialog_info: PendingDialog | None = None
+        self._pending_dialog_obj: Any = None  # 暂存 dialog 对象引用
+        try:
+            self._page.on("dialog", self._on_dialog)
+        except Exception:
+            pass
+        # Download 拦截
+        self._pending_downloads: list[DownloadInfo] = []
+        try:
+            if hasattr(self._page, "context") and hasattr(self._page.context, "on"):
+                self._page.context.on("download", self._on_download)
+        except Exception:
+            pass
         # Explore 模式禁用 login_guard，因为 Explore 本身有 pause_for_input 机制处理登录
         # login_guard 会误检测页面上的"登录"文字，导致所有操作被跳过
         self._login_guard = GenericLoginGuard(
@@ -129,46 +146,53 @@ class ExploreExecutor:
                 result = self._execute_single(action)
                 results.append(result)
                 if not result.success:
-                    return ExecutionResult(
+                    return self._finalize_result(ExecutionResult(
                         success=False,
                         status="failed",
                         results=results,
                         error=result.error,
                         error_code=result.error_code,
-                    )
+                    ))
                 if self._needs_snapshot:
-                    return ExecutionResult(
+                    return self._finalize_result(ExecutionResult(
                         success=True,
                         status="login_completed",
                         results=results,
                         need_snapshot=True,
-                    )
+                    ))
 
             if terminator_idx is not None:
-                return ExecutionResult(
+                return self._finalize_result(ExecutionResult(
                     success=True,
                     status=self._terminator_status(batch.actions[terminator_idx]),
                     results=results,
                     need_snapshot=True,
-                )
+                ))
 
-            return ExecutionResult(success=True, status="success", results=results)
+            return self._finalize_result(ExecutionResult(success=True, status="success", results=results))
         except ExploreError as exc:
-            return ExecutionResult(
+            return self._finalize_result(ExecutionResult(
                 success=False,
                 status="failed",
                 results=results,
                 error=str(exc),
                 error_code=exc.error_code,
-            )
+            ))
         except Exception as exc:
-            return ExecutionResult(
+            return self._finalize_result(ExecutionResult(
                 success=False,
                 status="failed",
                 results=results,
                 error=f"执行异常: {exc}",
                 error_code=ErrorCode.EXECUTION_FAILED,
-            )
+            ))
+
+    def _finalize_result(self, result: ExecutionResult) -> ExecutionResult:
+        """在返回结果前附加下载信息。"""
+        downloads = self.get_pending_downloads()
+        if downloads:
+            result.downloads = downloads
+        return result
 
     def _coerce_batch(self, batch: ActionBatch | dict[str, Any]) -> ActionBatch:
         if isinstance(batch, ActionBatch):
@@ -265,6 +289,10 @@ class ExploreExecutor:
                 ActionType.PAUSE_FOR_INPUT,
                 ActionType.REQUEST_DEEP_SCAN,
                 ActionType.COMPLETE,
+                ActionType.TAB_LIST,
+                ActionType.TAB_NEW,
+                ActionType.TAB_SWITCH,
+                ActionType.TAB_CLOSE,
             }:
                 if self._login_guard.maybe_wait(f"before_{action.action}"):
                     self._needs_snapshot = True
@@ -359,6 +387,49 @@ class ExploreExecutor:
                 self._type(action.ref or "", action.value or "", action.delay)
             elif action.action == ActionType.DIALOG:
                 self._handle_dialog(action)
+            # ── Tab 管理 ──
+            elif action.action == ActionType.TAB_LIST:
+                tabs = self._tab_list()
+                return ActionResult(
+                    action=action.action,
+                    ref=action.ref,
+                    success=True,
+                    value=str([t.model_dump() for t in tabs]),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+            elif action.action == ActionType.TAB_NEW:
+                tab_info = self._tab_new(action.url)
+                return ActionResult(
+                    action=action.action,
+                    ref=action.ref,
+                    success=True,
+                    value=tab_info.model_dump_json(),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+            elif action.action == ActionType.TAB_SWITCH:
+                if action.value is None:
+                    raise ExploreError("tab_switch 需要 value (目标 tab 索引)", ErrorCode.INVALID_FORMAT)
+                try:
+                    index = int(action.value)
+                except (ValueError, TypeError):
+                    raise ExploreError(f"tab_switch 的 value 必须是整数，收到: {action.value}", ErrorCode.INVALID_FORMAT)
+                tab_info = self._tab_switch(index)
+                return ActionResult(
+                    action=action.action,
+                    ref=action.ref,
+                    success=True,
+                    value=tab_info.model_dump_json(),
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+            elif action.action == ActionType.TAB_CLOSE:
+                self._tab_close()
+                return ActionResult(
+                    action=action.action,
+                    ref=action.ref,
+                    success=True,
+                    value="tab_closed",
+                    duration_ms=int((time.time() - start) * 1000),
+                )
             else:
                 raise ExploreError(
                     f"未知操作类型: {action.action}",
@@ -371,6 +442,10 @@ class ExploreExecutor:
                 ActionType.EVALUATE,
                 ActionType.DIALOG,
                 ActionType.PAUSE_FOR_INPUT,
+                ActionType.TAB_LIST,
+                ActionType.TAB_NEW,
+                ActionType.TAB_SWITCH,
+                ActionType.TAB_CLOSE,
                 ActionType.REQUEST_DEEP_SCAN,
                 ActionType.COMPLETE,
             }:
@@ -453,6 +528,61 @@ class ExploreExecutor:
 
         return get_panel_manager()
 
+    # ── Dialog 自动追踪 ──
+
+    def _on_dialog(self, dialog: Any) -> None:
+        """页面 dialog 事件回调，自动捕获所有对话框。"""
+        self._pending_dialog_info = PendingDialog(
+            dialog_type=dialog.type,
+            message=dialog.message,
+            default_value=getattr(dialog, "default_value", "") or "",
+        )
+        self._pending_dialog_obj = dialog
+        # alert 类型自动 accept 以避免阻塞页面
+        if dialog.type == "alert":
+            try:
+                dialog.accept()
+            except Exception:
+                pass
+            self._pending_dialog_obj = None
+
+    def get_pending_dialog_info(self) -> PendingDialog | None:
+        """获取待处理的 dialog 信息（供快照报告）。"""
+        return self._pending_dialog_info
+
+    def clear_pending_dialog(self) -> None:
+        """清除已处理的 dialog 信息。"""
+        self._pending_dialog_info = None
+        self._pending_dialog_obj = None
+
+    # ── Download 拦截 ──
+
+    def _on_download(self, download: Any) -> None:
+        """BrowserContext download 事件回调，自动记录下载元数据。"""
+        from pathlib import Path
+
+        info = DownloadInfo(
+            url=download.url,
+            suggested_filename=download.suggested_filename,
+            path="",
+        )
+        # 尝试保存到 downloads/ 目录
+        try:
+            save_dir = Path("downloads")
+            save_dir.mkdir(exist_ok=True)
+            save_path = save_dir / download.suggested_filename
+            download.save_as(str(save_path))
+            info.path = str(save_path)
+        except Exception:
+            pass
+        self._pending_downloads.append(info)
+
+    def get_pending_downloads(self) -> list[DownloadInfo]:
+        """获取并清空待处理的下载信息。"""
+        downloads = list(self._pending_downloads)
+        self._pending_downloads.clear()
+        return downloads
+
     # ── 新增动作执行方法 ──
 
     def _double_click(self, ref: str) -> None:
@@ -504,14 +634,34 @@ class ExploreExecutor:
         self._get_locator(ref).press_sequentially(value, **kwargs)
 
     def _handle_dialog(self, action: Action) -> None:
-        """响应浏览器原生对话框 (alert/confirm/prompt)。"""
-        # 等待对话框出现（短超时）
+        """响应浏览器原生对话框 (alert/confirm/prompt)。
+
+        优先处理已捕获的 pending dialog，否则等待新 dialog 出现。
+        """
+        # 优先使用已捕获的 pending dialog
+        if self._pending_dialog_obj is not None:
+            dialog = self._pending_dialog_obj
+            self._pending_dialog_obj = None
+            self._pending_dialog_info = None
+            if action.dialog_action == "accept":
+                dialog.accept(action.value or "")
+            else:
+                dialog.dismiss()
+            return
+
+        # alert 已被 _on_dialog 自动 accept，跳过
+        if self._pending_dialog_info and self._pending_dialog_info.dialog_type == "alert":
+            self._pending_dialog_info = None
+            return
+
+        # 没有待处理的 dialog，等待新的（最多 3 秒）
         try:
             dialog = self._page.wait_for_event(
                 "dialog", timeout=action.timeout or 3000
             )
         except Exception:
             return  # 没有对话框出现，忽略
+        self._pending_dialog_info = None
         if action.dialog_action == "accept":
             dialog.accept(action.value or "")
         else:
@@ -571,3 +721,101 @@ class ExploreExecutor:
         if condition == WaitCondition.NETWORKIDLE:
             return int(getattr(self._config, "wait_for_networkidle_timeout", 15000))
         return int(getattr(self._config, "action_timeout", 15000))
+
+    # ── Tab 管理 ──
+
+    def _tab_list(self) -> list[TabInfo]:
+        """列出所有打开的标签页。"""
+        if not self._browser_manager:
+            return []
+        context = getattr(self._browser_manager, "_context", None)
+        if context is None:
+            return []
+        current_page = self._browser_manager.get_page()
+        tabs = []
+        for i, page in enumerate(context.pages):
+            if page.is_closed():
+                continue
+            tabs.append(TabInfo(
+                index=i,
+                url=str(getattr(page, "url", "") or ""),
+                title=self._safe_page_title(page),
+                is_active=page is current_page,
+            ))
+        return tabs
+
+    def _tab_new(self, url: str | None = None) -> TabInfo:
+        """打开新标签页，可选导航到指定 URL。"""
+        if not self._browser_manager:
+            raise ExploreError("BrowserManager 不可用", ErrorCode.EXECUTION_FAILED)
+        new_page = self._browser_manager.new_tab()
+        if url:
+            try:
+                new_page.goto(url, wait_until="load")
+            except Exception:
+                pass
+        # 切换到新 tab
+        self._browser_manager.switch_page(new_page)
+        self._page = new_page
+        self._needs_snapshot = True
+        # 重新注册事件监听
+        self._rebind_page_events(new_page)
+        return TabInfo(
+            index=len(self._browser_manager._context.pages) - 1,
+            url=str(getattr(new_page, "url", "") or ""),
+            title=self._safe_page_title(new_page),
+            is_active=True,
+        )
+
+    def _tab_switch(self, index: int) -> TabInfo:
+        """切换到指定索引的标签页。"""
+        if not self._browser_manager:
+            raise ExploreError("BrowserManager 不可用", ErrorCode.EXECUTION_FAILED)
+        context = getattr(self._browser_manager, "_context", None)
+        if context is None:
+            raise ExploreError("浏览器上下文不可用", ErrorCode.EXECUTION_FAILED)
+        pages = [p for p in context.pages if not p.is_closed()]
+        if index < 0 or index >= len(pages):
+            raise ExploreError(
+                f"tab 索引 {index} 超出范围 (共 {len(pages)} 个标签页)",
+                ErrorCode.EXECUTION_FAILED,
+            )
+        target_page = pages[index]
+        self._browser_manager.switch_page(target_page)
+        self._page = target_page
+        self._needs_snapshot = True
+        self._rebind_page_events(target_page)
+        return TabInfo(
+            index=index,
+            url=str(getattr(target_page, "url", "") or ""),
+            title=self._safe_page_title(target_page),
+            is_active=True,
+        )
+
+    def _tab_close(self) -> None:
+        """关闭当前标签页，自动切换到其他标签页。"""
+        if not self._browser_manager:
+            raise ExploreError("BrowserManager 不可用", ErrorCode.EXECUTION_FAILED)
+        self._browser_manager.close_tab(self._page)
+        # 获取切换后的当前页面
+        new_page = self._browser_manager.get_page()
+        self._page = new_page
+        self._needs_snapshot = True
+        self._rebind_page_events(new_page)
+
+    def _rebind_page_events(self, page: Any) -> None:
+        """切换 tab 后重新绑定 dialog/download 事件监听。"""
+        self._pending_dialog_info = None
+        self._pending_dialog_obj = None
+        self._ref_locator_cache.clear()
+        try:
+            page.on("dialog", self._on_dialog)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _safe_page_title(page: Any) -> str:
+        try:
+            return str(page.title() or "")
+        except Exception:
+            return ""
