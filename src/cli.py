@@ -682,5 +682,25 @@ def gui(host: str, port: int, debug: bool) -> None:
     app.run(host=host, port=port, debug=debug, threaded=False)
 
 
+# ---------------------------------------------------------------------------
+# desktop
+# ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.option("--dev", is_flag=True, help="Run the Electron renderer in development mode.")
+def desktop(dev: bool) -> None:
+    """Launch the desktop pet and its authenticated local backend."""
+    desktop_dir = _PROJECT_ROOT / "desktop"
+    if not (desktop_dir / "package.json").is_file():
+        raise click.ClickException("desktop/package.json was not found")
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    command = [npm, "run", "dev" if dev else "start"]
+    try:
+        raise SystemExit(subprocess.call(command, cwd=desktop_dir))
+    except FileNotFoundError as exc:
+        raise click.ClickException("Node.js and npm are required for desktop mode") from exc
+
+
 if __name__ == "__main__":
     main()

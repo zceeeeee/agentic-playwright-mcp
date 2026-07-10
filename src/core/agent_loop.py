@@ -159,6 +159,7 @@ class AgentLoop:
         library_dir: str | None = None,
         on_step: Callable[[AgentStep], None] | None = None,
         event_bus: EventBus | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         """初始化 Agent 循环。
 
@@ -173,6 +174,7 @@ class AgentLoop:
         self._library_dir = library_dir
         self._on_step = on_step
         self._bus = event_bus if event_bus is not None else get_event_bus()
+        self._cancel_check = cancel_check
 
         # 延迟初始化的模块
         self._vision: VisionModule | None = None
@@ -413,6 +415,11 @@ class AgentLoop:
 
             with log_timing("agent_task", task=task) as task_meta:
                 while state not in (AgentState.DONE, AgentState.FAILED):
+                    if self._cancel_check is not None and self._cancel_check():
+                        result.error = "任务已取消"
+                        state = AgentState.FAILED
+                        logger.info("Agent task cancelled before the next step")
+                        break
                     step_number += 1
                     if step_number > self._max_steps:
                         result.error = f"超过最大步数 ({self._max_steps})"
@@ -2096,7 +2103,6 @@ def run_task(
 
     agent = AgentLoop(max_steps=max_steps, library_dir=library_dir)
     return agent.run(task)
-
 
 
 

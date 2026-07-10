@@ -406,10 +406,10 @@ class SkillRouter:
         return (
             f"{source_code}"
             f"{helper}"
-            f"{pre_auth}"
             f"__param_keyword = __agentic_prepare_zhihu_content({keyword_value}, {keyword_ai_generate!r})\n"
             f"__param_title = __agentic_prepare_zhihu_title({title_value}, __param_keyword, {title_ai_generate!r})\n\n"
             f"__param_add_picture = __agentic_prepare_zhihu_add_picture({add_picture_value})\n\n"
+            f"{pre_auth}"
             f"# 自动调用\nrun(title=__param_title, keyword=__param_keyword, add_picture=__param_add_picture)"
         )
 
@@ -773,8 +773,8 @@ class SkillRouter:
             f"{source_code}"
             f"{helper if needs_param_helper else ''}"
             f"{generic_ai_helper if needs_param_helper else ''}"
-            f"{pre_auth}"
             f"{chr(10).join(param_lines)}\n\n"
+            f"{pre_auth}"
             f"# 自动调用\nrun({args_str})"
         )
 
@@ -796,7 +796,7 @@ class SkillRouter:
 
     @staticmethod
     def _build_pre_auth_script(skill: SkillRouterInfo) -> str:
-        """Build an optional auth prompt that runs before parameter prompts."""
+        """Build an optional auth check that runs after parameter collection."""
         marker = " ".join(
             [
                 skill.id,
@@ -815,7 +815,7 @@ class SkillRouter:
             return ""
 
         return (
-            "\n\n# 自动登录确认先于参数确认\n"
+            "\n\n# 参数确认完成后再处理登录\n"
             "__agentic_sign_url = None\n"
             "try:\n"
             "    __agentic_sign_url = SIGN_URL\n"

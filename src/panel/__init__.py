@@ -1,8 +1,7 @@
-"""
-Layer 0: Interactive Panel — 浏览器内用户交互面板。
+"""Compatibility API for desktop-owned user interaction.
 
-通过 BrowserContext.addInitScript 注入 Shadow DOM 面板，
-提供输入框、按钮、日志区等交互元素，供用户与自动化程序通信。
+No UI is injected into browser pages. Existing ``panel_*`` script helpers are
+routed to the desktop chat and confirmation broker.
 """
 
 from src.panel.panel_manager import PanelManager, get_panel_manager
