@@ -231,6 +231,17 @@ class ScriptEngine:
             page.mouse.up()
             return {"success": True, "x": float(x), "y": float(y)}
 
+        def safe_mouse_move(x: float, y: float, steps: int = 1) -> dict:
+            page = self._get_browser_manager().get_page()
+            move_steps = max(1, int(steps))
+            page.mouse.move(float(x), float(y), steps=move_steps)
+            return {
+                "success": True,
+                "x": float(x),
+                "y": float(y),
+                "steps": move_steps,
+            }
+
         def safe_hover(selector: str, *fallbacks: str) -> dict:
             page = self._get_browser_manager().get_page()
             selector_list = [selector] + list(fallbacks)
@@ -261,6 +272,7 @@ class ScriptEngine:
         ns["goto"] = safe_goto
         ns["click"] = safe_click
         ns["mouse_click"] = safe_mouse_click
+        ns["mouse_move"] = safe_mouse_move
         ns["hover"] = safe_hover
         ns["fill"] = safe_fill
         ns["screenshot"] = safe_screenshot
@@ -479,6 +491,7 @@ class ScriptEngine:
             "wait_for_navigation",
             "wait_for_element",
             "mouse_click",
+            "mouse_move",
             "hover",
             "type_text",
             "press_key",

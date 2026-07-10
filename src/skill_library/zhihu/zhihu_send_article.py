@@ -40,6 +40,39 @@ def _click_center(center, label: str, wait_seconds: int = 1) -> None:
     wait(wait_seconds)
 
 
+def _move_mouse_into_generated_picture():
+    target = run_js(
+        """(() => {
+            const image = document.querySelector(
+                "img[data-agentic-ai-generated-picture='1']"
+            );
+            if (!image) return null;
+
+            image.scrollIntoView({ block: "center", inline: "center" });
+            const rect = image.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return null;
+
+            const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+            const insideX = clamp(rect.left + rect.width * 0.45, 8, window.innerWidth - 8);
+            const insideY = clamp(rect.top + rect.height * 0.45, 8, window.innerHeight - 8);
+            return {
+                outsideX: clamp(rect.left - 16, 8, window.innerWidth - 8),
+                outsideY: insideY,
+                insideX,
+                insideY,
+            };
+        })()"""
+    )
+    if not target:
+        return None
+
+    mouse_move(target["outsideX"], target["outsideY"], 8)
+    mouse_move(target["insideX"], target["insideY"], 16)
+    mouse_move(target["insideX"] + 4, target["insideY"] + 2, 4)
+    mouse_move(target["insideX"] - 2, target["insideY"] - 1, 4)
+    return target
+
+
 def _wait_until_js(script: str, timeout: int = 30, interval: float = 1):
     attempts = int(timeout / interval)
     if attempts < 1:
@@ -515,14 +548,15 @@ def _insert_ai_picture(title: str) -> None:
     if not image_center:
         raise RuntimeError("Zhihu generated AI picture click target not found")
     click("img[data-agentic-ai-generated-picture='1']")
-    hover("img[data-agentic-ai-generated-picture='1']")
-    wait(2)
     log(f"AIPIC_IMAGE_SELECTED:{image_center}")
 
     insert_target = None
     for _ in range(60):
-        hover("img[data-agentic-ai-generated-picture='1']")
-        wait(0.5)
+        mouse_target = _move_mouse_into_generated_picture()
+        if not mouse_target:
+            wait(1)
+            continue
+        wait(0.4)
         insert_target = run_js(
             """(() => {
                 const label = "\\u63d2\\u5165\\u6b63\\u6587";
@@ -593,6 +627,7 @@ def run(title: str, keyword: str, add_picture=False):
         title,
         "textarea[placeholder*='100']",
     )
+    wait(1)
 
     _require_write_editor(timeout=30)
     body_text = _js_string(keyword)
@@ -635,6 +670,7 @@ def run(title: str, keyword: str, add_picture=False):
             return textSpan.outerHTML;
         }})()"""
     )
+    wait(1)
 
     if _is_true(add_picture):
         _insert_ai_picture(title)

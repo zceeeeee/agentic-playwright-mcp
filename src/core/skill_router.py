@@ -288,22 +288,7 @@ class SkillRouter:
         pre_auth = self._build_pre_auth_script(skill)
         title_value = json.dumps(extracted.get("title", "-1"), ensure_ascii=False)
         keyword_value = json.dumps(extracted.get("keyword", "-1"), ensure_ascii=False)
-        add_picture_raw = str(extracted.get("add-picture", "false")).strip().lower()
-        add_picture_enabled = add_picture_raw in {
-            "1",
-            "true",
-            "yes",
-            "y",
-            "on",
-            "ai",
-            "add-picture",
-            "add_picture",
-            "配图",
-            "加图",
-            "加图片",
-            "生成图片",
-            "插入图片",
-        }
+        add_picture_value = json.dumps(extracted.get("add-picture", "no"), ensure_ascii=False)
         title_ai_generate = bool(skill.params.get("title", {}).get("ai_generate", False))
         keyword_ai_generate = bool(
             skill.params.get("keyword", {}).get("ai_generate", False)
@@ -402,6 +387,21 @@ class SkillRouter:
             "        f'请确认技能「知乎发布」的参数「文章标题」。当前值：{current}。如需修改请输入新值，直接回车则沿用当前值：',\n"
             "        True,\n"
             "    )\n"
+            "\n"
+            "def __agentic_prepare_zhihu_add_picture(current):\n"
+            "    text = str(current or '').strip().lower()\n"
+            "    true_values = {'1', 'true', 'yes', 'y', 'on', 'ai', 'add-picture', 'add_picture', '配图', '加图', '加图片', '生成图片', '插入图片'}\n"
+            "    false_values = {'', '-1', '0', 'false', 'no', 'n', 'off', 'none', 'null', '不配图', '不要配图'}\n"
+            "    default = 'yes' if text in true_values else 'no'\n"
+            "    answer = panel_prompt(f'是否为知乎文章添加 AI 配图？当前默认：{default}。[yes] [no]')\n"
+            "    answer = str(answer or '').strip().lower()\n"
+            "    if not answer:\n"
+            "        answer = default\n"
+            "    if answer in true_values:\n"
+            "        return True\n"
+            "    if answer in false_values:\n"
+            "        return False\n"
+            "    return False\n"
         )
         return (
             f"{source_code}"
@@ -409,7 +409,8 @@ class SkillRouter:
             f"{pre_auth}"
             f"__param_keyword = __agentic_prepare_zhihu_content({keyword_value}, {keyword_ai_generate!r})\n"
             f"__param_title = __agentic_prepare_zhihu_title({title_value}, __param_keyword, {title_ai_generate!r})\n\n"
-            f"# 自动调用\nrun(title=__param_title, keyword=__param_keyword, add_picture={add_picture_enabled!r})"
+            f"__param_add_picture = __agentic_prepare_zhihu_add_picture({add_picture_value})\n\n"
+            f"# 自动调用\nrun(title=__param_title, keyword=__param_keyword, add_picture=__param_add_picture)"
         )
 
     @staticmethod

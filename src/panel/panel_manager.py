@@ -148,6 +148,13 @@ class PanelManager:
             return
 
         try:
+            page.evaluate(
+                """() => {
+                    if (window.__agentic_panel__ && !document.getElementById("__agentic_panel__")) {
+                        window.__agentic_panel__ = undefined;
+                    }
+                }"""
+            )
             page.add_script_tag(content=_INJECT_JS_PATH.read_text(encoding="utf-8"))
             logger.debug("Panel injected into current page")
         except Exception as exc:
@@ -180,7 +187,12 @@ class PanelManager:
             面板已注入返回 True。
         """
         return bool(
-            page.evaluate("typeof window.__agentic_panel__ !== 'undefined'")
+            page.evaluate(
+                """() => (
+                    typeof window.__agentic_panel__ !== "undefined" &&
+                    !!document.getElementById("__agentic_panel__")
+                )"""
+            )
         )
 
     def cleanup_context(self, context: BrowserContext) -> None:

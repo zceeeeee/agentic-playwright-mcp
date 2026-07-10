@@ -908,6 +908,8 @@ skills:
       add-picture:
         type: boolean
         required: false
+        default: "no"
+        confirm: true
         description: "是否在文章正文中插入 AI 生成图片"
         extract_patterns:
           - "(?:(配图|加图|加图片|生成图片|插入图片|AI\\s*配图|ai\\s*picture|add[-_ ]?picture))"
@@ -963,16 +965,16 @@ skills:
       - "在知乎评论 你好"
       - "知乎回复 内容是 写得很好"
     params:
-      keyword:
-        type: keyword
-        required: true
-        description: "评论内容"
       article_url:
         type: url
         required: true
         description: "对应操作的文章地址"
         extract_patterns:
           - "(https?://[^\\s，。！？；;]+)"
+      keyword:
+        type: keyword
+        required: false
+        description: "评论内容"
 
   - id: "domain/zhihu_answer"
     name: "知乎回答"
