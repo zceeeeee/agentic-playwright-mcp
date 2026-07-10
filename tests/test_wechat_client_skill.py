@@ -12,6 +12,8 @@ from src.core.skill_router import SkillRouter
 from src.layer_1.wechat_client import (
     CHAT_INPUT_REL,
     SEARCH_ACCOUNTS_TAB_REL,
+    SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS,
+    SEARCH_RESULT_WINDOW_DETECT_SECONDS,
     ImageMatch,
     PywinautoWechatAutomation,
     ScreenImageLocator,
@@ -130,6 +132,10 @@ class FakeUiElement:
 
     def move_window(self, x, y, width, height, repaint=True) -> None:
         self.moved_to = (x, y, width, height)
+        self.left = x
+        self.top = y
+        self.width = width
+        self.height = height
 
     def friendly_class_name(self) -> str:
         return self.control_type
@@ -155,6 +161,8 @@ class FakeImageLocator:
         self.green_calls: list[object] = []
         self.green_text_matches: list[object | None] = []
         self.green_text_calls: list[tuple[object, str]] = []
+        self.first_green_text_matches: list[object | None] = []
+        self.first_green_text_calls: list[tuple[object, str]] = []
 
     def click(self, template_name, *, region=None, threshold=0.0):
         self.calls.append((template_name, region, threshold))
@@ -188,6 +196,12 @@ class FakeImageLocator:
         if self.green_text_matches:
             return self.green_text_matches.pop(0)
         return None
+
+    def click_first_result_green_text(self, *, region=None, text=""):
+        self.first_green_text_calls.append((region, text))
+        if self.first_green_text_matches:
+            return self.first_green_text_matches.pop(0)
+        return self.click_green_text(region=region, text=text)
 
 
 def test_wechat_window_selection_ignores_browser_title_with_wechat_text():
@@ -237,6 +251,82 @@ def test_wechat_window_manager_normalizes_appex_to_left_half():
     assert win.moved_to == (0, 0, 960, 1040)
 
 
+def test_wechat_window_manager_prefers_win32_set_window_pos(monkeypatch):
+    calls = []
+    win = FakeUiElement("微信", process_name="WeChat.exe")
+    manager = WeChatWindowManager(
+        FakeDesktop([win]),
+        window_rect_provider=lambda app_ex=False: (0, 0, 960, 1040),
+    )
+
+    def fake_set_window_pos(window, x, y, width, height):
+        calls.append((window, x, y, width, height))
+        return True
+
+    monkeypatch.setattr(
+        WeChatWindowManager,
+        "_set_window_pos",
+        staticmethod(fake_set_window_pos),
+    )
+
+    result = manager.normalize(win)
+
+    assert result is win
+    assert calls == [(win, 0, 0, 960, 1040)]
+    assert win.moved_to is None
+    assert win.focused is True
+
+
+def test_wechat_window_manager_normalizes_all_wechat_windows():
+    main_window = FakeUiElement("微信", process_name="WeChat.exe")
+    app_ex_window = FakeUiElement("火眼审阅", process_name="WeChatAppEx.exe")
+    manager = WeChatWindowManager(
+        FakeDesktop([main_window, app_ex_window]),
+        window_rect_provider=lambda app_ex=False: (0, 0, 960, 1040),
+    )
+
+    manager.normalize_all(active_window=main_window)
+
+    assert main_window.moved_to == (0, 0, 960, 1040)
+    assert app_ex_window.moved_to == (0, 0, 960, 1040)
+    assert main_window.focused is True
+    assert app_ex_window.focused is False
+
+
+def test_wechat_window_manager_moves_new_appex_as_soon_as_detected():
+    main_window = FakeUiElement("微信", process_name="WeChat.exe")
+    app_ex_window = FakeUiElement("火眼审阅", process_name="WeChatAppEx.exe")
+    manager = WeChatWindowManager(
+        FakeDesktop([main_window, app_ex_window]),
+        window_rect_provider=lambda app_ex=False: (0, 0, 960, 1040),
+    )
+    before = {PywinautoWechatAutomation._window_handle(main_window)}
+
+    result = manager.latest_new_appex(before, title_hint="火眼审阅", timeout=0.1)
+
+    assert result is app_ex_window
+    assert app_ex_window.moved_to == (0, 0, 960, 1040)
+    assert app_ex_window.focused is False
+
+
+def test_wechat_window_manager_logs_move_failures(caplog):
+    class FailingMoveWindow(FakeUiElement):
+        def move_window(self, x, y, width, height, repaint=True) -> None:
+            raise RuntimeError("move blocked")
+
+    win = FailingMoveWindow("微信", process_name="WeChat.exe")
+    manager = WeChatWindowManager(
+        FakeDesktop([win]),
+        window_rect_provider=lambda app_ex=False: (0, 0, 960, 1040),
+    )
+
+    with caplog.at_level("WARNING", logger=wechat_module.__name__):
+        manager.normalize(win)
+
+    assert "Failed to move WeChat window to left half" in caplog.text
+    assert "move blocked" in caplog.text
+
+
 def test_wechat_screen_locator_taskbar_region_uses_bottom_screen_area():
     assert ScreenImageLocator.taskbar_region_for_size(1920, 1080) == (
         0,
@@ -263,6 +353,60 @@ def test_wechat_screen_locator_captures_window_region_directly():
     assert capture is not None
     assert capture[1:] == (10, 20)
     assert locator.screenshot_regions == [(10, 20, 300, 400)]
+
+
+def test_wechat_screen_locator_clicks_green_text_inside_first_result_card():
+    import cv2
+    import numpy as np
+
+    image = np.full((445, 1081, 3), 15, dtype=np.uint8)
+    image[0:34, :] = (25, 25, 25)
+    image[57:291, 47:1034] = (21, 21, 21)
+    image[304:444, 47:1034] = (21, 21, 21)
+    green = (42, 224, 126)
+    cv2.putText(image, "Huoyan Account", (67, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.9, green, 2)
+    cv2.putText(image, "Huoyan", (181, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.9, green, 2)
+    cv2.putText(image, "Huoyan desc", (181, 263), cv2.FONT_HERSHEY_SIMPLEX, 0.55, green, 1)
+
+    class SyntheticLocator(ScreenImageLocator):
+        def _capture_region(self, region=None):
+            return image, 0, 0
+
+    match = SyntheticLocator().find_first_result_green_text(text="火眼审阅")
+
+    assert match is not None
+    assert match.template_name == "first_result_green_text:火眼审阅"
+    assert match.x > 180
+    assert 160 <= match.y <= 210
+
+
+def test_wechat_screen_locator_finds_green_rectangle_button():
+    import cv2
+    import numpy as np
+
+    image = np.full((220, 420, 3), 18, dtype=np.uint8)
+    cv2.rectangle(image, (20, 30), (330, 62), (7, 193, 96), thickness=-1)
+    cv2.rectangle(image, (140, 100), (280, 152), (85, 188, 122), thickness=-1)
+    cv2.putText(
+        image,
+        "follow",
+        (175, 133),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        2,
+    )
+
+    class SyntheticLocator(ScreenImageLocator):
+        def _capture_region(self, region=None):
+            return image, 0, 0
+
+    match = SyntheticLocator().find_green_button()
+
+    assert match is not None
+    assert match.template_name == "green_button"
+    assert 185 <= match.x <= 235
+    assert 115 <= match.y <= 145
 
 
 def test_follow_official_account_searches_service_account_and_follows():
@@ -330,12 +474,46 @@ def test_wechat_clicks_green_account_text_before_visual_position(monkeypatch):
 
     automation._click_service_account_result("火眼审阅")
 
+    assert image_locator.first_green_text_calls == [((0, 0, 1000, 800), "火眼审阅")]
     assert image_locator.green_text_calls == [((0, 0, 1000, 800), "火眼审阅")]
     assert image_locator.xy_clicks == []
 
 
-def test_wechat_clicks_accounts_tab_by_text(monkeypatch):
+def test_wechat_first_account_result_prefers_green_text_after_tab(monkeypatch):
     monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    image_locator = FakeImageLocator()
+    image_locator.first_green_text_matches = [object()]
+    text_row = FakeUiElement("", [FakeUiElement("火眼审阅")])
+    window = FakeUiElement(
+        "火眼审阅",
+        [text_row],
+        process_name="WeChatAppEx.exe",
+        width=1000,
+        height=800,
+        left=0,
+        top=0,
+    )
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
+    automation.window = window
+    confirmed: list[tuple[str, set[int] | None]] = []
+    automation._confirm_after_search_result_click = (
+        lambda account, before_handles=None: confirmed.append((account, before_handles))
+        or True
+    )
+
+    assert automation._click_first_account_result_after_tab(
+        "火眼审阅",
+        before_handles={1},
+    )
+
+    assert image_locator.first_green_text_calls == [((0, 0, 1000, 800), "火眼审阅")]
+    assert text_row.clicked is False
+    assert confirmed == [("火眼审阅", {1})]
+
+
+def test_wechat_clicks_accounts_tab_by_text(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda seconds: sleeps.append(seconds))
     accounts_tab = FakeUiElement("账号")
     window = FakeUiElement("火眼审阅", [accounts_tab], process_name="WeChatAppEx.exe")
     automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
@@ -344,10 +522,12 @@ def test_wechat_clicks_accounts_tab_by_text(monkeypatch):
     assert automation._click_search_accounts_tab(timeout=0.1)
 
     assert accounts_tab.clicked is True
+    assert SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS in sleeps
 
 
 def test_wechat_clicks_accounts_tab_by_window_relative_fallback(monkeypatch):
-    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    sleeps: list[float] = []
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda seconds: sleeps.append(seconds))
     image_locator = FakeImageLocator()
     window = FakeUiElement(
         "火眼审阅",
@@ -363,6 +543,7 @@ def test_wechat_clicks_accounts_tab_by_window_relative_fallback(monkeypatch):
     assert automation._click_search_accounts_tab(timeout=0.0)
 
     assert image_locator.relative_clicks == [((50, 70, 1000, 800), *SEARCH_ACCOUNTS_TAB_REL)]
+    assert SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS in sleeps
 
 
 def test_wechat_clicks_result_relative_to_souyisou_anchor(monkeypatch):
@@ -480,7 +661,7 @@ def test_wechat_official_search_clicks_souyisou_template(monkeypatch):
     assert ("搜一搜.png", None, 0.74) in image_locator.calls
     assert sent == ["^f", "^a", "火眼审阅"]
     assert actions == [
-        ("wait", "火眼审阅", ({1}, 30.0)),
+        ("wait", "火眼审阅", ({1}, SEARCH_RESULT_WINDOW_DETECT_SECONDS)),
         ("tab", "账号", 3.0),
         ("first", "火眼审阅", {1}),
     ]
@@ -539,21 +720,64 @@ def test_wechat_send_message_uses_visual_input_and_send_button(monkeypatch):
     assert sent_keys == ["你好"]
 
 
-def test_wechat_switches_to_app_ex_window_after_clicking_service_account_result():
+def test_wechat_template_click_normalizes_window_before_screenshot(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    image_locator = FakeImageLocator(matches=[object()])
+    window = FakeUiElement(
+        "微信",
+        process_name="WeChat.exe",
+        width=700,
+        height=600,
+        left=300,
+        top=200,
+    )
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
+    automation.window = window
+    automation.desktop = FakeDesktop([window])
+    automation.window_manager = WeChatWindowManager(
+        automation.desktop,
+        window_rect_provider=lambda app_ex=False: (0, 0, 960, 1040),
+    )
+
+    assert automation._click_message_box_visual(timeout=0.0)
+
+    assert window.moved_to == (0, 0, 960, 1040)
+    assert image_locator.calls == [("wechatSend.png", (0, 0, 960, 1040), 0.72)]
+
+
+def test_wechat_switches_to_app_ex_window_after_clicking_service_account_result(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    image_locator = FakeImageLocator()
+    image_locator.green_matches = [object()]
     row = FakeUiElement("", [FakeUiElement("火眼审阅"), FakeUiElement("服务号")])
     main_window = FakeUiElement("微信", [row], process_name="WeChat.exe")
     follow_parent = FakeUiElement("", [FakeUiElement("关注")])
-    detail_window = FakeUiElement("", [FakeUiElement("服务号"), follow_parent], process_name="WeChatAppEx.exe")
-    automation = PywinautoWechatAutomation()
+    detail_window = FakeUiElement(
+        "",
+        [FakeUiElement("服务号"), follow_parent],
+        process_name="WeChatAppEx.exe",
+        width=1000,
+        height=800,
+        left=0,
+        top=0,
+    )
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
     automation.window = main_window
     automation.desktop = FakeDesktop([main_window, detail_window])
+    automation.window_manager = WeChatWindowManager(
+        automation.desktop,
+        window_rect_provider=lambda app_ex=False: (0, 0, 1000, 800),
+    )
 
     automation._click_service_account_result("火眼审阅")
 
     assert row.clicked is True
     assert automation.window is detail_window
+    states = [False, True]
+    automation._is_followed_state = lambda: states.pop(0) if states else True
     assert automation.follow_current_account() is True
-    assert follow_parent.clicked is True
+    assert follow_parent.clicked is False
+    assert image_locator.green_calls == [(0, 0, 1000, 800)]
 
 
 def test_wechat_prefers_new_appex_window_after_click():
@@ -602,22 +826,21 @@ def test_wechat_switch_clicks_appex_taskbar_icon_when_window_is_hidden(monkeypat
     assert ("WeChatAppExLogo.png", "taskbar", 0.72) in image_locator.calls
 
 
-def test_wechat_open_clicks_taskbar_logo_before_executable_lookup(monkeypatch):
+def test_wechat_open_starts_by_name_before_taskbar_click(monkeypatch):
     monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
-    image_locator = FakeImageLocator(matches=[object()])
+    image_locator = FakeImageLocator()
     main_window = FakeUiElement("微信", process_name="WeChat.exe")
     desktop = FakeDesktop([])
-
-    def windows_after_taskbar_click():
-        if image_locator.calls:
-            return [main_window]
-        return []
-
-    desktop.windows = windows_after_taskbar_click
+    launches: list[str] = []
 
     class FakeApplication:
         def __init__(self, *args, **kwargs) -> None:
-            raise AssertionError("Application should not be used after taskbar launch")
+            pass
+
+        def start(self, launch_name):
+            launches.append(launch_name)
+            desktop._windows = [main_window]
+            return self
 
     fake_pywinauto = types.SimpleNamespace(
         Application=FakeApplication,
@@ -632,17 +855,33 @@ def test_wechat_open_clicks_taskbar_logo_before_executable_lookup(monkeypatch):
     automation.open()
 
     assert automation.window is main_window
-    assert ("wechatLogo.png", "taskbar", 0.72) in image_locator.calls
+    assert launches == ["WeChat.exe"]
+    assert image_locator.calls == []
 
 
-def test_wechat_follow_clicks_parent_for_text_only_follow_control():
+def test_wechat_follow_uses_green_rectangle_even_when_text_follow_control_exists(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    image_locator = FakeImageLocator()
+    image_locator.green_matches = [object()]
     follow_parent = FakeUiElement("", [FakeUiElement("关注")])
-    window = FakeUiElement("", [follow_parent])
-    automation = PywinautoWechatAutomation()
+    window = FakeUiElement(
+        "",
+        [follow_parent],
+        process_name="WeChatAppEx.exe",
+        width=1000,
+        height=800,
+        left=0,
+        top=0,
+    )
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
     automation.window = window
+    automation._needs_official_account_home_confirmation = lambda: False
+    states = [False, True]
+    automation._is_followed_state = lambda: states.pop(0) if states else True
 
     assert automation.follow_current_account() is True
-    assert follow_parent.clicked is True
+    assert follow_parent.clicked is False
+    assert image_locator.green_calls == [(0, 0, 1000, 800)]
 
 
 def test_wechat_follow_clicks_green_button_when_text_target_missing(monkeypatch):
@@ -660,9 +899,73 @@ def test_wechat_follow_clicks_green_button_when_text_target_missing(monkeypatch)
     )
     automation = PywinautoWechatAutomation(image_locator=image_locator)
     automation.window = window
+    states = [False, True]
+    automation._is_followed_state = lambda: states.pop(0) if states else True
 
     assert automation.follow_current_account() is True
     assert image_locator.green_calls == [(0, 0, 1000, 800)]
+
+
+def test_wechat_follow_visual_uses_green_rectangle_only(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    image_locator = FakeImageLocator()
+    image_locator.green_matches = [object()]
+    window = FakeUiElement(
+        "服务号",
+        [FakeUiElement("服务号")],
+        process_name="WeChatAppEx.exe",
+        width=1000,
+        height=800,
+        left=0,
+        top=0,
+    )
+    automation = PywinautoWechatAutomation(image_locator=image_locator)
+    automation.window = window
+    automation._needs_official_account_home_confirmation = lambda: False
+    states = [False, True]
+    automation._is_followed_state = lambda: states.pop(0) if states else True
+    automation._click_screen_template = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("template matching should not be used for follow")
+    )
+
+    assert automation.follow_current_account() is True
+    assert image_locator.green_calls == [(0, 0, 1000, 800)]
+
+
+def test_wechat_follow_retries_until_followed_private_message_state(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    window = FakeUiElement(
+        "服务号",
+        [FakeUiElement("关注")],
+        process_name="WeChatAppEx.exe",
+        width=1000,
+        height=800,
+        left=0,
+        top=0,
+    )
+    automation = PywinautoWechatAutomation(image_locator=FakeImageLocator())
+    automation.window = window
+    automation._needs_official_account_home_confirmation = lambda: False
+    states = [False, False, True]
+    clicks: list[float] = []
+    automation._is_followed_state = lambda: states.pop(0) if states else True
+    automation._find_follow_button_target = lambda: None
+    automation._click_follow_button_visual = lambda timeout=1.0: clicks.append(timeout) or True
+
+    assert automation.follow_current_account() is True
+    assert clicks == [1.0, 1.0]
+
+
+def test_wechat_followed_state_requires_followed_and_private_message_text():
+    window = FakeUiElement(
+        "服务号",
+        [FakeUiElement("已关注"), FakeUiElement("私信")],
+        process_name="WeChatAppEx.exe",
+    )
+    automation = PywinautoWechatAutomation()
+    automation.window = window
+
+    assert automation._is_followed_state() is True
 
 
 def test_wechat_official_home_can_be_confirmed_by_template(monkeypatch):
