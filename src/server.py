@@ -476,11 +476,7 @@ def browser_launch_with_domain(domain: str) -> str:
 
 @mcp.tool()
 def panel_toggle(visible: bool) -> str:
-    """Show or hide the interactive panel in the browser.
-
-    The panel provides input fields, buttons, and a log area for
-    user-program communication. It is injected into all pages
-    automatically when the browser launches.
+    """Compatibility toggle for the desktop interaction surface.
 
     Args:
         visible: True to show the panel, False to hide it.
@@ -488,16 +484,12 @@ def panel_toggle(visible: bool) -> str:
     Returns:
         Confirmation message.
     """
-    bm = get_browser_manager()
-    if not bm.is_alive():
-        return "Error: Browser not launched. Call browser_launch first."
-
     try:
         from src.panel import get_panel_manager
 
         pm = get_panel_manager()
-        pm.toggle(bm.get_page(), visible)
-        return f"Panel {'shown' if visible else 'hidden'}."
+        pm.toggle(None, visible)
+        return f"Desktop interaction surface {'enabled' if visible else 'unchanged'}."
     except Exception as exc:
         return f"Panel toggle failed: {exc}"
 
@@ -512,19 +504,14 @@ def panel_read() -> str:
     Returns:
         JSON string with 'data' (latest input) and 'events' (queue).
     """
-    bm = get_browser_manager()
-    if not bm.is_alive():
-        return "Error: Browser not launched. Call browser_launch first."
-
     try:
         import json
 
         from src.panel import get_panel_manager
 
         pm = get_panel_manager()
-        page = bm.get_page()
-        data = pm.read_data(page)
-        events = pm.read_events(page)
+        data = pm.read_data(None)
+        events = pm.read_events(None)
         return json.dumps({"data": data, "events": events}, ensure_ascii=False, indent=2)
     except Exception as exc:
         return f"Panel read failed: {exc}"
@@ -543,16 +530,12 @@ def panel_log(message: str) -> str:
     Returns:
         Confirmation message.
     """
-    bm = get_browser_manager()
-    if not bm.is_alive():
-        return "Error: Browser not launched. Call browser_launch first."
-
     try:
         from src.panel import get_panel_manager
 
         pm = get_panel_manager()
-        pm.log(bm.get_page(), message)
-        return "Log written to panel."
+        pm.log(None, message)
+        return "Log written to desktop interaction stream."
     except Exception as exc:
         return f"Panel log failed: {exc}"
 
@@ -567,27 +550,19 @@ def panel_set_title(text: str) -> str:
     Returns:
         Confirmation message.
     """
-    bm = get_browser_manager()
-    if not bm.is_alive():
-        return "Error: Browser not launched. Call browser_launch first."
-
     try:
         from src.panel import get_panel_manager
 
         pm = get_panel_manager()
-        pm.set_title(bm.get_page(), text)
-        return f"Panel title set to: {text}"
+        pm.set_title(None, text)
+        return f"Desktop prompt title set to: {text}"
     except Exception as exc:
         return f"Panel set_title failed: {exc}"
 
 
 @mcp.tool()
 def panel_prompt(question: str) -> str:
-    """Ask the user a question through the panel and wait for an answer.
-
-    The panel will expand and display the question. The user can type
-    an answer or click quick-answer buttons (if the question contains
-    options like [Yes] [No] or A/B/C).
+    """Ask the user through the desktop chat and wait for an answer.
 
     This is a blocking call — it waits until the user responds.
 
@@ -597,15 +572,11 @@ def panel_prompt(question: str) -> str:
     Returns:
         The user's answer as a string.
     """
-    bm = get_browser_manager()
-    if not bm.is_alive():
-        return "Error: Browser not launched. Call browser_launch first."
-
     try:
         from src.panel import get_panel_manager
 
         pm = get_panel_manager()
-        answer = pm.prompt(bm.get_page(), question)
+        answer = pm.prompt(None, question)
         return f"User answered: {answer}"
     except Exception as exc:
         return f"Panel prompt failed: {exc}"
@@ -626,10 +597,6 @@ def panel_set_fields(fields_json: str) -> str:
     Returns:
         Confirmation message.
     """
-    bm = get_browser_manager()
-    if not bm.is_alive():
-        return "Error: Browser not launched. Call browser_launch first."
-
     try:
         import json
 
@@ -637,8 +604,8 @@ def panel_set_fields(fields_json: str) -> str:
 
         fields = json.loads(fields_json)
         pm = get_panel_manager()
-        pm.set_fields(bm.get_page(), fields)
-        return f"Panel fields updated: {len(fields)} fields configured."
+        pm.set_fields(None, fields)
+        return f"Desktop prompt fields updated: {len(fields)} fields configured."
     except json.JSONDecodeError as exc:
         return f"Invalid JSON: {exc}"
     except Exception as exc:

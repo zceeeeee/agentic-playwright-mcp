@@ -14,6 +14,7 @@ build/
 logs/
 *.log
 node_modules/
+desktop/dist-electron/
 .pytest_cache/
 .mypy_cache/
 site/

@@ -14,9 +14,10 @@ import sys
 import traceback
 from dataclasses import dataclass, field
 from functools import wraps
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from typing import Any, Callable
 from urllib.parse import quote_plus
+
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from src.core.browser_manager import get_browser_manager
 from src.core.event_bus import EVENT_SCRIPT_EXECUTE, Event, Phase, get_event_bus
@@ -437,13 +438,6 @@ class ScriptEngine:
                 return True
 
             if am.has_auth(domain):
-                page = bm.get_page()
-                try:
-                    if not _pm.is_injected(page):
-                        page.goto("about:blank")
-                except Exception:
-                    pass
-
                 answer = panel_prompt(
                     f"Load saved login for {domain} before continuing? [yes] [no]"
                 )
