@@ -1,14 +1,13 @@
 """
-LLM 意图解析器 —— 当硬编码规则无法解析任务时，用 LLM 兜底。
+LLM 意图解析器 —— 统一封装 LLM 客户端，供技能路由与 Explore 复用。
 
-仅在以下情况调用：
-1. ScriptGenerator.parse_intent() 返回 None（规则无匹配）
-2. 技能库多个技能评分打平（歧义）
+当前职责：
+- 提供 available 门禁（是否配置了 API Key）
+- 暴露底层 LLMClient（_client）给 SkillRouter 精排、AgentLoop 选技能、
+  Explore 规划等调用，统一走 OpenAI 兼容 API / Anthropic。
 
-返回结构化 TaskIntent，走现有的脚本模板拼装路径。
-
-内部使用 src.core.llm_client.LLMClient 统一调用 LLM，
-支持 OpenAI 兼容 API 和 Anthropic。
+parse() 曾用于把自然语言解析为 TaskIntent 走脚本模板拼装，现已被
+SkillRouter 的两阶段路由取代；方法保留但主链路不再调用。
 """
 
 from __future__ import annotations

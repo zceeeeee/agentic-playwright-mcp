@@ -1583,29 +1583,6 @@ class AgentLoop:
 
         return max(skills, key=score)
 
-    def _skill_score(self, skill: Any, task: str) -> tuple[int, int, int]:
-        """计算技能评分（与 _select_best_skill 相同逻辑，供歧义检测复用）。"""
-        task_lower = task.lower()
-        broad_triggers = {"搜索", "search", "查找", "find", "找"}
-        triggers = getattr(skill, "triggers", []) or []
-        matched = [t for t in triggers if t.lower() in task_lower]
-        specific = [t for t in matched if t.lower() not in broad_triggers]
-        url_patterns = getattr(skill, "url_patterns", []) or []
-        return (len(specific), len(matched), len(url_patterns))
-
-    def _has_ambiguity(self, skills: list[Any], task: str) -> bool:
-        """检查多个候选技能是否评分打平（歧义）。
-
-        当第一名和第二名的专属词数相同时，视为歧义。
-        """
-        if len(skills) < 2:
-            return False
-        scored = sorted(skills, key=lambda s: self._skill_score(s, task), reverse=True)
-        top1 = self._skill_score(scored[0], task)
-        top2 = self._skill_score(scored[1], task)
-        # 专属词数相同 → 歧义
-        return top1[0] == top2[0]
-
     def _resolve_skill_with_llm(self, task: str, skills: list[Any]) -> Any | None:
         """用 LLM 仲裁技能歧义。
 
@@ -1667,21 +1644,6 @@ class AgentLoop:
             logger.warning("LLM 仲裁失败: %s", exc)
 
         return None
-
-    def _generate_script_via_llm(self, task: str) -> str | None:
-        """用 LLM 解析意图，再由 ScriptGenerator 生成脚本。
-
-        流程: LLM → TaskIntent → _intent_to_script()
-        """
-        if not self._llm_parser:
-            return None
-
-        intent = self._llm_parser.parse(task)
-        if not intent:
-            return None
-
-        # 用 ScriptGenerator 的模板拼装脚本
-        return self._script_generator._intent_to_script(intent)
 
     def _find_skill_via_llm(self, task: str) -> SkillDecision | None:
         """用 LLM 理解意图，从 skills.yaml 中匹配技能。
