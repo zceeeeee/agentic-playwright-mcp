@@ -1,17 +1,17 @@
 import { useRef } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 
-interface DragState {
+export type ResizeEdge = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
+interface ResizeState {
+  edge: ResizeEdge;
   pointerId: number;
-  startX: number;
-  startY: number;
   lastX: number;
   lastY: number;
-  dragging: boolean;
 }
 
-export function useWindowDrag(enabled = true) {
-  const dragRef = useRef<DragState | null>(null);
+export function useWindowResize() {
+  const resizeRef = useRef<ResizeState | null>(null);
   const pendingDeltaRef = useRef({ x: 0, y: 0 });
   const animationFrameRef = useRef<number | null>(null);
 
@@ -20,10 +20,11 @@ export function useWindowDrag(enabled = true) {
       window.cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
+    const state = resizeRef.current;
     const delta = pendingDeltaRef.current;
     pendingDeltaRef.current = { x: 0, y: 0 };
-    if (delta.x || delta.y || persist) {
-      void window.desktopAgent.moveWindowBy(delta.x, delta.y, persist);
+    if (state && (delta.x || delta.y || persist)) {
+      void window.desktopAgent.resizeExpandedChat(state.edge, delta.x, delta.y, persist);
     }
   }
 
@@ -37,56 +38,45 @@ export function useWindowDrag(enabled = true) {
     });
   }
 
-  function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
-    if (!enabled || event.button !== 0) return;
-    const target = event.target as HTMLElement;
-    if (target.closest("button,input,textarea,select,a,[data-no-drag]")) return;
+  function onPointerDown(edge: ResizeEdge, event: ReactPointerEvent<HTMLSpanElement>) {
+    if (event.button !== 0) return;
     event.preventDefault();
-    const header = event.currentTarget;
-    header.setPointerCapture(event.pointerId);
-    dragRef.current = {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeRef.current = {
+      edge,
       pointerId: event.pointerId,
-      startX: event.screenX,
-      startY: event.screenY,
       lastX: event.screenX,
-      lastY: event.screenY,
-      dragging: false
+      lastY: event.screenY
     };
   }
 
-  function onPointerMove(event: ReactPointerEvent<HTMLElement>) {
-    const state = dragRef.current;
+  function onPointerMove(event: ReactPointerEvent<HTMLSpanElement>) {
+    const state = resizeRef.current;
     if (!state || state.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
     const dx = event.screenX - state.lastX;
     const dy = event.screenY - state.lastY;
     state.lastX = event.screenX;
     state.lastY = event.screenY;
-
-    if (!state.dragging) {
-      const totalX = event.screenX - state.startX;
-      const totalY = event.screenY - state.startY;
-      if (Math.hypot(totalX, totalY) < 5) return;
-      state.dragging = true;
-      schedule(totalX, totalY);
-      return;
-    }
     if (dx || dy) schedule(dx, dy);
   }
 
-  function finishDrag(event: ReactPointerEvent<HTMLElement>) {
-    const state = dragRef.current;
+  function finish(event: ReactPointerEvent<HTMLSpanElement>) {
+    const state = resizeRef.current;
     if (!state || state.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    flush(state.dragging);
+    flush(true);
+    resizeRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }
 
-  return {
-    onPointerDown,
+  return (edge: ResizeEdge) => ({
+    onPointerDown: (event: ReactPointerEvent<HTMLSpanElement>) => onPointerDown(edge, event),
     onPointerMove,
-    onPointerUp: finishDrag,
-    onPointerCancel: finishDrag
-  };
+    onPointerUp: finish,
+    onPointerCancel: finish
+  });
 }

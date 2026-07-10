@@ -5,7 +5,7 @@ export type AgentVisualState =
   | "success"
   | "error";
 
-export type PetSkinId = "classic" | "animated-cat";
+export type PetSkinId = "classic" | "animated-cat" | "maltese";
 
 export type DashboardSection =
   | "chat"
@@ -115,7 +115,17 @@ export interface DesktopBridge {
   isExpanded(): Promise<boolean>;
   openDashboard(section?: DashboardSection): Promise<void>;
   setPetPosition(x: number, y: number): Promise<void>;
-  setWindowPosition(x: number, y: number): Promise<void>;
+  moveWindowBy(
+    deltaX: number,
+    deltaY: number,
+    persist?: boolean
+  ): Promise<{ x: number; y: number; width: number; height: number } | null>;
+  resizeExpandedChat(
+    edge: "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw",
+    deltaX: number,
+    deltaY: number,
+    persist?: boolean
+  ): Promise<{ x: number; y: number; width: number; height: number } | null>;
   getWindowBounds(): Promise<{ x: number; y: number; width: number; height: number }>;
   showPetMenu(): Promise<void>;
   restartBackend(): Promise<void>;

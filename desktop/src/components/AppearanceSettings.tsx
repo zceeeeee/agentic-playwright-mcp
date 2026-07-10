@@ -4,7 +4,7 @@ import { useAppearanceStore } from "../stores/appearanceStore";
 import type { PetSkinId } from "../types";
 import { PetAvatar } from "./PetAvatar";
 
-const skinIds: PetSkinId[] = ["classic", "animated-cat"];
+const skinIds: PetSkinId[] = ["classic", "animated-cat", "maltese"];
 
 export function AppearanceSettings() {
   const skinId = useAppearanceStore((state) => state.skinId);
@@ -40,7 +40,7 @@ export function AppearanceSettings() {
                 <strong>{skin.name}</strong>
                 <span>{skin.description}</span>
                 {skin.attribution ? (
-                  <small>素材来源：Lumi-arta/desktop_cat</small>
+                  <small>素材来源：{skin.attribution}</small>
                 ) : null}
               </span>
               {selected ? (

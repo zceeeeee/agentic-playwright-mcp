@@ -6,7 +6,14 @@ contextBridge.exposeInMainWorld("desktopAgent", {
   isExpanded: () => ipcRenderer.invoke("pet:is-expanded"),
   openDashboard: (section?: string) => ipcRenderer.invoke("dashboard:open", section),
   setPetPosition: (x: number, y: number) => ipcRenderer.invoke("pet:set-position", { x, y }),
-  setWindowPosition: (x: number, y: number) => ipcRenderer.invoke("window:set-position", { x, y }),
+  moveWindowBy: (deltaX: number, deltaY: number, persist = false) =>
+    ipcRenderer.invoke("window:move-by", { deltaX, deltaY }, persist),
+  resizeExpandedChat: (
+    edge: string,
+    deltaX: number,
+    deltaY: number,
+    persist = false
+  ) => ipcRenderer.invoke("pet:resize-expanded", { edge, deltaX, deltaY }, persist),
   getWindowBounds: () => ipcRenderer.invoke("window:get-bounds"),
   showPetMenu: () => ipcRenderer.invoke("pet:show-menu"),
   restartBackend: () => ipcRenderer.invoke("backend:restart"),

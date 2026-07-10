@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type PetSkinId = "classic" | "animated-cat";
+export type PetSkinId = "classic" | "animated-cat" | "maltese";
 
 export interface AppearancePreferences {
   version: 1;
@@ -15,7 +15,7 @@ export interface ShapeRectangle {
   height: number;
 }
 
-const VALID_SKIN_IDS = new Set<PetSkinId>(["classic", "animated-cat"]);
+const VALID_SKIN_IDS = new Set<PetSkinId>(["classic", "animated-cat", "maltese"]);
 
 export function validateSkinId(value: unknown): PetSkinId {
   return typeof value === "string" && VALID_SKIN_IDS.has(value as PetSkinId)
@@ -67,7 +67,7 @@ export function getCompactShapeForSkin(
   skinId: PetSkinId,
   size: number
 ): ShapeRectangle[] {
-  if (skinId === "animated-cat") {
+  if (skinId !== "classic") {
     return [{ x: 0, y: 0, width: size, height: size }];
   }
 

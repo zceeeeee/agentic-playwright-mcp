@@ -22,10 +22,15 @@ import {
   writeAppearancePreferences,
   type AppearancePreferences
 } from "./appearance.js";
+import {
+  DEFAULT_CHAT_SIZE,
+  parseChatSize,
+  resizeChatBoundsBy,
+  type ResizeEdge,
+  type WindowSize
+} from "./windowGeometry.js";
 
 const COMPACT_SIZE = 80;
-const EXPANDED_WIDTH = 400;
-const EXPANDED_HEIGHT = 600;
 
 let petWindow: BrowserWindow | null = null;
 let dashboardWindow: BrowserWindow | null = null;
@@ -35,9 +40,11 @@ let backendPort = 0;
 let backendToken = "";
 let expanded = false;
 let compactBounds = { x: 0, y: 0, width: COMPACT_SIZE, height: COMPACT_SIZE };
+let expandedSize: WindowSize = { ...DEFAULT_CHAT_SIZE };
 let expandedAnchor = { right: true, bottom: true };
 let quitting = false;
 let appearancePreferences: AppearancePreferences = getDefaultAppearancePreferences();
+const dragDisplayByWebContents = new Map<number, number>();
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
@@ -83,7 +90,11 @@ function initialCompactBounds(): typeof compactBounds {
   };
 }
 
-function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle): void {
+function initialExpandedSize(): WindowSize {
+  return parseChatSize(readJson(userFile("chat-window-size.json"), DEFAULT_CHAT_SIZE));
+}
+
+function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle, persist = true): void {
   const anchorX = expandedAnchor.right
     ? bounds.x + bounds.width - COMPACT_SIZE
     : bounds.x;
@@ -92,7 +103,7 @@ function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle): void {
     : bounds.y;
   const point = clampCompactPosition(anchorX, anchorY);
   compactBounds = { ...point, width: COMPACT_SIZE, height: COMPACT_SIZE };
-  writeJson(userFile("pet-position.json"), point);
+  if (persist) writeJson(userFile("pet-position.json"), point);
 }
 
 function rendererUrl(view: "pet" | "dashboard", section?: string): string {
@@ -104,6 +115,7 @@ function rendererUrl(view: "pet" | "dashboard", section?: string): string {
 
 function createPetWindow(): void {
   compactBounds = initialCompactBounds();
+  expandedSize = initialExpandedSize();
   petWindow = new BrowserWindow({
     ...compactBounds,
     frame: false,
@@ -143,6 +155,21 @@ function applyCompactShape(): void {
   }
 }
 
+function applyExpandedShape(bounds: Pick<Electron.Rectangle, "width" | "height">): void {
+  if (!petWindow || !expanded || typeof petWindow.setShape !== "function") return;
+  try {
+    petWindow.setShape([{ x: 0, y: 0, width: bounds.width, height: bounds.height }]);
+  } catch {
+    // Ignore unsupported shape updates.
+  }
+}
+
+function persistExpandedBounds(bounds: Electron.Rectangle): void {
+  expandedSize = { width: bounds.width, height: bounds.height };
+  writeJson(userFile("chat-window-size.json"), expandedSize);
+  syncCompactAnchorFromExpanded(bounds);
+}
+
 function expandPet(): void {
   if (!petWindow || expanded) return;
   compactBounds = { ...petWindow.getBounds(), width: COMPACT_SIZE, height: COMPACT_SIZE };
@@ -151,25 +178,26 @@ function expandPet(): void {
   const rightAnchored = compactBounds.x + COMPACT_SIZE / 2 > area.x + area.width / 2;
   const bottomAnchored = compactBounds.y + COMPACT_SIZE / 2 > area.y + area.height / 2;
   expandedAnchor = { right: rightAnchored, bottom: bottomAnchored };
+  const size = parseChatSize(expandedSize);
+  const width = Math.min(size.width, area.width);
+  const height = Math.min(size.height, area.height);
   const x = rightAnchored
-    ? Math.max(area.x, compactBounds.x + COMPACT_SIZE - EXPANDED_WIDTH)
-    : Math.min(compactBounds.x, area.x + area.width - EXPANDED_WIDTH);
+    ? Math.max(area.x, compactBounds.x + COMPACT_SIZE - width)
+    : Math.min(compactBounds.x, area.x + area.width - width);
   const y = bottomAnchored
-    ? Math.max(area.y, compactBounds.y + COMPACT_SIZE - EXPANDED_HEIGHT)
-    : Math.min(compactBounds.y, area.y + area.height - EXPANDED_HEIGHT);
+    ? Math.max(area.y, compactBounds.y + COMPACT_SIZE - height)
+    : Math.min(compactBounds.y, area.y + area.height - height);
   expanded = true;
-  try {
-    petWindow.setShape([{ x: 0, y: 0, width: EXPANDED_WIDTH, height: EXPANDED_HEIGHT }]);
-  } catch {
-    // Ignore unsupported shape reset.
-  }
-  petWindow.setBounds({ x, y, width: EXPANDED_WIDTH, height: EXPANDED_HEIGHT }, true);
+  const bounds = { x, y, width, height };
+  applyExpandedShape(bounds);
+  petWindow.setBounds(bounds, true);
   petWindow.webContents.send("pet:expanded", true);
 }
 
 function collapsePet(): void {
   if (!petWindow || !expanded) return;
   const targetWindow = petWindow;
+  persistExpandedBounds(targetWindow.getBounds());
   expanded = false;
   targetWindow.webContents.send("pet:expanded", false);
   const point = clampCompactPosition(compactBounds.x, compactBounds.y);
@@ -359,23 +387,73 @@ function registerIpc(): void {
   ipcMain.handle("pet:show-menu", () => showPetMenu());
   ipcMain.handle("dashboard:open", (_event, section: unknown) => createDashboardWindow(normalizeDashboardSection(section)));
   ipcMain.handle("window:get-bounds", (event) => BrowserWindow.fromWebContents(event.sender)?.getBounds());
-  ipcMain.handle("window:set-position", (event, point: { x: number; y: number }) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return null;
-    const bounds = window.getBounds();
-    const display = screen.getDisplayNearestPoint({
-      x: Math.round(point.x + bounds.width / 2),
-      y: Math.round(point.y + bounds.height / 2)
-    });
-    const area = display.workArea;
-    const x = Math.min(Math.max(Math.round(point.x), area.x), area.x + area.width - bounds.width);
-    const y = Math.min(Math.max(Math.round(point.y), area.y), area.y + area.height - bounds.height);
-    window.setPosition(x, y);
-    if (window === petWindow && expanded) {
-      syncCompactAnchorFromExpanded(window.getBounds());
+  ipcMain.handle(
+    "window:move-by",
+    (event, delta: { deltaX?: unknown; deltaY?: unknown }, persist = false) => {
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!sourceWindow) return null;
+      const bounds = sourceWindow.getBounds();
+      const deltaX = typeof delta?.deltaX === "number" && Number.isFinite(delta.deltaX)
+        ? Math.round(delta.deltaX)
+        : 0;
+      const deltaY = typeof delta?.deltaY === "number" && Number.isFinite(delta.deltaY)
+        ? Math.round(delta.deltaY)
+        : 0;
+      const senderId = event.sender.id;
+      const savedDisplayId = dragDisplayByWebContents.get(senderId);
+      const display = screen.getAllDisplays().find((candidate) => candidate.id === savedDisplayId)
+        ?? screen.getDisplayMatching(bounds);
+      dragDisplayByWebContents.set(senderId, display.id);
+      const area = display.workArea;
+      const maxX = Math.max(area.x, area.x + area.width - bounds.width);
+      const maxY = Math.max(area.y, area.y + area.height - bounds.height);
+      const x = Math.min(
+        Math.max(bounds.x + deltaX, area.x),
+        maxX
+      );
+      const y = Math.min(
+        Math.max(bounds.y + deltaY, area.y),
+        maxY
+      );
+      sourceWindow.setPosition(x, y);
+      const movedBounds = sourceWindow.getBounds();
+      if (sourceWindow === petWindow && expanded && persist) {
+        syncCompactAnchorFromExpanded(movedBounds);
+      }
+      if (persist) dragDisplayByWebContents.delete(senderId);
+      return movedBounds;
     }
-    return window.getBounds();
-  });
+  );
+  ipcMain.handle(
+    "pet:resize-expanded",
+    (
+      event,
+      request: { edge?: unknown; deltaX?: unknown; deltaY?: unknown },
+      persist = false
+    ) => {
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!petWindow || sourceWindow !== petWindow || !expanded) {
+        return sourceWindow?.getBounds() ?? null;
+      }
+      const currentBounds = petWindow.getBounds();
+      const area = screen.getDisplayMatching(currentBounds).workArea;
+      const validEdges = new Set<ResizeEdge>(["n", "ne", "e", "se", "s", "sw", "w", "nw"]);
+      const edge = typeof request?.edge === "string" && validEdges.has(request.edge as ResizeEdge)
+        ? request.edge as ResizeEdge
+        : null;
+      if (!edge) return currentBounds;
+      const deltaX = typeof request.deltaX === "number" ? request.deltaX : 0;
+      const deltaY = typeof request.deltaY === "number" ? request.deltaY : 0;
+      const nextBounds = resizeChatBoundsBy(currentBounds, edge, deltaX, deltaY, area);
+      petWindow.setBounds(nextBounds);
+      applyExpandedShape(nextBounds);
+      expandedSize = { width: nextBounds.width, height: nextBounds.height };
+      syncCompactAnchorFromExpanded(nextBounds, persist);
+      if (persist) writeJson(userFile("chat-window-size.json"), expandedSize);
+      petWindow.webContents.invalidate();
+      return nextBounds;
+    }
+  );
   ipcMain.handle("pet:set-position", (_event, point: { x: number; y: number }) => {
     if (!petWindow || expanded) return compactBounds;
     const next = clampCompactPosition(point.x, point.y);

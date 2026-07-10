@@ -14,6 +14,7 @@ import {
 test("appearance defaults to classic and validates skin ids", () => {
   assert.deepEqual(getDefaultAppearancePreferences(), { version: 1, skinId: "classic" });
   assert.equal(validateSkinId("animated-cat"), "animated-cat");
+  assert.equal(validateSkinId("maltese"), "maltese");
   assert.equal(validateSkinId("unknown"), "classic");
 });
 
@@ -35,10 +36,12 @@ test("appearance preferences persist and recover from invalid files", () => {
   }
 });
 
-test("classic is circular while animated cat keeps the full compact rectangle", () => {
+test("classic is circular while animated skins keep the full compact rectangle", () => {
   const classic = getCompactShapeForSkin("classic", 80);
   const animated = getCompactShapeForSkin("animated-cat", 80);
+  const maltese = getCompactShapeForSkin("maltese", 80);
   assert.ok(classic.length > 1);
   assert.ok(classic.some((rect) => rect.width < 80));
   assert.deepEqual(animated, [{ x: 0, y: 0, width: 80, height: 80 }]);
+  assert.deepEqual(maltese, [{ x: 0, y: 0, width: 80, height: 80 }]);
 });

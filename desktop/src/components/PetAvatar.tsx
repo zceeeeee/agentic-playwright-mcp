@@ -26,7 +26,7 @@ export function PetAvatar({ skinId, state, variant, className = "" }: PetAvatarP
   if (renderClassic) {
     return (
       <span
-        className={`pet-avatar classic-pet state-${state} pet-avatar-${variant} ${className}`}
+        className={`pet-avatar classic-pet skin-${skin.id} state-${state} pet-avatar-${variant} ${className}`}
         aria-label={getAgentStateLabel(state)}
       >
         <span className="pet-core" />
@@ -55,7 +55,7 @@ export function PetAvatar({ skinId, state, variant, className = "" }: PetAvatarP
 
   return (
     <span
-      className={`pet-avatar animated-pet state-${state} pet-avatar-${variant} ${className}`}
+      className={`pet-avatar animated-pet skin-${skin.id} state-${state} pet-avatar-${variant} ${className}`}
       aria-label={getAgentStateLabel(state)}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}

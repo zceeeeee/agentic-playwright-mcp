@@ -28,8 +28,8 @@ export const PET_SKINS: Record<PetSkinId, PetSkinDefinition> = {
   },
   "animated-cat": {
     id: "animated-cat",
-    name: "动画猫模式",
-    description: "使用动画猫表达 Agent 当前状态。",
+    name: "月薪猫",
+    description: "使用月薪猫动画表达 Agent 当前状态。",
     renderer: "animated-gif",
     stateAssets: {
       idle: "./skins/animated-cat/idle.gif",
@@ -43,6 +43,23 @@ export const PET_SKINS: Record<PetSkinId, PetSkinDefinition> = {
     },
     fallbackAsset: "./skins/animated-cat/idle.gif",
     attribution: "Lumi-arta/desktop_cat"
+  },
+  maltese: {
+    id: "maltese",
+    name: "线条小狗",
+    description: "使用线条小狗动画表达 Agent 当前状态。",
+    renderer: "animated-gif",
+    stateAssets: {
+      idle: "./skins/maltese/idle.gif",
+      running: "./skins/maltese/running.gif",
+      waiting_confirmation: "./skins/maltese/review.gif",
+      success: "./skins/maltese/jumping.gif",
+      error: "./skins/maltese/failed.gif"
+    },
+    interactionAssets: {
+      hover: "./skins/maltese/waving.gif"
+    },
+    fallbackAsset: "./skins/maltese/idle.gif"
   }
 };
 

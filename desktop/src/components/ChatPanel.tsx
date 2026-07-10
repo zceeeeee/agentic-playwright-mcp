@@ -8,6 +8,7 @@ import { ChatInput } from "./ChatInput";
 import { HistoryPanel } from "./HistoryPanel";
 import { MessageList } from "./MessageList";
 import { PetAvatar } from "./PetAvatar";
+import { WindowResizeHandles } from "./WindowResizeHandles";
 
 export function ChatPanel({ dashboard = false }: { dashboard?: boolean }) {
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -39,6 +40,7 @@ export function ChatPanel({ dashboard = false }: { dashboard?: boolean }) {
       <MessageList />
       <ChatInput />
       {historyOpen ? <HistoryPanel onClose={() => setHistoryOpen(false)} /> : null}
+      {!dashboard ? <WindowResizeHandles /> : null}
     </section>
   );
 }

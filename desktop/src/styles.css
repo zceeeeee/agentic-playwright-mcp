@@ -139,6 +139,43 @@ button { color: inherit; }
   box-shadow: 0 18px 44px rgba(20, 32, 38, 0.24);
 }
 .dashboard-chat { border: 0; border-radius: 0; box-shadow: none; }
+.window-resize-handles {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  pointer-events: none;
+}
+.window-resize-handle {
+  position: absolute;
+  z-index: 20;
+  display: block;
+  touch-action: none;
+  user-select: none;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+}
+.resize-n, .resize-s { left: 9px; right: 9px; height: 4px; cursor: ns-resize; }
+.resize-n { top: 0; }
+.resize-s { bottom: 0; }
+.resize-e, .resize-w { top: 9px; bottom: 9px; width: 4px; cursor: ew-resize; }
+.resize-e { right: 0; }
+.resize-w { left: 0; }
+.resize-ne, .resize-nw, .resize-se, .resize-sw { width: 9px; height: 9px; }
+.resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
+.resize-sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.resize-se::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid color-mix(in srgb, var(--theme-blue) 72%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--theme-blue) 72%, transparent);
+}
 .chat-header {
   display: flex;
   align-items: center;
@@ -306,7 +343,7 @@ button { color: inherit; }
 .about-view dt { color: #657178; background: #f0f3f4; font-weight: 600; }
 
 .appearance-view { max-width: 900px; }
-.skin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.skin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; }
 .skin-card {
   position: relative;
   display: grid;
