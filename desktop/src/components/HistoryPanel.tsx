@@ -1,16 +1,14 @@
 import { MessageSquarePlus, Pencil, Trash2, X } from "lucide-react";
 import { useAgentStore } from "../stores/agentStore";
-import { useWindowDrag } from "../hooks/useWindowDrag";
 
 export function HistoryPanel({ onClose }: { onClose: () => void }) {
   const store = useAgentStore();
-  const windowDrag = useWindowDrag();
 
   return (
     <aside className="history-panel">
-      <header className="draggable-header" {...windowDrag}>
+      <header className="draggable-header">
         <strong>历史会话</strong>
-        <div className="toolbar-actions">
+        <div className="toolbar-actions" data-no-drag>
           <button title="新建会话" onClick={() => void store.createConversation()}><MessageSquarePlus size={17} /></button>
           <button title="关闭历史" onClick={onClose}><X size={17} /></button>
         </div>

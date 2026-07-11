@@ -23,6 +23,7 @@ import {
   type AppearancePreferences
 } from "./appearance.js";
 import {
+  clampChatBounds,
   DEFAULT_CHAT_SIZE,
   parseChatSize,
   resizeChatBoundsBy,
@@ -44,7 +45,8 @@ let expandedSize: WindowSize = { ...DEFAULT_CHAT_SIZE };
 let expandedAnchor = { right: true, bottom: true };
 let quitting = false;
 let appearancePreferences: AppearancePreferences = getDefaultAppearancePreferences();
-const dragDisplayByWebContents = new Map<number, number>();
+let correctingExpandedPosition = false;
+let expandedMoveSettleTimer: NodeJS.Timeout | null = null;
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
@@ -106,6 +108,43 @@ function syncCompactAnchorFromExpanded(bounds: Electron.Rectangle, persist = tru
   if (persist) writeJson(userFile("pet-position.json"), point);
 }
 
+function clearExpandedMoveSettleTimer(): void {
+  if (!expandedMoveSettleTimer) return;
+  clearTimeout(expandedMoveSettleTimer);
+  expandedMoveSettleTimer = null;
+}
+
+function settleExpandedWindowPosition(): void {
+  clearExpandedMoveSettleTimer();
+  if (!petWindow || petWindow.isDestroyed() || !expanded || correctingExpandedPosition) return;
+
+  const currentBounds = petWindow.getBounds();
+  const display = screen.getDisplayMatching(currentBounds);
+  const nextBounds = clampChatBounds(currentBounds, display.workArea);
+  const changed =
+    nextBounds.x !== currentBounds.x ||
+    nextBounds.y !== currentBounds.y ||
+    nextBounds.width !== currentBounds.width ||
+    nextBounds.height !== currentBounds.height;
+
+  if (changed) {
+    correctingExpandedPosition = true;
+    try {
+      petWindow.setBounds(nextBounds, false);
+      applyExpandedShape(nextBounds);
+    } finally {
+      correctingExpandedPosition = false;
+    }
+  }
+  syncCompactAnchorFromExpanded(changed ? nextBounds : currentBounds);
+}
+
+function scheduleExpandedWindowSettle(): void {
+  if (!expanded || correctingExpandedPosition) return;
+  clearExpandedMoveSettleTimer();
+  expandedMoveSettleTimer = setTimeout(settleExpandedWindowPosition, 120);
+}
+
 function rendererUrl(view: "pet" | "dashboard", section?: string): string {
   const url = pathToFileURL(path.join(desktopRoot, "dist", "index.html"));
   url.searchParams.set("view", view);
@@ -137,11 +176,13 @@ function createPetWindow(): void {
   petWindow.loadURL(rendererUrl("pet"));
   petWindow.once("ready-to-show", () => petWindow?.show());
   petWindow.on("closed", () => {
+    clearExpandedMoveSettleTimer();
     petWindow = null;
   });
+  petWindow.on("move", scheduleExpandedWindowSettle);
   petWindow.on("moved", () => {
-    if (!petWindow || !expanded) return;
-    syncCompactAnchorFromExpanded(petWindow.getBounds());
+    if (!expanded) return;
+    settleExpandedWindowPosition();
   });
   applyCompactShape();
 }
@@ -196,6 +237,7 @@ function expandPet(): void {
 
 function collapsePet(): void {
   if (!petWindow || !expanded) return;
+  clearExpandedMoveSettleTimer();
   const targetWindow = petWindow;
   persistExpandedBounds(targetWindow.getBounds());
   expanded = false;
@@ -387,43 +429,6 @@ function registerIpc(): void {
   ipcMain.handle("pet:show-menu", () => showPetMenu());
   ipcMain.handle("dashboard:open", (_event, section: unknown) => createDashboardWindow(normalizeDashboardSection(section)));
   ipcMain.handle("window:get-bounds", (event) => BrowserWindow.fromWebContents(event.sender)?.getBounds());
-  ipcMain.handle(
-    "window:move-by",
-    (event, delta: { deltaX?: unknown; deltaY?: unknown }, persist = false) => {
-      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
-      if (!sourceWindow) return null;
-      const bounds = sourceWindow.getBounds();
-      const deltaX = typeof delta?.deltaX === "number" && Number.isFinite(delta.deltaX)
-        ? Math.round(delta.deltaX)
-        : 0;
-      const deltaY = typeof delta?.deltaY === "number" && Number.isFinite(delta.deltaY)
-        ? Math.round(delta.deltaY)
-        : 0;
-      const senderId = event.sender.id;
-      const savedDisplayId = dragDisplayByWebContents.get(senderId);
-      const display = screen.getAllDisplays().find((candidate) => candidate.id === savedDisplayId)
-        ?? screen.getDisplayMatching(bounds);
-      dragDisplayByWebContents.set(senderId, display.id);
-      const area = display.workArea;
-      const maxX = Math.max(area.x, area.x + area.width - bounds.width);
-      const maxY = Math.max(area.y, area.y + area.height - bounds.height);
-      const x = Math.min(
-        Math.max(bounds.x + deltaX, area.x),
-        maxX
-      );
-      const y = Math.min(
-        Math.max(bounds.y + deltaY, area.y),
-        maxY
-      );
-      sourceWindow.setPosition(x, y);
-      const movedBounds = sourceWindow.getBounds();
-      if (sourceWindow === petWindow && expanded && persist) {
-        syncCompactAnchorFromExpanded(movedBounds);
-      }
-      if (persist) dragDisplayByWebContents.delete(senderId);
-      return movedBounds;
-    }
-  );
   ipcMain.handle(
     "pet:resize-expanded",
     (

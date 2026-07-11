@@ -6,8 +6,6 @@ contextBridge.exposeInMainWorld("desktopAgent", {
   isExpanded: () => ipcRenderer.invoke("pet:is-expanded"),
   openDashboard: (section?: string) => ipcRenderer.invoke("dashboard:open", section),
   setPetPosition: (x: number, y: number) => ipcRenderer.invoke("pet:set-position", { x, y }),
-  moveWindowBy: (deltaX: number, deltaY: number, persist = false) =>
-    ipcRenderer.invoke("window:move-by", { deltaX, deltaY }, persist),
   resizeExpandedChat: (
     edge: string,
     deltaX: number,

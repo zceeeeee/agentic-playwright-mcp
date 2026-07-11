@@ -115,11 +115,6 @@ export interface DesktopBridge {
   isExpanded(): Promise<boolean>;
   openDashboard(section?: DashboardSection): Promise<void>;
   setPetPosition(x: number, y: number): Promise<void>;
-  moveWindowBy(
-    deltaX: number,
-    deltaY: number,
-    persist?: boolean
-  ): Promise<{ x: number; y: number; width: number; height: number } | null>;
   resizeExpandedChat(
     edge: "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw",
     deltaX: number,
