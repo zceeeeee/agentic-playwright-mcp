@@ -1,4 +1,4 @@
-﻿"""
+"""
 Agent 循环引擎 —— 自然语言驱动的自主浏览器操作。
 
 核心逻辑：OBSERVE → PLAN → ACT → OBSERVE ... 循环，
@@ -763,9 +763,12 @@ class AgentLoop:
     def _do_plan(self, step: AgentStep, task: str) -> AgentState:
         """根据任务和页面状态，决定下一步。
 
-        两级降级：
-        1. SkillRouter 严格关键词匹配（确定时才命中）
-        2. LLM 意图解析 → 从 skills.yaml 找技能脚本
+        召回+精排架构：
+        1. Explore 早期触发（已导航/快照/激活）
+        2. SkillRouter 召回+精排 → 技能脚本 或 explore
+        3. Explore 经验复用
+        4. Explore 入口引导
+        5. Explore 模式（ARIA + LLM planner）
         """
         logger.debug("PLAN: planning action for step %d", step.step_number)
 
@@ -822,7 +825,7 @@ class AgentLoop:
             logger.info("PLAN: Explore mode active, skipping skill matching, entering Explore")
             return AgentState.EXPLORE
 
-        # ── 1. SkillRouter 严格关键词匹配 ──
+        # ── 1. SkillRouter 召回+精排 ──
         with log_timing("agent_plan_skill_router") as meta:
             page_context = {
                 "url": get_browser_manager().get_page().url,
@@ -833,6 +836,27 @@ class AgentLoop:
             meta["confidence"] = decision.confidence
             meta["skill_id"] = decision.skill.id if decision.skill else None
 
+        # LLM 判定需要 explore
+        if decision.source == "llm_explore":
+            step.action = "LLM 判定进入 Explore 模式"
+            step.mode = "explore"
+            step.result = f"LLM 路由判定: {decision.reason}"
+            logger.info("PLAN: LLM router chose explore (reason=%s)", decision.reason)
+            self._bus.emit(
+                Event(
+                    name=EVENT_AGENT_PLAN,
+                    phase=Phase.AFTER,
+                    data={
+                        "step_number": step.step_number,
+                        "source": "llm_explore",
+                        "confidence": decision.confidence,
+                    },
+                    result=step.result,
+                )
+            )
+            return AgentState.EXPLORE
+
+        # 技能命中
         if decision.skill and decision.script:
             step.action = f"使用技能: {decision.skill.name}"
             step.script = decision.script
@@ -862,40 +886,7 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        # ── 2. LLM 意图解析 → 找技能脚本 ──
-        with log_timing("agent_plan_llm_intent") as meta:
-            llm_decision = self._find_skill_via_llm(task)
-            meta["matched"] = llm_decision is not None and llm_decision.skill is not None
-
-        if llm_decision and llm_decision.skill and llm_decision.script:
-            step.action = f"使用技能: {llm_decision.skill.name}"
-            step.script = llm_decision.script
-            step.result = (
-                f"LLM 意图命中: {llm_decision.skill.name} "
-                f"(置信度: {llm_decision.confidence:.2f})"
-            )
-            logger.info(
-                "PLAN: LLM intent matched '%s' (confidence=%.2f)",
-                llm_decision.skill.name,
-                llm_decision.confidence,
-            )
-            self._bus.emit(
-                Event(
-                    name=EVENT_AGENT_PLAN,
-                    phase=Phase.AFTER,
-                    data={
-                        "step_number": step.step_number,
-                        "source": "llm_intent",
-                        "skill_id": llm_decision.skill.id,
-                        "skill_name": llm_decision.skill.name,
-                        "confidence": llm_decision.confidence,
-                    },
-                    result=step.result,
-                )
-            )
-            return AgentState.ACT
-
-        # ── 3. Explore 经验复用 ──
+        # ── 2. Explore 经验复用 ──
         experience = explore_agent.find_experience(task, page_context.get("url", ""))
         if experience and experience.confidence > 0.7:
             remapped_actions = explore_agent.prepare_experience_actions(experience)
@@ -944,7 +935,7 @@ class AgentLoop:
             )
             return AgentState.OBSERVE
 
-        # ── 4. 规则生成脚本 ──
+        # ── 3. 内置简单任务（截图/导航等，无需技能库）──
         script = self._generate_script(task, step.page_summary)
         if script and explore_agent.should_skip_generated_script(task, script):
             logger.info("PLAN: skipped generic script for site-scoped Explore task")
@@ -952,7 +943,7 @@ class AgentLoop:
         if script:
             step.action = "生成临时脚本"
             step.script = script
-            step.result = "未命中技能库，生成临时脚本"
+            step.result = "内置任务，生成临时脚本"
             logger.info("PLAN: generated ad-hoc script")
             self._bus.emit(
                 Event(
@@ -964,7 +955,7 @@ class AgentLoop:
             )
             return AgentState.ACT
 
-        # ── 5. Explore 模式 ──
+        # ── 4. Explore 模式 ──
         if explore_agent.has_pending_snapshot:
             batch = explore_agent.plan_actions(task)
             if batch and batch.actions:
