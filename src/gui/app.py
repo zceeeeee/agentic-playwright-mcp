@@ -1279,12 +1279,6 @@ HTML_TEMPLATE = """
                 </button>
             </div>
             <div class="output" id="output">等待执行...</div>
-            <div class="step info" id="authPrompt" style="display:none;margin-top:12px;">
-                <strong id="authPromptTitle">Login detected</strong>
-                <div id="authPromptText" style="margin:8px 0;"></div>
-                <button class="btn btn-dark" id="authSaveBtn" type="button">Save login</button>
-                <button class="btn btn-secondary" id="authDismissBtn" type="button">Not now</button>
-            </div>
         </div>
     </div>
 
@@ -1335,6 +1329,19 @@ HTML_TEMPLATE = """
         </div>
     </footer>
 
+    <!-- Login state prompt -->
+    <div class="modal-overlay" id="authPrompt" role="dialog" aria-modal="true" aria-labelledby="authPromptTitle">
+        <div class="modal-box">
+            <h2 id="authPromptTitle">检测到登录状态</h2>
+            <p class="modal-desc" id="authPromptText"></p>
+            <div class="modal-error" id="authPromptError"></div>
+            <div class="modal-actions">
+                <button class="btn-modal-ghost" id="authDismissBtn" type="button">暂不保存</button>
+                <button class="btn-modal-primary" id="authSaveBtn" type="button">保存登录信息</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const promptedSaveDomains = new Map();
         let authPollTimer = null;
@@ -1367,6 +1374,7 @@ HTML_TEMPLATE = """
                     if (taskRunning) {
                         return;
                     }
+                    closeAuthSavePrompt();
                     const closeBtn = document.getElementById('closeBtn');
                     if (closeBtn) closeBtn.style.display = 'none';
                     stopAuthPolling();
@@ -1389,29 +1397,36 @@ HTML_TEMPLATE = """
 
         function showAuthSavePrompt(domain, hasAuth) {
             latestAuthPromptDomain = domain;
-            const panel = document.getElementById('authPrompt');
+            const modal = document.getElementById('authPrompt');
             const title = document.getElementById('authPromptTitle');
             const text = document.getElementById('authPromptText');
+            const error = document.getElementById('authPromptError');
             const saveBtn = document.getElementById('authSaveBtn');
             const dismissBtn = document.getElementById('authDismissBtn');
-            const action = hasAuth ? 'update saved' : 'save';
-            title.textContent = `Login detected: ${domain}`;
-            text.textContent = `Detected an active ${domain} login. ${action} login info? This will not pause the running task.`;
-            saveBtn.textContent = hasAuth ? 'Update login' : 'Save login';
+            title.textContent = `检测到 ${domain} 已登录`;
+            text.textContent = hasAuth
+                ? `是否更新已保存的 ${domain} 登录信息？当前任务不会因此暂停。`
+                : `是否保存 ${domain} 登录信息，供下次任务直接载入？当前任务不会因此暂停。`;
+            error.style.display = 'none';
+            error.textContent = '';
+            saveBtn.textContent = hasAuth ? '更新登录信息' : '保存登录信息';
             saveBtn.disabled = false;
             saveBtn.onclick = () => saveAuthFromPrompt(domain);
-            dismissBtn.onclick = () => {
-                panel.style.display = 'none';
-            };
-            panel.style.display = 'block';
+            dismissBtn.onclick = closeAuthSavePrompt;
+            modal.classList.add('active');
+        }
+
+        function closeAuthSavePrompt() {
+            document.getElementById('authPrompt').classList.remove('active');
         }
 
         async function saveAuthFromPrompt(domain) {
-            const panel = document.getElementById('authPrompt');
             const text = document.getElementById('authPromptText');
+            const error = document.getElementById('authPromptError');
             const saveBtn = document.getElementById('authSaveBtn');
             saveBtn.disabled = true;
-            saveBtn.textContent = 'Saving...';
+            saveBtn.textContent = '保存中...';
+            error.style.display = 'none';
             try {
                 const saveResponse = await fetch('/api/auth/save', {
                     method: 'POST',
@@ -1421,21 +1436,24 @@ HTML_TEMPLATE = """
                 const saved = await saveResponse.json();
                 if (saved.success) {
                     promptedSaveDomains.set(domain, 'has-auth');
-                    text.textContent = `Saved login info for ${domain}.`;
+                    text.textContent = `已保存 ${domain} 登录信息。`;
                     setTimeout(() => {
                         if (latestAuthPromptDomain === domain) {
-                            panel.style.display = 'none';
+                            closeAuthSavePrompt();
                         }
                     }, 1500);
                 } else {
-                    text.textContent = `Failed to save login info: ${saved.error || 'unknown error'}`;
+                    error.textContent = `保存失败：${saved.error || '未知错误'}`;
+                    error.style.display = 'block';
                     saveBtn.disabled = false;
-                    saveBtn.textContent = 'Retry save';
+                    saveBtn.textContent = '重试保存';
                 }
             } catch (error) {
-                text.textContent = `Failed to save login info: ${error.message}`;
+                const errorBox = document.getElementById('authPromptError');
+                errorBox.textContent = `保存失败：${error.message}`;
+                errorBox.style.display = 'block';
                 saveBtn.disabled = false;
-                saveBtn.textContent = 'Retry save';
+                saveBtn.textContent = '重试保存';
             }
         }
 
@@ -1573,6 +1591,7 @@ HTML_TEMPLATE = """
                 const status = document.getElementById('status');
                 status.className = 'status success';
                 stopAuthPolling();
+                closeAuthSavePrompt();
                 status.textContent = '浏览器已关闭';
                 updateNavStatus(false);
             } catch (error) {

@@ -285,7 +285,8 @@ class SkillRouter:
         extracted: Dict[str, str],
     ) -> str:
         """Build Zhihu article prompts with optional AI generation."""
-        pre_auth = self._build_pre_auth_script(skill)
+        pre_auth = self._build_pre_auth_script(skill, wait_for_manual=False)
+        auth_wait = self._build_pre_auth_script(skill, wait_for_manual=True)
         title_value = json.dumps(extracted.get("title", "-1"), ensure_ascii=False)
         keyword_value = json.dumps(extracted.get("keyword", "-1"), ensure_ascii=False)
         add_picture_value = json.dumps(extracted.get("add-picture", "no"), ensure_ascii=False)
@@ -406,10 +407,11 @@ class SkillRouter:
         return (
             f"{source_code}"
             f"{helper}"
+            f"{pre_auth}"
             f"__param_keyword = __agentic_prepare_zhihu_content({keyword_value}, {keyword_ai_generate!r})\n"
             f"__param_title = __agentic_prepare_zhihu_title({title_value}, __param_keyword, {title_ai_generate!r})\n\n"
             f"__param_add_picture = __agentic_prepare_zhihu_add_picture({add_picture_value})\n\n"
-            f"{pre_auth}"
+            f"{auth_wait}"
             f"# 自动调用\nrun(title=__param_title, keyword=__param_keyword, add_picture=__param_add_picture)"
         )
 
@@ -749,7 +751,8 @@ class SkillRouter:
             "                    return fallback\n"
             "    return __agentic_confirm_required_param(name, value, question, required)\n"
         )
-        pre_auth = self._build_pre_auth_script(skill)
+        pre_auth = self._build_pre_auth_script(skill, wait_for_manual=False)
+        auth_wait = self._build_pre_auth_script(skill, wait_for_manual=True)
         helper = (
             "\n\n# 自动补全缺失参数\n"
             "def __agentic_is_missing_param(value):\n"
@@ -773,8 +776,9 @@ class SkillRouter:
             f"{source_code}"
             f"{helper if needs_param_helper else ''}"
             f"{generic_ai_helper if needs_param_helper else ''}"
-            f"{chr(10).join(param_lines)}\n\n"
             f"{pre_auth}"
+            f"{chr(10).join(param_lines)}\n\n"
+            f"{auth_wait}"
             f"# 自动调用\nrun({args_str})"
         )
 
@@ -795,8 +799,12 @@ class SkillRouter:
         return True
 
     @staticmethod
-    def _build_pre_auth_script(skill: SkillRouterInfo) -> str:
-        """Build an optional auth check that runs after parameter collection."""
+    def _build_pre_auth_script(
+        skill: SkillRouterInfo,
+        *,
+        wait_for_manual: bool,
+    ) -> str:
+        """Build auth preparation or the final manual-login wait."""
         marker = " ".join(
             [
                 skill.id,
@@ -806,22 +814,26 @@ class SkillRouter:
         ).lower()
 
         domain = ""
+        sign_url = ""
         if "xiaohongshu" in marker or "xhs" in marker:
             domain = "xiaohongshu"
+            sign_url = "https://www.xiaohongshu.com/login"
         elif "zhihu" in marker or "zhuanlan.zhihu" in marker:
             domain = "zhihu"
+            sign_url = "https://www.zhihu.com/signin"
 
         if not domain:
             return ""
 
         return (
-            "\n\n# 参数确认完成后再处理登录\n"
-            "__agentic_sign_url = None\n"
+            "\n\n# Two-stage authentication\n"
+            f"__agentic_sign_url = {json.dumps(sign_url, ensure_ascii=False)}\n"
             "try:\n"
             "    __agentic_sign_url = SIGN_URL\n"
             "except Exception:\n"
             "    pass\n"
-            f"ensure_auth({json.dumps(domain, ensure_ascii=False)}, __agentic_sign_url)\n"
+            f"ensure_auth({json.dumps(domain, ensure_ascii=False)}, "
+            f"__agentic_sign_url, {wait_for_manual!r})\n"
         )
 
     def _extract_params_with_llm(

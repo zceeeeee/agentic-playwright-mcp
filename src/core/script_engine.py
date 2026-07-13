@@ -390,6 +390,7 @@ class ScriptEngine:
             panel_manager_getter=lambda: _pm,
             enabled=not GenericLoginGuard.script_has_explicit_login_flow(script_code),
         )
+        auth_decisions: dict[str, str] = {}
 
         def _guarded_browser_action(action_name: str, func: Callable) -> Callable:
             @wraps(func)
@@ -420,8 +421,12 @@ class ScriptEngine:
                     return True
                 page.wait_for_timeout(1000)
 
-        def ensure_auth(domain: str, target_url: str | None = None) -> bool:
-            """Load saved auth when requested, otherwise wait for manual login."""
+        def ensure_auth(
+            domain: str,
+            target_url: str | None = None,
+            wait_for_manual: bool = True,
+        ) -> bool:
+            """Prepare auth once, and defer manual-login waiting when requested."""
             domain = str(domain or "").strip().lower()
             target_url = str(target_url or "").strip() or None
             if not domain:
@@ -433,27 +438,40 @@ class ScriptEngine:
             am = get_auth_manager()
 
             bm = self._get_browser_manager()
-            if bm.current_domain == domain and _storage_state_logged_in(domain):
+            if _storage_state_logged_in(domain):
+                auth_decisions[domain] = "logged_in"
                 log(f"{domain} login already loaded")
                 return True
 
-            if am.has_auth(domain):
+            decision = auth_decisions.get(domain)
+            if decision == "manual":
+                if wait_for_manual:
+                    return _wait_for_manual_login(domain, target_url)
+                return False
+
+            if decision is None and am.has_auth(domain):
                 answer = panel_prompt(
                     f"Load saved login for {domain} before continuing? [yes] [no]"
                 )
                 if str(answer or "").strip().lower() in {"yes", "y", "1", "true", "\u662f"}:
                     bm.apply_auth_to_current_context(domain=domain)
                     if _storage_state_logged_in(domain):
+                        auth_decisions[domain] = "loaded"
                         log(f"Loaded saved login for {domain}")
                         return True
                     log(
                         f"Saved login for {domain} was loaded but login state was not confirmed"
                     )
+                    auth_decisions[domain] = "manual"
                 else:
+                    auth_decisions[domain] = "manual"
                     log(f"User skipped saved login for {domain}")
-            else:
+            elif decision is None:
+                auth_decisions[domain] = "manual"
                 log(f"No saved login info for {domain}")
 
+            if not wait_for_manual:
+                return False
             return _wait_for_manual_login(domain, target_url)
 
         ns["panel_log"] = panel_log
