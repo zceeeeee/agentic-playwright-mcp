@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
+  ArrowRight,
   Bot,
-  BrainCircuit,
-  FileClock,
+  Eye,
+  EyeOff,
+  GitFork,
   History,
   Info,
   KeyRound,
@@ -11,8 +13,8 @@ import {
   MessageSquare,
   MonitorCog,
   Palette,
-  RefreshCw,
   Save,
+  Search,
   ScrollText,
   Trash2
 } from "lucide-react";
@@ -22,13 +24,13 @@ import type { DesktopSettings } from "../types";
 import { ChatPanel } from "../components/ChatPanel";
 import { AppearanceSettings } from "../components/AppearanceSettings";
 import type { DashboardSection } from "../types";
+import { filterAndGroupSkills, type SkillInfo } from "../utils/skillCatalog";
 
 const navigation: Array<{ id: DashboardSection; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "聊天", icon: MessageSquare },
   { id: "history", label: "历史任务", icon: History },
   { id: "appearance", label: "外观与皮肤", icon: Palette },
-  { id: "api", label: "API 配置", icon: KeyRound },
-  { id: "models", label: "模型配置", icon: BrainCircuit },
+  { id: "api", label: "API 与模型", icon: KeyRound },
   { id: "skills", label: "技能管理", icon: ListTree },
   { id: "browser", label: "浏览器设置", icon: MonitorCog },
   { id: "permissions", label: "权限设置", icon: LockKeyhole },
@@ -36,23 +38,18 @@ const navigation: Array<{ id: DashboardSection; label: string; icon: typeof Bot 
   { id: "about", label: "关于产品", icon: Info }
 ];
 
-interface SkillInfo {
-  id: string;
-  name: string;
-  type: string;
-  description: string;
-  version: string;
-}
-
 export function DashboardPage() {
   const requestedSection = new URLSearchParams(window.location.search).get("section");
-  const initialSection = navigation.some((item) => item.id === requestedSection)
-    ? requestedSection as DashboardSection
+  const normalizedRequestedSection = requestedSection === "models" ? "api" : requestedSection;
+  const initialSection = navigation.some((item) => item.id === normalizedRequestedSection)
+    ? normalizedRequestedSection as DashboardSection
     : "chat";
   const [section, setSection] = useState<DashboardSection>(initialSection);
   const state = useAgentStore();
 
-  useEffect(() => window.desktopAgent.onDashboardNavigate(setSection), []);
+  useEffect(() => window.desktopAgent.onDashboardNavigate((nextSection) => {
+    setSection(nextSection === "models" ? "api" : nextSection);
+  }), []);
 
   return (
     <main className="dashboard-shell">
@@ -74,10 +71,13 @@ export function DashboardPage() {
       </aside>
       <section className="dashboard-content">
         {section === "chat" ? <ChatPanel dashboard /> : null}
-        {section === "history" ? <HistoryView /> : null}
+        {section === "history" ? <HistoryView onOpenConversation={() => setSection("chat")} /> : null}
         {section === "appearance" ? <AppearanceSettings /> : null}
-        {section === "api" || section === "models" || section === "browser" ? <SettingsView initialSection={section} /> : null}
-        {section === "skills" ? <SkillsView /> : null}
+        {section === "api" || section === "browser" ? <SettingsView initialSection={section} /> : null}
+        {section === "skills" ? <SkillsView onImportCommand={(command) => {
+          state.setChatDraft(command);
+          setSection("chat");
+        }} /> : null}
         {section === "permissions" ? <PermissionsView /> : null}
         {section === "logs" ? <LogsView /> : null}
         {section === "about" ? <AboutView /> : null}
@@ -90,7 +90,7 @@ function PageHeading({ title, description }: { title: string; description: strin
   return <header className="page-heading"><h1>{title}</h1><p>{description}</p></header>;
 }
 
-function HistoryView() {
+function HistoryView({ onOpenConversation }: { onOpenConversation: () => void }) {
   const store = useAgentStore();
   const [tasks, setTasks] = useState<Array<Record<string, string>>>([]);
   useEffect(() => { void apiRequest<Array<Record<string, string>>>("/api/tasks").then(setTasks); }, []);
@@ -106,22 +106,38 @@ function HistoryView() {
       <div className="task-table" role="table">
         <div className="task-table-head" role="row"><span>任务</span><span>状态</span><span>开始时间</span><span>结束时间</span></div>
         {tasks.map((task) => (
-          <div className="task-table-row" role="row" key={task.id}>
+          <button
+            className={`task-table-row ${task.conversation_id === store.currentConversationId ? "active" : ""}`}
+            role="row"
+            aria-label={`打开任务 ${task.id}`}
+            key={task.id}
+            onClick={() => void store.openConversation(task.conversation_id).then((opened) => {
+              if (opened) onOpenConversation();
+            })}
+          >
             <span>{task.id}</span><span className={`status-text status-${task.status}`}>{task.status}</span>
             <span>{formatDate(task.started_at || task.created_at)}</span><span>{formatDate(task.finished_at)}</span>
-          </div>
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-function SettingsView({ initialSection }: { initialSection: "api" | "models" | "browser" }) {
+function SettingsView({ initialSection }: { initialSection: "api" | "browser" }) {
   const reconnect = useAgentStore((state) => state.reconnect);
   const [settings, setSettings] = useState<DesktopSettings>({
-    provider: "openai", baseUrl: "", model: "", temperature: 0.2, requestTimeout: 60, browserHeadless: false
+    provider: "openai",
+    baseUrl: "",
+    model: "",
+    temperature: 0.2,
+    requestTimeout: 60,
+    browserHeadless: false,
+    maxSteps: 20,
+    useCloakBrowser: true
   });
   const [saved, setSaved] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
   useEffect(() => { void desktopSettings.get().then(setSettings); }, []);
 
   async function save() {
@@ -132,27 +148,31 @@ function SettingsView({ initialSection }: { initialSection: "api" | "models" | "
     await reconnect();
   }
 
-  const title = initialSection === "api" ? "API 配置" : initialSection === "models" ? "模型配置" : "浏览器设置";
+  const title = initialSection === "api" ? "API 与模型配置" : "浏览器设置";
   return (
     <div className="page-view settings-view">
       <PageHeading title={title} description="配置保存在系统加密存储中，保存后 Agent 会自动重启。" />
       {initialSection === "api" ? (
         <div className="settings-form">
-          <label>API Provider<select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value })}><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></label>
-          <label>API Key<input type="password" value={settings.apiKey || ""} placeholder={settings.apiKeyMasked || "输入 API Key"} onChange={(event) => setSettings({ ...settings, apiKey: event.target.value })} /></label>
-          <label>Base URL<input value={settings.baseUrl} onChange={(event) => setSettings({ ...settings, baseUrl: event.target.value })} /></label>
-        </div>
-      ) : null}
-      {initialSection === "models" ? (
-        <div className="settings-form">
-          <label>Model<input value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} /></label>
-          <label>Temperature<div className="range-row"><input type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} /><output>{settings.temperature.toFixed(1)}</output></div></label>
-          <label>Request Timeout（秒）<input type="number" min="5" max="600" value={settings.requestTimeout} onChange={(event) => setSettings({ ...settings, requestTimeout: Number(event.target.value) })} /></label>
+          <section className="settings-section">
+            <h2>服务连接</h2>
+            <label>API Provider<select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value })}><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></label>
+            <label>API Key<span className="password-input-row"><input type={showApiKey ? "text" : "password"} value={settings.apiKey || ""} placeholder={settings.apiKeyMasked || "输入 API Key"} onChange={(event) => setSettings({ ...settings, apiKey: event.target.value })} /><button type="button" title={showApiKey ? "隐藏 API Key" : "显示 API Key"} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"} onClick={() => setShowApiKey((visible) => !visible)}>{showApiKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
+            <label>Base URL<input value={settings.baseUrl} onChange={(event) => setSettings({ ...settings, baseUrl: event.target.value })} /></label>
+          </section>
+          <section className="settings-section">
+            <h2>模型参数</h2>
+            <label>Model<input value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} /></label>
+            <label>Temperature<div className="range-row"><input type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} /><output>{settings.temperature.toFixed(1)}</output></div></label>
+            <label>Request Timeout（秒）<input type="number" min="5" max="600" value={settings.requestTimeout} onChange={(event) => setSettings({ ...settings, requestTimeout: Number(event.target.value) })} /></label>
+          </section>
         </div>
       ) : null}
       {initialSection === "browser" ? (
         <div className="settings-form">
           <label className="toggle-row"><span><strong>无头模式</strong><small>后台运行浏览器，不显示窗口</small></span><input type="checkbox" checked={settings.browserHeadless} onChange={(event) => setSettings({ ...settings, browserHeadless: event.target.checked })} /></label>
+          <label className="toggle-row"><span><strong>启用 CloakBrowser</strong><small>使用带反检测能力的浏览器引擎；关闭后使用 Chromium。</small></span><input type="checkbox" checked={settings.useCloakBrowser} onChange={(event) => setSettings({ ...settings, useCloakBrowser: event.target.checked })} /></label>
+          <label>最大循环步数<input type="number" min="5" max="100" step="1" value={settings.maxSteps} onChange={(event) => setSettings({ ...settings, maxSteps: Number(event.target.value) })} /><small className="field-help">单个任务最多执行 5–100 步，默认 20 步。</small></label>
           <button className="button-secondary" onClick={() => void apiRequest("/api/browser/close", { method: "POST" })}>关闭当前浏览器</button>
         </div>
       ) : null}
@@ -161,14 +181,31 @@ function SettingsView({ initialSection }: { initialSection: "api" | "models" | "
   );
 }
 
-function SkillsView() {
+function SkillsView({ onImportCommand }: { onImportCommand: (command: string) => void }) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [query, setQuery] = useState("");
   useEffect(() => { void apiRequest<SkillInfo[]>("/api/skills").then(setSkills); }, []);
+  const groups = filterAndGroupSkills(skills, query);
+  const visibleCount = groups.reduce((total, group) => total + group.skills.length, 0);
   return (
-    <div className="page-view">
-      <PageHeading title="技能管理" description={`当前已载入 ${skills.length} 个技能。`} />
-      <div className="skill-list">
-        {skills.map((skill) => <div className="skill-row" key={skill.id}><div><strong>{skill.name}</strong><span>{skill.description || skill.id}</span></div><code>{skill.version}</code></div>)}
+    <div className="page-view skills-view">
+      <PageHeading title="技能管理" description={`按网站归类，技能数量较多的网站排在前面。当前显示 ${visibleCount}/${skills.length} 个技能。`} />
+      <label className="skill-search"><Search size={17} /><input type="search" value={query} placeholder="搜索网站、技能或命令格式" onChange={(event) => setQuery(event.target.value)} /></label>
+      <div className="skill-site-list">
+        {groups.map((group) => (
+          <section className="skill-site-group" key={group.id}>
+            <header><h2>{group.label}</h2><span>{group.skills.length} 个技能</span></header>
+            <div className="skill-list">
+              {group.skills.map((skill) => (
+                <button className="skill-row" key={skill.id} onClick={() => onImportCommand(skill.command_template)}>
+                  <span className="skill-row-copy"><strong>{skill.name}</strong><span>{skill.description || skill.id}</span><code>{skill.command_template}</code></span>
+                  <span className="skill-import-action">导入聊天<ArrowRight size={15} /></span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+        {!groups.length ? <p className="empty-skill-search">没有匹配的技能。</p> : null}
       </div>
     </div>
   );
@@ -199,10 +236,12 @@ function LogsView() {
 }
 
 function AboutView() {
+  const repositoryUrl = "https://github.com/feitianduowen/agentic-playwright-mcp";
   return (
     <div className="page-view about-view">
-      <PageHeading title="关于产品" description="Agentic Playwright MCP 桌面智能体" />
-      <dl><dt>桌面端版本</dt><dd>0.1.0</dd><dt>后端</dt><dd>Python · FastAPI · Playwright</dd><dt>数据存储</dt><dd>本机 SQLite</dd><dt>浏览器界面</dt><dd>仅显示目标网页，不注入 Agent UI</dd></dl>
+      <PageHeading title="关于产品" description="Agentic Playwright MCP 是一个面向浏览器与桌面应用的自然语言自动化智能体。" />
+      <p className="about-description">项目把技能路由、Playwright 自动化、视觉探索和桌面宠物交互整合在同一套工作流中，并将会话、任务与外观设置保存在本机。</p>
+      <dl><dt>桌面端版本</dt><dd>0.1.0</dd><dt>后端</dt><dd>Python · FastAPI · Playwright</dd><dt>数据存储</dt><dd>本机 SQLite</dd><dt>浏览器界面</dt><dd>仅显示目标网页，不注入 Agent UI</dd><dt>GitHub 仓库</dt><dd><button className="external-link" onClick={() => void window.desktopAgent.openExternal(repositoryUrl)}><GitFork size={16} />feitianduowen/agentic-playwright-mcp</button></dd></dl>
     </div>
   );
 }

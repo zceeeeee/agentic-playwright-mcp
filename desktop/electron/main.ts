@@ -6,6 +6,7 @@ import {
   nativeImage,
   safeStorage,
   screen,
+  shell,
   Tray
 } from "electron";
 import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
@@ -33,6 +34,7 @@ import {
   type WindowSize
 } from "./windowGeometry.js";
 import { applyAlwaysOnTopToWindow } from "./windowBehavior.js";
+import { forwardUtf8Logs, withUtf8PythonEnvironment } from "./backendLogging.js";
 
 const COMPACT_SIZE = 80;
 
@@ -50,6 +52,7 @@ let quitting = false;
 let appearancePreferences: AppearancePreferences = getDefaultAppearancePreferences();
 let correctingExpandedPosition = false;
 let expandedMoveSettleTimer: NodeJS.Timeout | null = null;
+let activeConversationId: string | null = null;
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
@@ -276,6 +279,7 @@ function normalizeDashboardSection(value: unknown): string | undefined {
     "chat", "history", "appearance", "api", "models", "skills",
     "browser", "permissions", "logs", "about"
   ]);
+  if (value === "models") return "api";
   return typeof value === "string" && allowed.has(value) ? value : undefined;
 }
 
@@ -322,6 +326,26 @@ function broadcastAppearanceChanged(preferences: AppearancePreferences): void {
       win.webContents.send("appearance:changed", preferences);
     }
   }
+}
+
+function broadcastActiveConversation(conversationId: string): void {
+  for (const win of [petWindow, dashboardWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("conversation:changed", conversationId);
+    }
+  }
+}
+
+function setActiveConversation(conversationId: unknown): string {
+  if (typeof conversationId !== "string" || !conversationId.trim()) {
+    throw new TypeError("Conversation id is required");
+  }
+  const normalized = conversationId.trim();
+  if (activeConversationId !== normalized) {
+    activeConversationId = normalized;
+    broadcastActiveConversation(normalized);
+  }
+  return normalized;
 }
 
 function updateAppearancePreferences(
@@ -379,12 +403,14 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     }
   }
   const provider = stored.provider || "openai";
-  const env: NodeJS.ProcessEnv = {
+  const env = withUtf8PythonEnvironment({
     ...process.env,
     DESKTOP_AGENT_TOKEN: backendToken,
     LLM_PROVIDER: provider,
-    BROWSER_HEADLESS: stored.browserHeadless || "false"
-  };
+    BROWSER_HEADLESS: stored.browserHeadless || "false",
+    DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",
+    USE_CLOAKBROWSER: stored.useCloakBrowser || "true"
+  });
   if (provider === "anthropic") {
     env.ANTHROPIC_API_KEY = apiKey || process.env.ANTHROPIC_API_KEY;
     env.ANTHROPIC_BASE_URL = stored.baseUrl || process.env.ANTHROPIC_BASE_URL;
@@ -420,8 +446,8 @@ async function startBackend(): Promise<void> {
     ["-m", "src.desktop.api", "--host", "127.0.0.1", "--port", String(backendPort)],
     { cwd: projectRoot, env: settingsForBackend(), windowsHide: true }
   );
-  backend.stdout.on("data", (chunk) => broadcastLog(String(chunk).trim()));
-  backend.stderr.on("data", (chunk) => broadcastLog(String(chunk).trim()));
+  forwardUtf8Logs(backend.stdout, broadcastLog);
+  forwardUtf8Logs(backend.stderr, broadcastLog);
   backend.on("exit", (code) => {
     broadcastLog(`Agent backend stopped (${code ?? "unknown"})`);
     backend = null;
@@ -551,8 +577,13 @@ function registerIpc(): void {
   });
   ipcMain.handle("backend:config", () => ({ port: backendPort, token: backendToken }));
   ipcMain.handle("backend:restart", () => restartBackend());
+  ipcMain.handle("conversation:get-active", () => activeConversationId);
+  ipcMain.handle("conversation:set-active", (_event, conversationId: unknown) =>
+    setActiveConversation(conversationId)
+  );
   ipcMain.handle("settings:get", () => {
     const settings = readJson<Record<string, string>>(userFile("settings.json"), {});
+    const maxSteps = Math.min(100, Math.max(5, Math.round(Number(settings.maxSteps || "20")) || 20));
     return {
       provider: settings.provider || "openai",
       baseUrl: settings.baseUrl || "https://api.openai.com/v1",
@@ -560,6 +591,8 @@ function registerIpc(): void {
       temperature: Number(settings.temperature || "0.2"),
       requestTimeout: Number(settings.requestTimeout || "60"),
       browserHeadless: settings.browserHeadless === "true",
+      maxSteps,
+      useCloakBrowser: settings.useCloakBrowser !== "false",
       apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : ""
     };
   });
@@ -576,6 +609,10 @@ function registerIpc(): void {
     existing.temperature = String(incoming.temperature ?? 0.2);
     existing.requestTimeout = String(incoming.requestTimeout ?? 60);
     existing.browserHeadless = String(Boolean(incoming.browserHeadless));
+    existing.maxSteps = String(
+      Math.min(100, Math.max(5, Math.round(Number(incoming.maxSteps ?? 20)) || 20))
+    );
+    existing.useCloakBrowser = String(incoming.useCloakBrowser !== false);
     writeJson(userFile("settings.json"), existing);
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };
@@ -590,6 +627,12 @@ function registerIpc(): void {
     deletePaletteHistory(historyId)
   );
   ipcMain.handle("appearance:clear-palette-history", () => clearPaletteHistory());
+  ipcMain.handle("app:open-external", async (_event, url: unknown) => {
+    if (typeof url !== "string" || !/^https:\/\//i.test(url)) {
+      throw new TypeError("Only HTTPS links can be opened externally");
+    }
+    await shell.openExternal(url);
+  });
   ipcMain.handle("app:quit", () => {
     quitting = true;
     app.quit();

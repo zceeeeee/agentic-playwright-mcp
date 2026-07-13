@@ -76,6 +76,7 @@ export interface ConfirmationRequest {
   skill_name?: string;
   parameter_name?: string;
   current_value?: string | null;
+  default_value?: string | null;
   input_label?: string;
   input_required?: boolean;
   input_placeholder?: string;
@@ -120,6 +121,8 @@ export interface DesktopSettings {
   temperature: number;
   requestTimeout: number;
   browserHeadless: boolean;
+  maxSteps: number;
+  useCloakBrowser: boolean;
 }
 
 export interface DesktopBridge {
@@ -138,6 +141,8 @@ export interface DesktopBridge {
   showPetMenu(): Promise<void>;
   restartBackend(): Promise<void>;
   getBackendConfig(): Promise<{ port: number; token: string }>;
+  getActiveConversation(): Promise<string | null>;
+  setActiveConversation(conversationId: string): Promise<string>;
   getSettings(): Promise<DesktopSettings>;
   saveSettings(settings: DesktopSettings): Promise<{ ok: boolean; apiKeyMasked: string }>;
   getAppearancePreferences(): Promise<AppearancePreferences>;
@@ -148,10 +153,12 @@ export interface DesktopBridge {
   setSkin(skinId: PetSkinId): Promise<AppearancePreferences>;
   deletePaletteHistory(historyId: string): Promise<AppearancePreferences>;
   clearPaletteHistory(): Promise<AppearancePreferences>;
+  openExternal(url: string): Promise<void>;
   quitApp(): Promise<void>;
   onBackendLog(callback: (message: string) => void): () => void;
   onExpandedChange(callback: (expanded: boolean) => void): () => void;
   onBackendRestarted(callback: () => void): () => void;
+  onActiveConversationChange(callback: (conversationId: string) => void): () => void;
   onAppearanceChanged(callback: (preferences: AppearancePreferences) => void): () => void;
   onDashboardNavigate(callback: (section: DashboardSection) => void): () => void;
 }

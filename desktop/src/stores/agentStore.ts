@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiRequest, eventSocket, refreshBackendConfig } from "../services/api";
+import { apiRequest, eventSocket, refreshBackendConfig } from "../services/api.js";
 import type {
   AgentVisualState,
   BackendEvent,
@@ -7,12 +7,15 @@ import type {
   ConfirmationRequest,
   Conversation,
   RuntimeInfo
-} from "../types";
+} from "../types.js";
 
 interface AgentStore {
   visualState: AgentVisualState;
   currentConversationId: string | null;
+  conversationBusyId: string | null;
+  conversationError: string | null;
   currentTaskId: string | null;
+  chatDraft: string;
   conversations: Conversation[];
   messages: ChatMessage[];
   confirmations: ConfirmationRequest[];
@@ -22,15 +25,17 @@ interface AgentStore {
   logs: string[];
   initialize(): Promise<void>;
   reconnect(): Promise<void>;
-  openConversation(id: string): Promise<void>;
+  openConversation(id: string): Promise<boolean>;
+  syncConversation(id: string): Promise<void>;
   createConversation(): Promise<void>;
-  renameConversation(id: string, title: string): Promise<void>;
-  deleteConversation(id: string): Promise<void>;
+  renameConversation(id: string, title: string): Promise<boolean>;
+  deleteConversation(id: string): Promise<boolean>;
   clearHistory(): Promise<void>;
+  setChatDraft(content: string): void;
   sendMessage(content: string): Promise<void>;
   approveConfirmation(id: string, value?: string, actionId?: string, comment?: string): Promise<void>;
   rejectConfirmation(id: string, comment?: string): Promise<void>;
-  cancelCurrentTask(): Promise<void>;
+  cancelCurrentTask(taskId?: string): Promise<void>;
   clearError(): void;
   handleBackendEvent(event: BackendEvent): void;
   addLog(message: string): void;
@@ -38,7 +43,49 @@ interface AgentStore {
 
 let socket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
+let conversationSyncTimer: number | null = null;
+let pendingConversationId: string | null = null;
 const seenEvents = new Set<string>();
+const activeTaskStatuses = new Set(["queued", "running", "waiting_confirmation"]);
+
+interface TaskSummary {
+  id: string;
+  conversation_id: string;
+  status: string;
+}
+
+function activeTaskFrom(tasks: TaskSummary[]): TaskSummary | null {
+  return tasks.find((task) => activeTaskStatuses.has(task.status)) || null;
+}
+
+function visualStateFor(task: TaskSummary | null): AgentVisualState {
+  if (task?.status === "waiting_confirmation") return "waiting_confirmation";
+  return task ? "running" : "idle";
+}
+
+async function loadConversationSnapshot(conversationId: string) {
+  const [messages, tasks] = await Promise.all([
+    apiRequest<ChatMessage[]>(`/api/conversations/${conversationId}/messages`),
+    apiRequest<TaskSummary[]>(`/api/tasks?conversation_id=${encodeURIComponent(conversationId)}`)
+  ]);
+  const activeTask = activeTaskFrom(tasks);
+  return { messages, activeTask, visualState: visualStateFor(activeTask) };
+}
+
+async function stopConversationResources(conversationId: string): Promise<void> {
+  const tasks = await apiRequest<TaskSummary[]>(
+    `/api/tasks?conversation_id=${encodeURIComponent(conversationId)}`
+  );
+  const activeTasks = tasks.filter((task) => activeTaskStatuses.has(task.status));
+  await Promise.all(activeTasks.map(async (task) => {
+    try {
+      await apiRequest(`/api/tasks/${task.id}/cancel`, { method: "POST" });
+    } catch {
+      // A task may finish between listing and cancellation.
+    }
+  }));
+  await apiRequest("/api/browser/close", { method: "POST" });
+}
 
 function dedupe(messages: ChatMessage[]): ChatMessage[] {
   const map = new Map<string, ChatMessage>();
@@ -71,7 +118,10 @@ async function connectEvents(handle: (event: BackendEvent) => void, setConnected
 export const useAgentStore = create<AgentStore>((set, get) => ({
   visualState: "idle",
   currentConversationId: null,
+  conversationBusyId: null,
+  conversationError: null,
   currentTaskId: null,
+  chatDraft: "",
   conversations: [],
   messages: [],
   confirmations: [],
@@ -99,12 +149,24 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       });
       conversations = [created];
     }
-    const currentConversationId = conversations[0].id;
-    const [messages, runtime] = await Promise.all([
-      apiRequest<ChatMessage[]>(`/api/conversations/${currentConversationId}/messages`),
+    const sharedConversationId = await window.desktopAgent.getActiveConversation();
+    const currentConversationId = conversations.some((item) => item.id === sharedConversationId)
+      ? sharedConversationId!
+      : conversations[0].id;
+    const [snapshot, runtime] = await Promise.all([
+      loadConversationSnapshot(currentConversationId),
       apiRequest<RuntimeInfo>("/api/runtime")
     ]);
-    set({ conversations, currentConversationId, messages, runtime, initialized: true });
+    set({
+      conversations,
+      currentConversationId,
+      messages: snapshot.messages,
+      currentTaskId: snapshot.activeTask?.id || null,
+      visualState: snapshot.visualState,
+      runtime,
+      initialized: true
+    });
+    await window.desktopAgent.setActiveConversation(currentConversationId);
     await connectEvents(get().handleBackendEvent, (backendConnected) => set({ backendConnected }));
   },
 
@@ -119,48 +181,188 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   openConversation: async (id) => {
-    const messages = await apiRequest<ChatMessage[]>(`/api/conversations/${id}/messages`);
-    set({ currentConversationId: id, messages, confirmations: [] });
+    if (get().conversationBusyId) return false;
+    if (get().currentConversationId === id) return true;
+    set({ conversationBusyId: id, conversationError: null });
+    try {
+      const previousId = get().currentConversationId;
+      if (previousId) await stopConversationResources(previousId);
+      const snapshot = await loadConversationSnapshot(id);
+      set({
+        currentConversationId: id,
+        messages: snapshot.messages,
+        currentTaskId: snapshot.activeTask?.id || null,
+        visualState: snapshot.visualState,
+        confirmations: []
+      });
+      await window.desktopAgent.setActiveConversation(id);
+      return true;
+    } catch (error) {
+      set({ conversationError: error instanceof Error ? error.message : "无法打开历史会话" });
+      return false;
+    } finally {
+      set((state) => ({ conversationBusyId: state.conversationBusyId === id ? null : state.conversationBusyId }));
+    }
+  },
+
+  syncConversation: async (id) => {
+    if (!id || get().currentConversationId === id) return;
+    if (!get().initialized || get().conversationBusyId) {
+      pendingConversationId = id;
+      if (conversationSyncTimer !== null) window.clearTimeout(conversationSyncTimer);
+      conversationSyncTimer = window.setTimeout(() => {
+        conversationSyncTimer = null;
+        const pendingId = pendingConversationId;
+        pendingConversationId = null;
+        if (pendingId) void get().syncConversation(pendingId);
+      }, 120);
+      return;
+    }
+    set({ conversationBusyId: id, conversationError: null });
+    try {
+      const [conversations, snapshot] = await Promise.all([
+        apiRequest<Conversation[]>("/api/conversations"),
+        loadConversationSnapshot(id)
+      ]);
+      if (!conversations.some((item) => item.id === id)) return;
+      set({
+        conversations,
+        currentConversationId: id,
+        messages: snapshot.messages,
+        currentTaskId: snapshot.activeTask?.id || null,
+        visualState: snapshot.visualState,
+        confirmations: []
+      });
+    } catch (error) {
+      set({ conversationError: error instanceof Error ? error.message : "无法同步当前会话" });
+    } finally {
+      set((state) => ({ conversationBusyId: state.conversationBusyId === id ? null : state.conversationBusyId }));
+    }
   },
 
   createConversation: async () => {
-    const conversation = await apiRequest<Conversation>("/api/conversations", {
-      method: "POST",
-      body: JSON.stringify({ title: "新会话" })
-    });
-    set((state) => ({
-      conversations: [conversation, ...state.conversations],
-      currentConversationId: conversation.id,
-      messages: [],
-      confirmations: []
-    }));
+    if (get().conversationBusyId) return;
+    set({ conversationBusyId: "new", conversationError: null });
+    try {
+      const previousId = get().currentConversationId;
+      if (previousId) await stopConversationResources(previousId);
+      const conversation = await apiRequest<Conversation>("/api/conversations", {
+        method: "POST",
+        body: JSON.stringify({ title: "新会话" })
+      });
+      set((state) => ({
+        conversations: [conversation, ...state.conversations],
+        currentConversationId: conversation.id,
+        currentTaskId: null,
+        visualState: "idle",
+        messages: [],
+        confirmations: []
+      }));
+      await window.desktopAgent.setActiveConversation(conversation.id);
+    } catch (error) {
+      set({ conversationError: error instanceof Error ? error.message : "新建会话失败" });
+    } finally {
+      set({ conversationBusyId: null });
+    }
   },
 
   renameConversation: async (id, title) => {
-    await apiRequest(`/api/conversations/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ title })
-    });
-    set((state) => ({
-      conversations: state.conversations.map((item) => item.id === id ? { ...item, title } : item)
-    }));
+    if (get().conversationBusyId) return false;
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) return false;
+    set({ conversationBusyId: id, conversationError: null });
+    try {
+      await apiRequest(`/api/conversations/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title: normalizedTitle })
+      });
+      set((state) => ({
+        conversations: state.conversations.map((item) => item.id === id ? { ...item, title: normalizedTitle } : item)
+      }));
+      return true;
+    } catch (error) {
+      set({ conversationError: error instanceof Error ? error.message : "会话名称保存失败" });
+      return false;
+    } finally {
+      set((state) => ({ conversationBusyId: state.conversationBusyId === id ? null : state.conversationBusyId }));
+    }
   },
 
   deleteConversation: async (id) => {
-    await apiRequest(`/api/conversations/${id}`, { method: "DELETE" });
-    const remaining = get().conversations.filter((item) => item.id !== id);
-    set({ conversations: remaining });
-    if (get().currentConversationId === id) {
-      if (remaining.length) await get().openConversation(remaining[0].id);
-      else await get().createConversation();
+    if (get().conversationBusyId) return false;
+    set({ conversationBusyId: id, conversationError: null });
+    try {
+      const state = get();
+      const remaining = state.conversations.filter((item) => item.id !== id);
+      if (state.currentConversationId !== id) {
+        await apiRequest(`/api/conversations/${id}`, { method: "DELETE" });
+        set({ conversations: remaining });
+        return true;
+      }
+
+      await stopConversationResources(id);
+      let nextConversation: Conversation;
+      let nextSnapshot = {
+        messages: [] as ChatMessage[],
+        activeTask: null as TaskSummary | null,
+        visualState: "idle" as AgentVisualState
+      };
+      if (remaining.length) {
+        nextConversation = remaining[0];
+        nextSnapshot = await loadConversationSnapshot(nextConversation.id);
+      } else {
+        nextConversation = await apiRequest<Conversation>("/api/conversations", {
+          method: "POST",
+          body: JSON.stringify({ title: "新会话" })
+        });
+      }
+      await apiRequest(`/api/conversations/${id}`, { method: "DELETE" });
+      set({
+        conversations: remaining.length ? remaining : [nextConversation],
+        currentConversationId: nextConversation.id,
+        currentTaskId: nextSnapshot.activeTask?.id || null,
+        visualState: nextSnapshot.visualState,
+        messages: nextSnapshot.messages,
+        confirmations: []
+      });
+      await window.desktopAgent.setActiveConversation(nextConversation.id);
+      return true;
+    } catch (error) {
+      set({ conversationError: error instanceof Error ? error.message : "会话删除失败" });
+      return false;
+    } finally {
+      set((state) => ({ conversationBusyId: state.conversationBusyId === id ? null : state.conversationBusyId }));
     }
   },
 
   clearHistory: async () => {
-    await apiRequest("/api/conversations", { method: "DELETE" });
-    set({ conversations: [], messages: [], currentConversationId: null });
-    await get().createConversation();
+    if (get().conversationBusyId) return;
+    set({ conversationBusyId: "all", conversationError: null });
+    try {
+      const previousId = get().currentConversationId;
+      if (previousId) await stopConversationResources(previousId);
+      await apiRequest("/api/conversations", { method: "DELETE" });
+      const conversation = await apiRequest<Conversation>("/api/conversations", {
+        method: "POST",
+        body: JSON.stringify({ title: "新会话" })
+      });
+      set({
+        conversations: [conversation],
+        messages: [],
+        currentConversationId: conversation.id,
+        currentTaskId: null,
+        visualState: "idle",
+        confirmations: []
+      });
+      await window.desktopAgent.setActiveConversation(conversation.id);
+    } catch (error) {
+      set({ conversationError: error instanceof Error ? error.message : "历史记录清空失败" });
+    } finally {
+      set({ conversationBusyId: null });
+    }
   },
+
+  setChatDraft: (chatDraft) => set({ chatDraft }),
 
   sendMessage: async (content) => {
     const trimmed = content.trim();
@@ -200,8 +402,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     });
   },
 
-  cancelCurrentTask: async () => {
-    const taskId = get().currentTaskId;
+  cancelCurrentTask: async (explicitTaskId) => {
+    const taskId = explicitTaskId || get().currentTaskId;
     if (!taskId) return;
     await apiRequest(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   },
@@ -210,12 +412,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   handleBackendEvent: (event) => {
     const state = get();
-    if (event.conversation_id && state.currentConversationId && event.conversation_id !== state.currentConversationId) {
-      if (event.type === "agent_state_changed" && event.payload.state === "waiting_confirmation") {
-        set({ visualState: "waiting_confirmation" });
-      }
-      return;
-    }
+    if (event.conversation_id && state.currentConversationId && event.conversation_id !== state.currentConversationId) return;
     if (event.type === "agent_state_changed") {
       set({ visualState: event.payload.state as AgentVisualState });
       return;
@@ -258,6 +455,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         skill_name: event.payload.skill_name,
         parameter_name: event.payload.parameter_name,
         current_value: event.payload.current_value,
+        default_value: event.payload.default_value,
         input_label: event.payload.input_label,
         input_required: event.payload.input_required,
         input_placeholder: event.payload.input_placeholder,

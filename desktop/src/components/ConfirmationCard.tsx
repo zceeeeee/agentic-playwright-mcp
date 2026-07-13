@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
-import { Check, ChevronRight, PencilLine, ShieldAlert, X } from "lucide-react";
+import { Check, ChevronRight, PencilLine, ShieldAlert, Square, X } from "lucide-react";
 import { useAgentStore } from "../stores/agentStore";
 import type { ConfirmationOption, ConfirmationRequest } from "../types";
+import { getEnterKeyAction } from "../utils/keyboard";
 
 export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationRequest }) {
   const approve = useAgentStore((state) => state.approveConfirmation);
   const reject = useAgentStore((state) => state.rejectConfirmation);
+  const cancelTask = useAgentStore((state) => state.cancelCurrentTask);
   const [inputValue, setInputValue] = useState("");
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [requiredCancelArmed, setRequiredCancelArmed] = useState(false);
   const pending = confirmation.status === "pending";
   const options = useMemo(
     () => confirmation.options || confirmation.actions?.filter((action) => action.id.startsWith("option_")) || [],
@@ -27,10 +30,45 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
 
   async function submitInput(actionId = "submit") {
     if (!pending || submitting) return;
-    if (confirmation.input_required && !inputValue.trim()) return;
+    if (confirmation.input_required && !inputValue.trim()) {
+      setRequiredCancelArmed(true);
+      return;
+    }
     setSubmitting(true);
     try {
       await approve(confirmation.confirmation_id, inputValue.trim(), actionId, comment);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function useDefaultOrCancelTask() {
+    if (!pending || submitting) return;
+    if (confirmation.input_required) {
+      if (!requiredCancelArmed) {
+        setRequiredCancelArmed(true);
+        return;
+      }
+      setSubmitting(true);
+      try {
+        await cancelTask(confirmation.task_id);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (confirmation.prompt_type === "confirm_value") {
+        await approve(confirmation.confirmation_id, "", "keep");
+      } else {
+        await approve(
+          confirmation.confirmation_id,
+          confirmation.default_value ?? confirmation.current_value ?? "",
+          "default"
+        );
+      }
     } finally {
       setSubmitting(false);
     }
@@ -96,11 +134,26 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
 
       {pending && (confirmation.prompt_type === "input" || confirmation.prompt_type === "confirm_value") ? (
         <div className="prompt-input">
-          <label htmlFor={`prompt-${confirmation.confirmation_id}`}>{confirmation.input_label || "输入内容"}{confirmation.input_required ? "（必填）" : "（可选）"}</label>
+          <label htmlFor={`prompt-${confirmation.confirmation_id}`}>
+            {confirmation.input_label || "输入内容"}
+            <span className={requiredCancelArmed ? "required-indicator required-alert" : "required-indicator"}>
+              {confirmation.input_required ? "（必填）" : "（可选）"}
+            </span>
+          </label>
           <textarea
             id={`prompt-${confirmation.confirmation_id}`}
             value={inputValue}
-            onChange={(event) => setInputValue(event.target.value)}
+            onChange={(event) => {
+              setInputValue(event.target.value);
+              if (event.target.value.trim()) setRequiredCancelArmed(false);
+            }}
+            onKeyDown={(event) => {
+              const action = getEnterKeyAction(event.key, event.ctrlKey, event.nativeEvent.isComposing);
+              if (action === "submit") {
+                event.preventDefault();
+                void submitInput(confirmation.prompt_type === "confirm_value" ? "replace" : "submit");
+              }
+            }}
             placeholder={confirmation.input_placeholder || "请输入内容"}
             disabled={submitting}
             rows={confirmation.parameter_name?.includes("内容") ? 5 : 2}
@@ -115,7 +168,19 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
             <button className="button-primary" disabled={submitting || !inputValue.trim()} onClick={() => void submitInput(confirmation.prompt_type === "confirm_value" ? "replace" : "submit")}>
               <PencilLine size={16} />{confirmation.prompt_type === "confirm_value" ? "使用新值" : "提交并继续"}
             </button>
-            <button className="icon-cancel" title="取消任务" disabled={submitting} onClick={() => void resolveGeneric(false)}><X size={16} /></button>
+            <button
+              className={`icon-cancel ${requiredCancelArmed ? "cancel-armed" : ""}`}
+              title={confirmation.input_required
+                ? requiredCancelArmed ? "再次点击停止任务" : "必填项：再次点击将停止任务"
+                : "使用默认值"}
+              aria-label={confirmation.input_required
+                ? requiredCancelArmed ? "再次点击停止任务" : "必填项"
+                : "使用默认值"}
+              disabled={submitting}
+              onClick={() => void useDefaultOrCancelTask()}
+            >
+              {requiredCancelArmed ? <Square size={14} fill="currentColor" /> : <X size={16} />}
+            </button>
           </div>
         </div>
       ) : null}

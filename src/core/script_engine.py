@@ -438,23 +438,14 @@ class ScriptEngine:
             am = get_auth_manager()
 
             bm = self._get_browser_manager()
-            if _storage_state_logged_in(domain):
-                auth_decisions[domain] = "logged_in"
-                log(f"{domain} login already loaded")
-                return True
-
             decision = auth_decisions.get(domain)
-            if decision == "manual":
-                if wait_for_manual:
-                    return _wait_for_manual_login(domain, target_url)
-                return False
-
             if decision is None and am.has_auth(domain):
                 answer = panel_prompt(
                     f"Load saved login for {domain} before continuing? [yes] [no]"
                 )
                 if str(answer or "").strip().lower() in {"yes", "y", "1", "true", "\u662f"}:
-                    bm.apply_auth_to_current_context(domain=domain)
+                    if not _storage_state_logged_in(domain):
+                        bm.apply_auth_to_current_context(domain=domain)
                     if _storage_state_logged_in(domain):
                         auth_decisions[domain] = "loaded"
                         log(f"Loaded saved login for {domain}")
@@ -465,10 +456,18 @@ class ScriptEngine:
                     auth_decisions[domain] = "manual"
                 else:
                     auth_decisions[domain] = "manual"
+                    bm.start_clean_context()
                     log(f"User skipped saved login for {domain}")
             elif decision is None:
+                if _storage_state_logged_in(domain):
+                    auth_decisions[domain] = "logged_in"
+                    log(f"{domain} login already loaded")
+                    return True
                 auth_decisions[domain] = "manual"
                 log(f"No saved login info for {domain}")
+            elif _storage_state_logged_in(domain):
+                log(f"{domain} manual login detected")
+                return True
 
             if not wait_for_manual:
                 return False

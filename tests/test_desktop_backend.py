@@ -109,6 +109,22 @@ def test_desktop_api_requires_token_and_manages_conversations(tmp_path) -> None:
         ).json() == []
 
 
+def test_desktop_skills_include_website_and_command_template(tmp_path) -> None:
+    app = create_app(token="test-token", database_path=tmp_path / "skills.db")
+    headers = {"Authorization": "Bearer test-token"}
+    with TestClient(app) as client:
+        response = client.get("/api/skills", headers=headers)
+
+    assert response.status_code == 200
+    skills = response.json()
+    assert skills
+    zhihu = next(item for item in skills if item["id"] == "domain/zhihu_search")
+    assert zhihu["platform"] == "zhihu"
+    assert zhihu["command_template"]
+    assert isinstance(zhihu["examples"], list)
+    assert isinstance(zhihu["params"], dict)
+
+
 def test_panel_manager_compatibility_layer_does_not_evaluate_page() -> None:
     from src.panel.panel_manager import PanelManager
 
@@ -151,6 +167,17 @@ def test_missing_and_existing_zhihu_values_get_different_controls() -> None:
     assert existing["prompt_type"] == "confirm_value"
     assert existing["current_value"] == "测试标题"
     assert [action["id"] for action in existing["actions"]] == ["keep", "replace"]
+
+
+def test_optional_prompt_exposes_its_default_value() -> None:
+    prompt = parse_desktop_prompt(
+        "请输入备注：",
+        fields=[{"name": "note", "required": False, "default": "无需备注"}],
+    )
+
+    assert prompt["prompt_type"] == "input"
+    assert prompt["input_required"] is False
+    assert prompt["default_value"] == "无需备注"
 
 
 def test_confirmation_resolution_preserves_selected_option(tmp_path) -> None:

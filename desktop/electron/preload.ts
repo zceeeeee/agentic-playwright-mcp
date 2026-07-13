@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("desktopAgent", {
   showPetMenu: () => ipcRenderer.invoke("pet:show-menu"),
   restartBackend: () => ipcRenderer.invoke("backend:restart"),
   getBackendConfig: () => ipcRenderer.invoke("backend:config"),
+  getActiveConversation: () => ipcRenderer.invoke("conversation:get-active"),
+  setActiveConversation: (conversationId: string) => ipcRenderer.invoke("conversation:set-active", conversationId),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings: Record<string, unknown>) => ipcRenderer.invoke("settings:save", settings),
   getAppearancePreferences: () => ipcRenderer.invoke("appearance:get-preferences"),
@@ -34,6 +36,7 @@ contextBridge.exposeInMainWorld("desktopAgent", {
   deletePaletteHistory: (historyId: string) =>
     ipcRenderer.invoke("appearance:delete-palette-history", historyId),
   clearPaletteHistory: () => ipcRenderer.invoke("appearance:clear-palette-history"),
+  openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url),
   quitApp: () => ipcRenderer.invoke("app:quit"),
   onBackendLog: (callback: (message: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, message: string) => callback(message);
@@ -49,6 +52,11 @@ contextBridge.exposeInMainWorld("desktopAgent", {
     const listener = () => callback();
     ipcRenderer.on("backend:restarted", listener);
     return () => ipcRenderer.removeListener("backend:restarted", listener);
+  },
+  onActiveConversationChange: (callback: (conversationId: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, conversationId: string) => callback(conversationId);
+    ipcRenderer.on("conversation:changed", listener);
+    return () => ipcRenderer.removeListener("conversation:changed", listener);
   },
   onAppearanceChanged: (callback: (preferences: AppearancePreferences) => void) => {
     const listener = (

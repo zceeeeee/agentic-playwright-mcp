@@ -10,6 +10,7 @@ export default function App() {
   const view = new URLSearchParams(window.location.search).get("view") || "pet";
   const initialize = useAgentStore((state) => state.initialize);
   const reconnect = useAgentStore((state) => state.reconnect);
+  const syncConversation = useAgentStore((state) => state.syncConversation);
   const addLog = useAgentStore((state) => state.addLog);
   const initializeAppearance = useAppearanceStore((state) => state.initializeAppearance);
   const disposeAppearance = useAppearanceStore((state) => state.disposeAppearance);
@@ -24,13 +25,17 @@ export default function App() {
     const removeLog = window.desktopAgent.onBackendLog(addLog);
     const removeExpanded = window.desktopAgent.onExpandedChange(setExpanded);
     const removeRestarted = window.desktopAgent.onBackendRestarted(() => void reconnect());
+    const removeConversation = window.desktopAgent.onActiveConversationChange(
+      (conversationId) => void syncConversation(conversationId)
+    );
     if (view === "pet") void window.desktopAgent.isExpanded().then(setExpanded);
     return () => {
       removeLog();
       removeExpanded();
       removeRestarted();
+      removeConversation();
     };
-  }, [addLog, initialize, reconnect, view]);
+  }, [addLog, initialize, reconnect, syncConversation, view]);
 
   useEffect(() => {
     void initializeAppearance();

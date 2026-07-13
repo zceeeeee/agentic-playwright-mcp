@@ -18,6 +18,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import yaml
 
 from src.desktop.database import DesktopDatabase
 from src.desktop.events import DesktopEventHub
@@ -197,6 +198,30 @@ def create_app(
     @app.get("/api/skills", dependencies=[auth])
     def skills() -> list[dict[str, Any]]:
         registry = get_skill_registry()
+        catalog_path = Path(__file__).resolve().parents[1] / "skill_library" / "skills.yaml"
+        try:
+            catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            catalog = {}
+        metadata_by_id = {
+            str(item.get("id")): item
+            for item in catalog.get("skills", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+
+        def command_template(item: Any, metadata: dict[str, Any]) -> str:
+            examples = metadata.get("examples") or []
+            if examples and isinstance(examples[0], str):
+                return examples[0]
+            params = metadata.get("params") or {}
+            required = [
+                name
+                for name, value in params.items()
+                if isinstance(value, dict) and value.get("required") is True
+            ]
+            suffix = "，".join(f'{name}是“{{{{{name}}}}}”' for name in required)
+            return f"{item.name}，{suffix}" if suffix else item.name
+
         return [
             {
                 "id": item.id,
@@ -205,6 +230,14 @@ def create_app(
                 "description": item.description,
                 "triggers": item.triggers,
                 "version": item.version,
+                "platform": metadata_by_id.get(item.id, {}).get("platform")
+                or item.id.rsplit("/", 1)[-1].split("_", 1)[0].lower(),
+                "action": metadata_by_id.get(item.id, {}).get("action") or "other",
+                "examples": metadata_by_id.get(item.id, {}).get("examples") or [],
+                "params": metadata_by_id.get(item.id, {}).get("params") or {},
+                "command_template": command_template(
+                    item, metadata_by_id.get(item.id, {})
+                ),
             }
             for item in registry.list_all()
         ]

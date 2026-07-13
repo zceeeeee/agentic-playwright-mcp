@@ -433,6 +433,23 @@ class BrowserManager:
     # 域名认证持久化
     # ------------------------------------------------------------------
 
+    def start_clean_context(self) -> Page:
+        """Replace the active context with one that has no saved login state."""
+        if self._browser is None or not self.is_alive():
+            raise RuntimeError("浏览器尚未启动，无法创建干净上下文。")
+
+        old_context = self._context
+        self._context = self._browser.new_context()
+        self._page = self._context.new_page()
+        self._current_domain = None
+        if old_context is not None:
+            try:
+                old_context.close()
+            except Exception:
+                pass
+        logger.info("Started a clean browser context without saved auth")
+        return self._page
+
     def launch_with_domain(
         self,
         domain: str,

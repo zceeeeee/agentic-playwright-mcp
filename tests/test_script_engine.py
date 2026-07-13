@@ -358,6 +358,53 @@ class TestBrowserPrimitives:
         with pytest.raises(RuntimeError, match="Page closed while waiting"):
             guard.maybe_wait("after_goto")
 
+    def test_declining_saved_login_replaces_the_authenticated_context(self):
+        class FakeContext:
+            def __init__(self, logged_in: bool):
+                self.logged_in = logged_in
+
+            def storage_state(self):
+                cookies = (
+                    [{"name": "session", "value": "saved", "domain": "example.com"}]
+                    if self.logged_in
+                    else []
+                )
+                return {"cookies": cookies, "origins": []}
+
+        class FakeBrowserManager:
+            def __init__(self):
+                self._context = FakeContext(True)
+                self.page = MagicMock(url="about:blank")
+                self.cleaned = False
+
+            def get_page(self):
+                return self.page
+
+            def start_clean_context(self):
+                self.cleaned = True
+                self._context = FakeContext(False)
+                self.page = MagicMock(url="about:blank")
+                return self.page
+
+        bm = FakeBrowserManager()
+        panel = MagicMock()
+        panel.prompt.return_value = "no"
+        auth_manager = MagicMock()
+        auth_manager.has_auth.return_value = True
+
+        with (
+            patch("src.panel.get_panel_manager", return_value=panel),
+            patch("src.core.auth_manager.get_auth_manager", return_value=auth_manager),
+        ):
+            result = ScriptEngine(bm).execute(
+                "print(ensure_auth('example', wait_for_manual=False))"
+            )
+
+        assert result.success is True
+        assert result.output.strip().endswith("False")
+        assert bm.cleaned is True
+        assert bm._context.logged_in is False
+
 
 # ---------------------------------------------------------------------------
 # Custom function registration

@@ -91,6 +91,25 @@ class TestBrowserManagerPlaywright:
         with pytest.raises(RuntimeError, match="尚未启动"):
             bm.get_page()
 
+    def test_start_clean_context_discards_existing_login_state(self):
+        bm = BrowserManager()
+        old_context = MagicMock()
+        clean_context = MagicMock()
+        clean_page = MagicMock()
+        clean_context.new_page.return_value = clean_page
+        browser = MagicMock()
+        browser.is_connected.return_value = True
+        browser.new_context.return_value = clean_context
+        bm._browser = browser
+        bm._context = old_context
+        bm._current_domain = "zhihu"
+
+        assert bm.start_clean_context() is clean_page
+        browser.new_context.assert_called_once_with()
+        old_context.close.assert_called_once_with()
+        assert bm._context is clean_context
+        assert bm.current_domain is None
+
     @patch.dict("os.environ", {"USE_CLOAKBROWSER": "false"})
     @patch("src.core.browser_manager.sync_playwright")
     def test_close(self, mock_pw):

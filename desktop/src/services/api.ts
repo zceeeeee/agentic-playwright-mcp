@@ -1,4 +1,4 @@
-import type { DesktopSettings } from "../types";
+import type { DesktopSettings } from "../types.js";
 
 let backendConfig: { port: number; token: string } | null = null;
 
