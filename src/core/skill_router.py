@@ -1,11 +1,11 @@
 """
-技能路由器 —— 两阶段路由：关键词快筛 + LLM 精排。
+技能路由器 —— 召回+精排架构。
 
-Stage 1: 关键词快筛（零延迟，零成本）
-  从 SkillRegistry 中匹配触发词，返回 Top-K 候选。
+Stage 1: 候选召回（零延迟，零成本）
+  用关键词/正则从技能库中召回 top-K 候选（不硬排除任何技能）。
 
-Stage 2: LLM 精排（仅在歧义时调用）
-  将候选列表 + 用户指令发给 LLM，让它选出最佳 skill。
+Stage 2: LLM 精排（候选在模糊区时调用）
+  将候选列表 + 用户指令发给 LLM，让它选出最佳 skill 或判定需要 explore。
 
 Stage 3: 参数化脚本构建
   根据 skill 的 params 声明从任务中提取参数，生成 run() 调用。
@@ -170,28 +170,30 @@ class SkillRouter:
         if not self._skills:
             return SkillDecision(source="none", reason="无可用技能")
 
-        # ── Stage 1: 关键词快筛 ──
-        candidates = self._keyword_filter(task, limit=5)
+        # ── Stage 1: 候选召回 ──
+        candidates = self._recall_candidates(task, limit=5)
 
         if not candidates:
-            # 严格 trigger 未命中时，让 AI 从技能库中选择，而不是直接放弃。
+            # 无召回候选 → LLM 从全量技能中选（或 explore）
             if self._llm_caller:
                 llm_result = self._llm_rank(
                     task,
                     self._all_skill_candidates(limit=40),
                     page_context,
+                    force_pick=True,
                 )
-                if llm_result and llm_result.confidence >= 0.7:
+                if llm_result and llm_result.source == "llm_explore":
+                    return llm_result
+                if llm_result and llm_result.skill and llm_result.confidence >= 0.7:
                     script = self.build_script(llm_result.skill, task)
                     return SkillDecision(
                         skill=llm_result.skill,
                         confidence=llm_result.confidence,
-                        reason=f"trigger 未命中，由 LLM 选择: {llm_result.reason}",
+                        reason=f"无召回候选，LLM 选择: {llm_result.reason}",
                         source="llm",
                         script=script,
                     )
-                return SkillDecision(source="none", reason="trigger 未命中，LLM 未返回高置信技能")
-            return SkillDecision(source="none", reason="trigger 未命中且 LLM 不可用")
+            return SkillDecision(source="none", reason="无召回候选")
 
         if self._is_gmail_send_intent(task.lower()):
             gmail_send = next(
@@ -210,55 +212,65 @@ class SkillRouter:
 
         top_skill, top_score = candidates[0]
 
-        if (
-            top_skill.id == "domain/xiaohongshu_publish"
-            and top_score >= 0.65
-            and re.search(r"(发布内容|发布|发表|发帖).+['\"“‘].+['\"”’]", task, re.DOTALL)
-        ):
-            script = self.build_script(top_skill, task)
-            return SkillDecision(
-                skill=top_skill,
-                confidence=0.85,
-                reason=f"默认发布内容匹配: {top_skill.name}",
-                source="keyword",
-                script=script,
-            )
-
-        # 高分 → 直接命中（严格：必须达到阈值，不论候选数量）
+        # ── Stage 2: 双重阈值判断 ──
+        # > 0.8 → 高置信直接通过（跳过 LLM）
+        # 0.6 ~ 0.8 → 模糊区，送 LLM 精排
+        # < 0.6 → 低置信，丢弃该候选
         if top_score >= 0.8:
-            script = self.build_script(top_skill, task)
-            return SkillDecision(
-                skill=top_skill,
-                confidence=min(top_score, 1.0),
-                reason=f"关键词匹配: {top_skill.name}",
-                source="keyword",
-                script=script,
-            )
-
-        # ── Stage 2: LLM 精排 ──
-        if self._llm_caller:
-            llm_result = self._llm_rank(task, candidates, page_context)
-            if llm_result and llm_result.confidence >= 0.6:
-                script = self.build_script(llm_result.skill, task)
+            # 唯一高置信 或 第一远超第二（差距 > 0.1）→ 直接命中
+            if len(candidates) == 1 or (top_score - candidates[1][1]) > 0.1:
+                script = self.build_script(top_skill, task)
                 return SkillDecision(
-                    skill=llm_result.skill,
-                    confidence=llm_result.confidence,
-                    reason=llm_result.reason,
-                    source="llm",
+                    skill=top_skill,
+                    confidence=min(top_score, 1.0),
+                    reason=f"召回高置信命中: {top_skill.name}",
+                    source="keyword",
                     script=script,
                 )
 
-        # 未达到确定匹配阈值 → 交给上层 LLM 意图解析
-        return SkillDecision(source="none", reason="关键词未确定匹配")
+        # ── Stage 3: LLM 精排（含 explore 选项）──
+        # 候选 >= 2 或唯一候选在模糊区 (0.6~0.8) → 送 LLM
+        # 唯一候选 < 0.6 → 丢弃，不浪费 LLM 调用
+        need_llm = False
+        if len(candidates) >= 2:
+            need_llm = True
+        elif top_score >= 0.6:
+            need_llm = True
+
+        if need_llm and self._llm_caller:
+            # 过滤掉 < 0.4 的噪声候选
+            filtered = [(s, sc) for s, sc in candidates if sc >= 0.4]
+            if not filtered:
+                filtered = candidates[:1]
+            llm_result = self._llm_rank(task, filtered, page_context)
+            if llm_result:
+                if llm_result.source == "llm_explore":
+                    return llm_result
+                if llm_result.skill and llm_result.confidence >= 0.6:
+                    script = self.build_script(llm_result.skill, task)
+                    return SkillDecision(
+                        skill=llm_result.skill,
+                        confidence=llm_result.confidence,
+                        reason=llm_result.reason,
+                        source="llm",
+                        script=script,
+                    )
+
+        # 无匹配 → 交给上层处理（通常进入 Explore）
+        return SkillDecision(source="none", reason="召回+精排均未命中")
 
     # -------------------------------------------------------------------
     # Stage 1: 关键词快筛
     # -------------------------------------------------------------------
 
-    def _keyword_filter(
+    def _recall_candidates(
         self, query: str, limit: int = 5
     ) -> List[tuple[SkillRouterInfo, float]]:
-        """关键词快筛，返回 (skill, score) 列表，按分数降序。"""
+        """候选召回，返回 (skill, score) 列表，按分数降序。
+
+        不硬排除任何技能——trigger_patterns 未命中时仍通过触发词/描述等信号评分，
+        确保有歧义的候选能进入 LLM 精排而不是被静默丢弃。
+        """
         scored: List[tuple[SkillRouterInfo, float]] = []
         query_lower = query.lower()
 
@@ -436,12 +448,12 @@ class SkillRouter:
         """计算技能与查询的匹配分数 (0.0 ~ 1.0)。"""
         score = 0.0
 
-        # 严格 trigger：有 trigger_patterns 时，只认可完整语义正则。
+        # trigger_patterns：命中 → 高分直接返回；未命中 → 不加分，继续算其他信号
         if skill.trigger_patterns:
             for pattern in skill.trigger_patterns:
                 if re.search(pattern, query_lower, re.IGNORECASE | re.DOTALL):
                     return 0.95
-            return 0.0
+            # 未命中正则，但不 return 0 — 让下面的触发词/描述信号继续评分
 
         # 触发词匹配（核心信号，权重最高）
         matched_triggers = 0
@@ -495,7 +507,7 @@ class SkillRouter:
         return tokens
 
     # -------------------------------------------------------------------
-    # Stage 2: LLM 精排
+    # Stage 3: LLM 精排（含 explore 选项）
     # -------------------------------------------------------------------
 
     def _llm_rank(
@@ -505,7 +517,13 @@ class SkillRouter:
         page_context: Optional[Dict[str, str]] = None,
         force_pick: bool = False,
     ) -> Optional[SkillDecision]:
-        """用 LLM 从候选技能中选出最佳匹配。"""
+        """用 LLM 从候选技能中选出最佳匹配，或判定需要 explore。
+
+        LLM 可以返回:
+        - 技能 id → 匹配该技能
+        - "explore" → 没有合适技能，需要探索式操作
+        - "None" → 无法匹配（闲聊/询问等）
+        """
         if not self._llm_caller:
             return None
 
@@ -525,10 +543,12 @@ class SkillRouter:
 
         prompt = self._build_rank_prompt(task, candidate_list, page_context, force_pick)
         candidate_ids = [skill.id for skill, _ in candidates]
+        # skill_id 可以是候选 id、"explore" 或 "None"
+        valid_ids = candidate_ids + ["explore", "None"]
         schema = {
             "type": "object",
             "properties": {
-                "skill_id": {"type": "string", "enum": candidate_ids},
+                "skill_id": {"type": "string", "enum": valid_ids},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "reason": {"type": "string"},
             },
@@ -539,7 +559,7 @@ class SkillRouter:
             data = self._llm_caller.call_json(
                 prompt,
                 schema=schema,
-                system_prompt="你是任务路由器。根据用户输入，从候选 skill 中选最匹配的一个。",
+                system_prompt="你是任务路由器。根据用户输入，从候选 skill 中选最匹配的一个，或判定需要探索式操作。",
                 max_tokens=2048,
             )
         except Exception as exc:
@@ -553,6 +573,20 @@ class SkillRouter:
             logger.warning("LLM 精排返回非法 confidence: %s", data.get("confidence"))
             return None
         reason = data.get("reason", "")
+
+        # LLM 选择 explore
+        if chosen_id == "explore":
+            logger.info("LLM 精排选择 explore (confidence=%.2f, reason=%s)", confidence, reason)
+            return SkillDecision(
+                confidence=confidence,
+                reason=reason,
+                source="llm_explore",
+            )
+
+        # LLM 选择 None（无法匹配）
+        if chosen_id == "None":
+            logger.info("LLM 精排返回 None (reason=%s)", reason)
+            return None
 
         if confidence < 0.5 and not force_pick:
             logger.info("LLM 精排置信度过低 (%.2f)，忽略", confidence)
@@ -585,33 +619,38 @@ class SkillRouter:
         page_context: Optional[Dict[str, str]] = None,
         force_pick: bool = False,
     ) -> str:
-        """构造 LLM 精排 prompt。"""
+        """构造 LLM 精排 prompt（含 explore 选项）。"""
         candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)
 
         context_line = ""
         if page_context:
             context_line = (
-                f"\n当前页面: {page_context.get('url', '')} "
-                f"— {page_context.get('title', '')}\n"
+                "\n当前页面: " + page_context.get("url", "")
+                + " — " + page_context.get("title", "") + "\n"
             )
 
-        force_rules = (
-            "\n3. 当前必须从候选 skill_id 中选择一个最符合用户意图的技能。"
-            "\n4. 如果用户说“在A搜索B”，通常 A 是平台，B 是关键词。"
-            "\n5. 如果用户说“用A搜索B”，通常 A 是搜索引擎/平台，B 是关键词。"
-            if force_pick
-            else "\n3. 如果没有明确匹配，confidence 设为 0.3 以下。"
+        if force_pick:
+            force_rules = (
+                "\n4. 当前必须从候选 skill_id 中选择一个最符合用户意图的技能。"
+                "\n5. 如果用户说'在A搜索B'，通常 A 是平台，B 是关键词。"
+                "\n6. 如果用户说'用A搜索B'，通常 A 是搜索引擎/平台，B 是关键词。"
+            )
+        else:
+            force_rules = '\n4. 如果候选技能只是沾边但意图不对，输出 "None"。'
+
+        return (
+            "你是意图匹配专家。根据用户指令，从候选技能中选出最匹配的一个，或判定需要探索式操作。\n\n"
+            "用户指令: " + task + context_line + "\n"
+            "候选技能:\n" + candidates_json + "\n\n"
+            "特殊选项:\n"
+            "- \"explore\": 用户指令需要在网页上进行探索式操作（点击、填写表单、浏览、查找页面元素等），没有现成技能可直接完成。\n"
+            "- \"None\": 用户指令是询问、闲聊、评价，或不属于任何候选技能。\n\n"
+            "匹配规则:\n"
+            "1. 只选择指令明确要求【执行】的技能，询问/评价/闲聊返回 \"None\"\n"
+            "2. 指令为'在XX搜索YY'类，XX 是平台，YY 是关键词\n"
+            "3. 需要多步网页操作且无匹配技能 → \"explore\"" + force_rules + "\n\n"
+            "请直接输出 skill_id（候选 id / \"explore\" / \"None\"）和 confidence。"
         )
-
-        return f"""你是任务路由器。根据用户输入，从候选 skill 中选最匹配的一个。
-
-用户输入: {task}{context_line}
-候选 skills:
-{candidates_json}
-
-规则:
-1. 优先匹配用户明确提到的站点和操作
-2. skill_id 必须是候选 skills 中的 id{force_rules}"""
 
     # -------------------------------------------------------------------
     # 脚本构建
@@ -1235,7 +1274,7 @@ class SkillRouter:
         """按关键词搜索技能（返回匹配的技能列表）。"""
         if not self._loaded:
             self.load()
-        return [skill for skill, _ in self._keyword_filter(query, limit)]
+        return [skill for skill, _ in self._recall_candidates(query, limit)]
 
 
 # ---------------------------------------------------------------------------
