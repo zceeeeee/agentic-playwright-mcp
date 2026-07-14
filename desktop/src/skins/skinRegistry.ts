@@ -59,7 +59,8 @@ export const PET_SKINS: Record<PetSkinId, PetSkinDefinition> = {
     interactionAssets: {
       hover: "./skins/maltese/waving.gif"
     },
-    fallbackAsset: "./skins/maltese/idle.gif"
+    fallbackAsset: "./skins/maltese/idle.gif",
+    attribution: "https://www.sigstick.com/pack/eUPOUOsTgo9hY5ynsVjN-%E5%B0%8F%E5%A5%B6%E7%8B%97"
   }
 };
 

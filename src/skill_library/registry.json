@@ -88,7 +88,7 @@
       "url_patterns": [],
       "file": "send/wechat_send_contact_file.py",
       "function": "run",
-      "description": "打开 Windows 微信客户端，搜索并验证指定联系人或群聊，确认后发送一个本地文件"
+      "description": "打开 Windows 微信客户端，搜索并验证指定联系人或群聊，直接发送一个本地文件"
     },
     {
       "id": "wechat_send_contact_message",

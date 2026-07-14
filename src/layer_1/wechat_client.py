@@ -2993,43 +2993,6 @@ def _format_file_size(size_bytes: int) -> str:
     return f"{size_bytes / 1024 / 1024:.1f} MB"
 
 
-def _default_file_send_confirmation(
-    *,
-    recipient: str,
-    file: ValidatedLocalFile,
-) -> bool:
-    from src.core.user_interaction import get_user_interaction_broker
-
-    broker = get_user_interaction_broker()
-    broker.set_title("确认发送微信文件")
-    warning = (
-        "\n\n警告：该文件可能包含可执行内容。确认收件人和文件来源后再发送。"
-        if file.potentially_dangerous
-        else ""
-    )
-    answer = broker.prompt(
-        "准备通过微信发送文件\n\n"
-        f"发送对象：{recipient}\n"
-        f"文件名称：{file.name}\n"
-        f"文件大小：{_format_file_size(file.size_bytes)}\n"
-        f"文件路径：{file.path}"
-        f"{warning}\n\n"
-        "[确认发送] [取消]"
-    )
-    normalized = str(answer or "").strip().lower()
-    return normalized in {
-        "确认发送",
-        "确认",
-        "发送",
-        "approve",
-        "yes",
-        "y",
-        "true",
-        "1",
-        "是",
-    }
-
-
 def follow_official_account(
     account_name: str,
     *,
@@ -3098,10 +3061,9 @@ def send_contact_file(
     file_path: str,
     launch_path: str | None = None,
     automation: PywinautoWechatAutomation | None = None,
-    confirm_fn: Callable[..., bool] | None = None,
     log_fn: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Validate, confirm, and submit one local file to a verified WeChat chat."""
+    """Validate and submit one local file to a WeChat chat without prompting."""
 
     recipient = _clean_required(recipient_name, "recipient name")
     emit = log_fn or (lambda message: logger.info("WeChat file send: %s", message))
@@ -3121,19 +3083,6 @@ def send_contact_file(
             message="无法确认微信发送对象",
         )
     emit(f"已确认发送对象：{contact.displayed_name}")
-
-    emit("等待确认发送")
-    confirmer = confirm_fn or _default_file_send_confirmation
-    if not confirmer(recipient=contact.displayed_name, file=validated):
-        return {
-            "success": False,
-            "cancelled": True,
-            "status": "cancelled",
-            "code": "USER_CANCELLED",
-            "recipient_name": contact.displayed_name,
-            "file_name": validated.name,
-            "file_size_bytes": validated.size_bytes,
-        }
 
     revalidate_local_file(validated)
     emit("正在选择文件")

@@ -46,6 +46,7 @@ let reconnectTimer: number | null = null;
 let conversationSyncTimer: number | null = null;
 let pendingConversationId: string | null = null;
 const seenEvents = new Set<string>();
+const supersededTaskIds = new Set<string>();
 const activeTaskStatuses = new Set(["queued", "running", "waiting_confirmation"]);
 
 interface TaskSummary {
@@ -109,6 +110,18 @@ function dedupe(messages: ChatMessage[]): ChatMessage[] {
 
 function eventBelongsToCurrentTask(event: BackendEvent, currentTaskId: string | null): boolean {
   return !event.task_id || !currentTaskId || event.task_id === currentTaskId;
+}
+
+function markTasksSuperseded(messages: ChatMessage[], currentTaskId: string | null): void {
+  if (currentTaskId) supersededTaskIds.add(currentTaskId);
+  for (const message of messages) {
+    if (message.task_id) supersededTaskIds.add(message.task_id);
+  }
+  while (supersededTaskIds.size > 2000) {
+    const oldest = supersededTaskIds.values().next().value as string | undefined;
+    if (!oldest) break;
+    supersededTaskIds.delete(oldest);
+  }
 }
 
 async function connectEvents(handle: (event: BackendEvent) => void, setConnected: (value: boolean) => void) {
@@ -390,7 +403,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       await get().createConversation();
       conversationId = get().currentConversationId;
     }
-    if (get().currentTaskId && conversationId) {
+    const previousState = get();
+    markTasksSuperseded(previousState.messages, previousState.currentTaskId);
+    if (previousState.currentTaskId && conversationId) {
       await stopConversationResources(conversationId);
       set({ currentTaskId: null, visualState: "idle", confirmations: [] });
     }
@@ -402,7 +417,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       content: trimmed,
       created_at: new Date().toISOString()
     };
-    set((state) => ({ messages: [...state.messages, optimistic], visualState: "running" }));
+    set((state) => ({
+      messages: [...state.messages, optimistic],
+      confirmations: [],
+      visualState: "running"
+    }));
     const task = await apiRequest<{ id: string }>("/api/tasks", {
       method: "POST",
       body: JSON.stringify({ conversation_id: conversationId, content: trimmed, attachments: [] })
@@ -440,6 +459,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   handleBackendEvent: (event) => {
     const state = get();
     if (event.conversation_id && state.currentConversationId && event.conversation_id !== state.currentConversationId) return;
+    if (event.task_id && supersededTaskIds.has(event.task_id)) return;
     if (event.type === "agent_state_changed") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
       set({ visualState: event.payload.state as AgentVisualState });

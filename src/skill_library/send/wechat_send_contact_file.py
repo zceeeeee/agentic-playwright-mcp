@@ -55,7 +55,7 @@ def run(
     if not result:
         raise RuntimeError("WeChat contact file sending returned no result")
     if not result.get("success"):
-        if result.get("status") in {"cancelled", "unknown"}:
+        if result.get("status") == "unknown":
             logger(str(result.get("message") or result.get("status")))
             return result
         raise RuntimeError(

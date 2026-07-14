@@ -241,7 +241,15 @@ test("starting a new task stops the previous task and closes its browser first",
     currentTaskId: "task-old",
     visualState: "running",
     messages: [],
-    confirmations: []
+    confirmations: [{
+      confirmation_id: "confirm-old",
+      task_id: "task-old",
+      title: "旧确认",
+      message: "旧任务确认",
+      risk_level: "medium",
+      prompt_type: "confirmation",
+      status: "approved"
+    }]
   });
 
   await useAgentStore.getState().sendMessage("新的任务");
@@ -253,47 +261,52 @@ test("starting a new task stops the previous task and closes its browser first",
   assert.ok(closeIndex > cancelIndex);
   assert.ok(createIndex > closeIndex);
   assert.equal(useAgentStore.getState().currentTaskId, "task-new");
+  assert.deepEqual(useAgentStore.getState().confirmations, []);
 });
 
-test("late events stay with the previous task and cannot reset the current task", () => {
+test("late events from a superseded task cannot enter the new task output", async () => {
   installDesktopBridge();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/api/tasks?conversation_id=conversation-a")) {
+      return jsonResponse([{ id: "task-late-old", conversation_id: "conversation-a", status: "running" }]);
+    }
+    if (url.endsWith("/api/tasks") && init?.method === "POST") {
+      return jsonResponse({ id: "task-late-new" });
+    }
+    return jsonResponse({ ok: true });
+  }) as typeof fetch;
   useAgentStore.setState({
     currentConversationId: "conversation-a",
-    currentTaskId: "task-new",
+    currentTaskId: "task-late-old",
     visualState: "running",
+    confirmations: [],
     messages: [
       {
         id: "old-user",
         conversation_id: "conversation-a",
-        task_id: "task-old",
+        task_id: "task-late-old",
         role: "user",
         type: "user",
         content: "旧任务",
         created_at: "2026-01-01T00:00:01.000Z"
-      },
-      {
-        id: "new-user",
-        conversation_id: "conversation-a",
-        task_id: "task-new",
-        role: "user",
-        type: "user",
-        content: "新任务",
-        created_at: "2026-01-01T00:00:02.000Z"
       }
     ]
   });
 
+  await useAgentStore.getState().sendMessage("新任务");
+
   useAgentStore.getState().handleBackendEvent({
     event_id: "late-answer",
     type: "assistant_message",
-    task_id: "task-old",
+    task_id: "task-late-old",
     conversation_id: "conversation-a",
     timestamp: "2026-01-01T00:00:03.000Z",
     payload: {
       message: {
         id: "old-answer",
         conversation_id: "conversation-a",
-        task_id: "task-old",
+        task_id: "task-late-old",
         role: "assistant",
         type: "assistant",
         content: "旧任务回答",
@@ -302,9 +315,40 @@ test("late events stay with the previous task and cannot reset the current task"
     }
   });
   useAgentStore.getState().handleBackendEvent({
+    event_id: "late-progress",
+    type: "task_progress",
+    task_id: "task-late-old",
+    conversation_id: "conversation-a",
+    timestamp: "2026-01-01T00:00:03.500Z",
+    payload: {
+      stored_message: {
+        id: "old-progress",
+        conversation_id: "conversation-a",
+        task_id: "task-late-old",
+        role: "system",
+        type: "progress",
+        content: "旧任务日志",
+        created_at: "2026-01-01T00:00:03.500Z"
+      }
+    }
+  });
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "late-confirmation",
+    type: "confirmation_required",
+    task_id: "task-late-old",
+    conversation_id: "conversation-a",
+    timestamp: "2026-01-01T00:00:03.750Z",
+    payload: {
+      confirmation_id: "confirm-late-old",
+      title: "旧确认",
+      message: "旧任务确认",
+      risk_level: "medium"
+    }
+  });
+  useAgentStore.getState().handleBackendEvent({
     event_id: "late-cancel",
     type: "task_cancelled",
-    task_id: "task-old",
+    task_id: "task-late-old",
     conversation_id: "conversation-a",
     timestamp: "2026-01-01T00:00:04.000Z",
     payload: {}
@@ -312,7 +356,7 @@ test("late events stay with the previous task and cannot reset the current task"
   useAgentStore.getState().handleBackendEvent({
     event_id: "late-state",
     type: "agent_state_changed",
-    task_id: "task-old",
+    task_id: "task-late-old",
     conversation_id: "conversation-a",
     timestamp: "2026-01-01T00:00:05.000Z",
     payload: { state: "idle" }
@@ -320,16 +364,17 @@ test("late events stay with the previous task and cannot reset the current task"
   useAgentStore.getState().handleBackendEvent({
     event_id: "late-start",
     type: "task_started",
-    task_id: "task-old",
+    task_id: "task-late-old",
     conversation_id: "conversation-a",
     timestamp: "2026-01-01T00:00:06.000Z",
     payload: { state: "running" }
   });
 
   assert.deepEqual(
-    useAgentStore.getState().messages.map((message) => message.id),
-    ["old-user", "old-answer", "new-user"]
+    useAgentStore.getState().messages.map((message) => message.content),
+    ["旧任务", "新任务"]
   );
-  assert.equal(useAgentStore.getState().currentTaskId, "task-new");
+  assert.deepEqual(useAgentStore.getState().confirmations, []);
+  assert.equal(useAgentStore.getState().currentTaskId, "task-late-new");
   assert.equal(useAgentStore.getState().visualState, "running");
 });

@@ -10,7 +10,6 @@ import pytest
 import src.layer_1.wechat_client as wechat_module
 from src.core.script_engine import ScriptEngine
 from src.core.skill_router import SkillRouter
-from src.desktop.prompts import parse_desktop_prompt
 from src.layer_1.wechat_client import (
     OPEN_BUTTON_NAMES,
     ClipboardTextSnapshot,
@@ -164,50 +163,25 @@ def test_file_validation_rejects_folder_and_accepts_empty_file(tmp_path: Path) -
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path validation")
-def test_send_contact_file_confirms_before_automation(tmp_path: Path) -> None:
+def test_send_contact_file_sends_without_confirmation(tmp_path: Path) -> None:
     path = tmp_path / "年度报告 2026.pdf"
     path.write_bytes(b"report")
     automation = FakeFileAutomation()
-    confirmations = []
-
     result = send_contact_file(
         recipient_name="文件传输助手",
         file_path=str(path),
         automation=automation,
-        confirm_fn=lambda **kwargs: confirmations.append(kwargs) or True,
         log_fn=lambda message: None,
     )
 
     assert result["success"] is True
     assert result["status"] == "ui_verified"
     assert result["file_name"] == path.name
-    assert confirmations[0]["recipient"] == "文件传输助手"
-    assert confirmations[0]["file"].path == path
     assert automation.calls == [
         ("open", None),
         ("search_contact_verified", "文件传输助手"),
         ("send_file", path.name),
     ]
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows path validation")
-def test_send_contact_file_cancelled_before_file_selection(tmp_path: Path) -> None:
-    path = tmp_path / "cancel.txt"
-    path.write_text("cancel", encoding="utf-8")
-    automation = FakeFileAutomation()
-
-    result = send_contact_file(
-        recipient_name="张三",
-        file_path=str(path),
-        automation=automation,
-        confirm_fn=lambda **kwargs: False,
-        log_fn=lambda message: None,
-    )
-
-    assert result["status"] == "cancelled"
-    assert not any(call[0] == "send_file" for call in automation.calls)
-
-
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path validation")
 def test_invalid_file_does_not_open_wechat(tmp_path: Path) -> None:
     automation = FakeFileAutomation()
@@ -217,7 +191,6 @@ def test_invalid_file_does_not_open_wechat(tmp_path: Path) -> None:
             recipient_name="张三",
             file_path=str(tmp_path / "missing.pdf"),
             automation=automation,
-            confirm_fn=lambda **kwargs: True,
             log_fn=lambda message: None,
         )
 
@@ -237,7 +210,6 @@ def test_send_logs_do_not_expose_full_file_path(tmp_path: Path) -> None:
         recipient_name="文件传输助手",
         file_path=str(path),
         automation=FakeFileAutomation(),
-        confirm_fn=lambda **kwargs: True,
         log_fn=logs.append,
     )
 
@@ -265,7 +237,6 @@ def test_unknown_send_status_is_returned_without_retry(monkeypatch, tmp_path: Pa
         recipient_name="张三",
         file_path=str(path),
         automation=automation,
-        confirm_fn=lambda **kwargs: True,
         log_fn=lambda message: None,
     )
     assert result["status"] == "unknown"
@@ -538,7 +509,7 @@ def test_text_message_guards_against_file_paths() -> None:
     assert exc_info.value.code == "ROUTE_VALIDATION_FAILED"
 
 
-def test_file_skill_wrapper_handles_success_cancel_and_unknown() -> None:
+def test_file_skill_wrapper_handles_success_failure_and_unknown() -> None:
     calls = []
     success = run_file_skill(
         recipient_name="文件传输助手",
@@ -549,13 +520,13 @@ def test_file_skill_wrapper_handles_success_cancel_and_unknown() -> None:
     assert success["success"] is True
     assert calls[0]["recipient_name"] == "文件传输助手"
 
-    cancelled = run_file_skill(
-        recipient_name="张三",
-        file_path=r"D:\docs\a.pdf",
-        log_fn=lambda message: None,
-        send_fn=lambda **kwargs: {"success": False, "status": "cancelled"},
-    )
-    assert cancelled["status"] == "cancelled"
+    with pytest.raises(RuntimeError, match="WeChat contact file sending failed"):
+        run_file_skill(
+            recipient_name="张三",
+            file_path=r"D:\docs\a.pdf",
+            log_fn=lambda message: None,
+            send_fn=lambda **kwargs: {"success": False, "status": "cancelled"},
+        )
     unknown = run_file_skill(
         recipient_name="张三",
         file_path=r"D:\docs\a.pdf",
@@ -587,40 +558,24 @@ def test_file_skill_is_registered_in_script_engine() -> None:
     assert calls[0]["recipient_name"] == "文件传输助手"
 
 
-def test_wechat_file_confirmation_is_high_risk() -> None:
-    parsed = parse_desktop_prompt(
-        "准备通过微信发送文件，发送对象：张三，文件名称：a.pdf [确认发送] [取消]",
-        title="确认发送微信文件",
+def test_wechat_send_skills_do_not_request_confirmation() -> None:
+    router = SkillRouter(library_dir="src/skill_library")
+    router.load()
+    file_skill = router._skills["domain/wechat_send_contact_file"]
+    message_skill = router._skills["domain/wechat_send_contact_message"]
+
+    assert file_skill.confirm_before_run is False
+    assert message_skill.confirm_before_run is False
+    file_script = router.build_script(
+        file_skill,
+        '微信给文件传输助手发送"D:\\tmp\\report.txt"',
     )
-    assert parsed["prompt_type"] == "choice"
-    assert parsed["risk_level"] == "high"
-
-
-def test_dangerous_file_confirmation_includes_warning(monkeypatch, tmp_path: Path) -> None:
-    script = tmp_path / "run.ps1"
-    script.write_text("Write-Host test", encoding="utf-8")
-    validated = _validated(script, dangerous=True)
-    prompts: list[str] = []
-
-    class FakeBroker:
-        def set_title(self, title: str) -> None:
-            assert title == "确认发送微信文件"
-
-        def prompt(self, question: str) -> str:
-            prompts.append(question)
-            return "确认发送"
-
-    monkeypatch.setattr(
-        "src.core.user_interaction.get_user_interaction_broker",
-        lambda: FakeBroker(),
+    message_script = router.build_script(
+        message_skill,
+        "微信给文件传输助手发送你好",
     )
-
-    assert wechat_module._default_file_send_confirmation(
-        recipient="张三",
-        file=validated,
-    )
-    assert "可能包含可执行内容" in prompts[0]
-    assert str(script) in prompts[0]
+    assert "panel_prompt" not in file_script
+    assert "panel_prompt" not in message_script
 
 
 @pytest.mark.parametrize(
