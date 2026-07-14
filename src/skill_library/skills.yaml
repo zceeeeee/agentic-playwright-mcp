@@ -190,6 +190,43 @@ skills:
   # 微信客户端
   # ──────────────────────────────────────────────
 
+  - id: "domain/wechat_send_contact_file"
+    name: "微信联系人发送文件"
+    type: "domain"
+    platform: "wechat"
+    action: "send_file"
+    triggers: ["微信", "wechat", "发送文件", "发文件", "传文件", "文件传输助手", "本地文件"]
+    trigger_patterns:
+      - '^(?!.*(?:不要|别|禁止|取消|请问|怎么|如何))(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号))(?=.*(?:发送文件|发文件|传文件|发送|发|传))(?=.*(?:[A-Za-z]:[\/]|\\)).+$'
+      - '^(?!.*(?:不要|别|禁止|取消|请问|怎么|如何))(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号)).*(?:发送文件|发文件|传文件).*$'
+    url_patterns: []
+    description: "打开 Windows 微信客户端，搜索并验证指定联系人或群聊，确认后发送一个本地文件"
+    version: "1.0.0"
+    confirm_before_run: true
+    examples:
+      - '微信给张三发送"D:\comp_sci\培养方案.pdf"'
+      - '用微信把"D:\docs\年度报告 2026.pdf"发给文件传输助手'
+      - '微信发送"D:\project\需求说明.docx"给项目讨论群'
+    params:
+      recipient_name:
+        type: string
+        required: true
+        confirm: false
+        description: "微信联系人、群聊或文件传输助手的名称"
+        extract_patterns:
+          - '(?:微信|wechat)\s*(?:给|向)\s*["“]?(.+?)["”]?\s*(?:发送文件|发文件|传文件|发送|发|传)'
+          - '(?:发给|发送给|传给)\s*["“]?([^"”\n]+?)["”]?\s*$'
+          - '(?:给|向)\s*["“]?([^"”\n]+?)["”]?\s*$'
+          - '(?:给|向)\s*["“]?(.+?)["”]?\s*(?:发送|发|传)'
+      file_path:
+        type: string
+        required: true
+        confirm: false
+        description: "需要发送的本地文件绝对路径；路径包含空格时必须使用引号包裹"
+        extract_patterns:
+          - '["“]((?:[A-Za-z]:[\\/]|\\\\)[^"”\r\n]+)["”]'
+          - '((?:[A-Za-z]:[\\/]|\\\\)[^"”\s]+?\.[A-Za-z0-9]{1,16})(?=\s*(?:给|发给|发送给|传给|$))'
+
   - id: "domain/wechat_send_contact_message"
     name: "微信联系人发消息"
     type: "domain"
@@ -197,7 +234,7 @@ skills:
     action: "send"
     triggers: ["微信", "wechat", "发送", "发消息", "私信", "联系人", "文件传输助手"]
     trigger_patterns:
-      - "^(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号)).*(?:给|向).{1,40}(?:发送|发消息|私信|发)"
+      - '^(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号))(?!.*(?:发送文件|发文件|传文件|文件路径|文件地址))(?!.*(?:[A-Za-z]:[\/]|\\)).*(?:给|向).{1,40}(?:发送|发消息|私信|发)'
     url_patterns: []
     description: "打开微信客户端，搜索指定联系人并发送一段消息"
     version: "1.0.0"
@@ -1061,6 +1098,10 @@ sources:
 
   - id: "domain/wechat_send_contact_message"
     file: "send/wechat_send_contact_message.py"
+    entry: "run"
+
+  - id: "domain/wechat_send_contact_file"
+    file: "send/wechat_send_contact_file.py"
     entry: "run"
 
   - id: "domain/wechat_follow_official_account"

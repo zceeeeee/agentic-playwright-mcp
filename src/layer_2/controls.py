@@ -789,6 +789,23 @@ def wechat_send_contact_message(
     )
 
 
+def wechat_send_contact_file(
+    recipient_name: str,
+    file_path: str,
+    launch_path: str | None = None,
+) -> dict:
+    """Send one local file to a verified WeChat contact or group."""
+    from src.core.user_interaction import get_user_interaction_broker
+    from src.layer_1.wechat_client import send_contact_file
+
+    return send_contact_file(
+        recipient_name=recipient_name,
+        file_path=file_path,
+        launch_path=launch_path,
+        log_fn=get_user_interaction_broker().log,
+    )
+
+
 def get_controls_exports() -> Dict[str, Any]:
     """返回控件层所有可导出的函数。
 
@@ -827,6 +844,7 @@ def get_controls_exports() -> Dict[str, Any]:
         "wechat_follow_official_account": wechat_follow_official_account,
         "wechat_send_official_account_message": wechat_send_official_account_message,
         "wechat_send_contact_message": wechat_send_contact_message,
+        "wechat_send_contact_file": wechat_send_contact_file,
         # Cookie 持久化
         "save_cookies": save_cookies,
         "load_cookies": load_cookies,

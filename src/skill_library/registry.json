@@ -81,6 +81,16 @@
       "description": "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题、正文或 Markdown 文件，设置字体、颜色、斜体和本地插图，保存 docx 并导出 PDF"
     },
     {
+      "id": "wechat_send_contact_file",
+      "name": "微信联系人发送文件",
+      "type": "domain",
+      "triggers": ["微信", "wechat", "发送文件", "发文件", "传文件", "文件传输助手", "本地文件"],
+      "url_patterns": [],
+      "file": "send/wechat_send_contact_file.py",
+      "function": "run",
+      "description": "打开 Windows 微信客户端，搜索并验证指定联系人或群聊，确认后发送一个本地文件"
+    },
+    {
       "id": "wechat_send_contact_message",
       "name": "微信联系人发消息",
       "type": "domain",

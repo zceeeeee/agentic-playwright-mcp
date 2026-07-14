@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
+import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from os import environ
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,7 @@ WECHAT_APPEX_LOGO_TEMPLATE = "WeChatAppExLogo.png"
 WECHAT_OFFICIAL_ACCOUNT_TEMPLATE = "公众号.png"
 WECHAT_MESSAGE_BOX_TEMPLATE = "wechatSend.png"
 WECHAT_SEND_BUTTON_TEMPLATE = "wechatSendGreen.png"
+WECHAT_ATTACHMENT_TEMPLATE = "wechatAttachment.png"
 WECHAT_TASKBAR_LOGO_TEMPLATE = "wechatLogo.png"
 WECHAT_SEARCH_TEMPLATE = "搜一搜.png"
 WECHAT_EXE_CANDIDATES = (
@@ -55,6 +60,218 @@ SEARCH_RESULT_WINDOW_DETECT_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS = 5.0
 FOLLOW_CONFIRM_SECONDS = 20.0
 WECHAT_FOLLOW_BUTTON_RGB = (0x55, 0xBC, 0x7A)
+ATTACHMENT_BUTTON_NAMES = ("发送文件", "文件", "添加", "更多", "Send file", "File")
+FILE_DIALOG_TITLES = ("打开", "Open")
+FILE_NAME_LABELS = ("文件名:", "文件名", "File name:", "File name")
+OPEN_BUTTON_NAMES = ("打开", "打开(O)", "Open")
+SEND_BUTTON_NAMES = ("发送", "Send")
+ATTACHMENT_BUTTON_REL = (0.36, 0.72)
+DEFAULT_WECHAT_FILE_SEND_MAX_BYTES = 100 * 1024 * 1024
+DANGEROUS_EXTENSIONS = {
+    ".exe",
+    ".msi",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".scr",
+    ".ps1",
+    ".vbs",
+    ".js",
+    ".jse",
+    ".lnk",
+}
+
+
+class FileSendPhase(str, Enum):
+    VALIDATED = "validated"
+    CONTACT_SELECTED = "contact_selected"
+    CONFIRMED = "confirmed"
+    FILE_DIALOG_OPENED = "file_dialog_opened"
+    FILE_SELECTED = "file_selected"
+    SEND_TRIGGERED = "send_triggered"
+    VERIFIED = "verified"
+
+
+class WeChatFileSendError(RuntimeError):
+    """Structured failure for a non-idempotent WeChat file send."""
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+        retryable: bool = False,
+        send_may_have_started: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details or {}
+        self.retryable = retryable
+        self.send_may_have_started = send_may_have_started
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "details": self.details,
+            "retryable": self.retryable,
+            "send_may_have_started": self.send_may_have_started,
+        }
+
+
+@dataclass(frozen=True)
+class ValidatedLocalFile:
+    path: Path
+    name: str
+    size_bytes: int
+    modified_ns: int
+    extension: str
+    potentially_dangerous: bool
+
+
+@dataclass(frozen=True)
+class ContactSelectionResult:
+    requested_name: str
+    displayed_name: str | None
+    exact_match: bool
+    candidate_count: int | None
+    verified: bool
+
+
+@dataclass(frozen=True)
+class WeChatFileSendResult:
+    success: bool
+    status: str
+    method: str
+    verified: bool
+    phase: FileSendPhase
+
+
+@dataclass(frozen=True)
+class ClipboardTextSnapshot:
+    text: str | None
+    had_unicode_text: bool
+
+
+def looks_like_windows_file_path(value: str | None) -> bool:
+    return bool(re.search(r"(?:[A-Za-z]:[\\/]|\\\\)[^\r\n]+", str(value or "")))
+
+
+def _configured_file_size_limit() -> int | None:
+    raw = os.getenv("WECHAT_FILE_SEND_MAX_BYTES", "").strip()
+    if not raw:
+        return DEFAULT_WECHAT_FILE_SEND_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_WECHAT_FILE_SEND_MAX_BYTES
+    return value if value > 0 else None
+
+
+def normalize_local_file_path(value: str) -> Path:
+    if sys.platform != "win32":
+        raise WeChatFileSendError(
+            code="UNSUPPORTED_PLATFORM",
+            message="微信桌面文件发送仅支持 Windows",
+        )
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise WeChatFileSendError(
+            code="FILE_PATH_REQUIRED",
+            message="请提供需要发送的本地文件绝对路径",
+        )
+    if len(raw) >= 2 and raw[0] in {'"', "'", "“", "‘"} and raw[-1] in {'"', "'", "”", "’"}:
+        raw = raw[1:-1].strip()
+    if not raw or "*" in raw or "?" in raw or re.match(r"^https?://", raw, re.IGNORECASE):
+        raise WeChatFileSendError(
+            code="PATH_NOT_ABSOLUTE",
+            message="请提供不含通配符的本地文件绝对路径",
+        )
+
+    raw = os.path.expandvars(os.path.expanduser(raw))
+    path = Path(raw)
+    if not path.is_absolute():
+        raise WeChatFileSendError(
+            code="PATH_NOT_ABSOLUTE",
+            message="请提供本地文件的绝对路径",
+        )
+    try:
+        resolved = path.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise WeChatFileSendError(
+            code="FILE_NOT_FOUND",
+            message=f"找不到文件：{path.name}",
+            retryable=True,
+        ) from exc
+    except OSError as exc:
+        raise WeChatFileSendError(
+            code="FILE_NOT_FOUND",
+            message=f"无法访问文件：{path.name}",
+            details={"error_type": type(exc).__name__},
+            retryable=True,
+        ) from exc
+    if not resolved.is_file():
+        raise WeChatFileSendError(
+            code="NOT_A_FILE",
+            message="指定路径不是普通文件",
+        )
+    return resolved
+
+
+def validate_local_file(
+    file_path: str,
+    *,
+    max_size_bytes: int | None = None,
+) -> ValidatedLocalFile:
+    path = normalize_local_file_path(file_path)
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        raise WeChatFileSendError(
+            code="FILE_NOT_FOUND",
+            message=f"无法读取文件信息：{path.name}",
+            details={"error_type": type(exc).__name__},
+            retryable=True,
+        ) from exc
+
+    limit = _configured_file_size_limit() if max_size_bytes is None else max_size_bytes
+    if limit is not None and limit > 0 and stat.st_size > limit:
+        raise WeChatFileSendError(
+            code="FILE_TOO_LARGE",
+            message=(
+                f"文件大小为 {stat.st_size / 1024 / 1024:.1f} MB，"
+                f"超过当前应用设置的 {limit / 1024 / 1024:.1f} MB 上限"
+            ),
+            details={"size_bytes": stat.st_size, "max_size_bytes": limit},
+        )
+    extension = path.suffix.lower()
+    return ValidatedLocalFile(
+        path=path,
+        name=path.name,
+        size_bytes=stat.st_size,
+        modified_ns=stat.st_mtime_ns,
+        extension=extension,
+        potentially_dangerous=extension in DANGEROUS_EXTENSIONS,
+    )
+
+
+def revalidate_local_file(validated: ValidatedLocalFile) -> None:
+    try:
+        stat = validated.path.stat()
+    except OSError as exc:
+        raise WeChatFileSendError(
+            code="FILE_CHANGED_AFTER_CONFIRMATION",
+            message="文件在确认后已无法访问，请重新确认",
+        ) from exc
+    if stat.st_size != validated.size_bytes or stat.st_mtime_ns != validated.modified_ns:
+        raise WeChatFileSendError(
+            code="FILE_CHANGED_AFTER_CONFIRMATION",
+            message="文件在确认后发生了变化，请重新确认",
+            details={"file_name": validated.name},
+        )
 
 
 @dataclass(frozen=True)
@@ -918,18 +1135,632 @@ class PywinautoWechatAutomation:
     def send_message(self, message: str) -> None:
         self._require_window()
         self._normalize_current_window()
-        edit = self._find_message_edit()
-        if edit is not None:
-            edit.click_input()
-        elif self._click_message_box_visual(timeout=2.0):
-            pass
-        else:
-            if not self._click_window_relative(*CHAT_INPUT_REL):
-                self._click_relative(self.window, *CHAT_INPUT_REL)
+        self._focus_message_input()
         self._paste_or_type(message)
         time.sleep(0.2)
         self._send_keys("{ENTER}")
         time.sleep(0.5)
+
+    def _focus_message_input(self) -> str:
+        """Focus the active chat input using the normal message-send strategy."""
+
+        edit = self._find_message_edit()
+        if edit is not None:
+            edit.click_input()
+            return "uia"
+        elif self._click_message_box_visual(timeout=2.0):
+            return "image"
+        else:
+            if not self._click_window_relative(*CHAT_INPUT_REL):
+                self._click_relative(self.window, *CHAT_INPUT_REL)
+            return "relative"
+
+    def search_contact_verified(self, recipient_name: str) -> ContactSelectionResult:
+        """Use the same contact-search flow as normal text messages."""
+
+        recipient = _clean_required(recipient_name, "recipient name")
+        self.search_contact(recipient)
+        return ContactSelectionResult(
+            requested_name=recipient,
+            displayed_name=recipient,
+            exact_match=True,
+            candidate_count=None,
+            verified=True,
+        )
+
+    def send_file(self, file_path: str | Path) -> WeChatFileSendResult:
+        """Paste one validated file into the active chat, then send it once."""
+
+        validated = validate_local_file(str(file_path))
+        self._require_window()
+        self._normalize_current_window()
+        self._focus_message_input()
+        baseline = self._snapshot_file_markers(validated.name)
+
+        try:
+            return self._send_file_via_chat_input(validated, baseline)
+        except WeChatFileSendError as exc:
+            if exc.code != "FILE_CLIPBOARD_FAILED":
+                raise
+            logger.warning(
+                "WeChat file clipboard paste unavailable; falling back to native dialog: %s",
+                exc.message,
+            )
+        return self._send_file_via_native_dialog(validated, baseline)
+
+    def _send_file_via_chat_input(
+        self,
+        validated: ValidatedLocalFile,
+        baseline: set[tuple[int, int, int, int, int]],
+    ) -> WeChatFileSendResult:
+        snapshot = self._set_file_drop_clipboard(validated.path)
+        try:
+            revalidate_local_file(validated)
+            self._send_keys("^v")
+            time.sleep(1.5)
+            self._send_keys("{ENTER}")
+            time.sleep(0.8)
+        finally:
+            self._restore_clipboard_text(snapshot)
+
+        verified = self._verify_outgoing_file(
+            validated.name,
+            baseline=baseline,
+            timeout=10.0,
+        )
+        return WeChatFileSendResult(
+            success=True,
+            status="ui_verified" if verified else "submitted",
+            method="clipboard_file_paste",
+            verified=verified,
+            phase=(FileSendPhase.VERIFIED if verified else FileSendPhase.SEND_TRIGGERED),
+        )
+
+    def _send_file_via_native_dialog(
+        self,
+        validated: ValidatedLocalFile,
+        baseline: set[tuple[int, int, int, int, int]],
+    ) -> WeChatFileSendResult:
+
+        self._click_attachment_button()
+        try:
+            dialog = self._wait_for_native_file_dialog(timeout=4.0)
+        except WeChatFileSendError:
+            file_button = self._find_attachment_button(file_only=True)
+            if file_button is None:
+                raise
+            self._click_element_or_parent(file_button)
+            dialog = self._wait_for_native_file_dialog(timeout=5.0)
+
+        self._set_file_dialog_path(dialog, validated.path)
+        revalidate_local_file(validated)
+        self._confirm_file_dialog(dialog)
+
+        state = self._wait_for_file_preview_or_sent(
+            validated.name,
+            baseline=baseline,
+            timeout=8.0,
+        )
+        return self._complete_file_send(
+            validated.name,
+            baseline=baseline,
+            state=state,
+            method="native_file_dialog",
+        )
+
+    def _complete_file_send(
+        self,
+        file_name: str,
+        *,
+        baseline: set[tuple[int, int, int, int, int]],
+        state: str,
+        method: str,
+    ) -> WeChatFileSendResult:
+        if state == "sent":
+            return WeChatFileSendResult(
+                success=True,
+                status="ui_verified",
+                method=method,
+                verified=True,
+                phase=FileSendPhase.VERIFIED,
+            )
+        if state != "preview":
+            raise WeChatFileSendError(
+                code="SEND_STATUS_UNKNOWN",
+                message=(
+                    "已在微信聊天中选择或粘贴文件，但无法确认是否已经发送。"
+                    "请检查聊天记录，不要直接重试。"
+                ),
+                details={"method": method},
+                send_may_have_started=True,
+            )
+
+        self._send_staged_file()
+        if not self._verify_outgoing_file(
+            file_name,
+            baseline=baseline,
+            timeout=10.0,
+        ):
+            raise WeChatFileSendError(
+                code="SEND_STATUS_UNKNOWN",
+                message=(
+                    "已触发微信发送，但无法确认是否成功。"
+                    "请检查聊天记录，不要直接重试。"
+                ),
+                details={"method": method},
+                send_may_have_started=True,
+            )
+        return WeChatFileSendResult(
+            success=True,
+            status="ui_verified",
+            method=method,
+            verified=True,
+            phase=FileSendPhase.VERIFIED,
+        )
+
+    def _set_file_drop_clipboard(self, file_path: Path) -> ClipboardTextSnapshot:
+        if sys.platform != "win32":
+            raise WeChatFileSendError(
+                code="FILE_CLIPBOARD_FAILED",
+                message="Windows 文件剪贴板仅支持 Windows",
+                retryable=True,
+            )
+
+        snapshot: ClipboardTextSnapshot | None = None
+        try:
+            snapshot = self._capture_clipboard_text()
+            self._write_file_drop_clipboard(file_path)
+        except Exception as exc:
+            if snapshot is not None:
+                self._restore_clipboard_text(snapshot)
+            raise WeChatFileSendError(
+                code="FILE_CLIPBOARD_FAILED",
+                message="无法把文件放入 Windows 文件剪贴板",
+                details={"error_type": type(exc).__name__},
+                retryable=True,
+            ) from exc
+        return snapshot
+
+    @staticmethod
+    def _open_windows_clipboard(timeout: float = 1.5) -> None:
+        import win32clipboard  # type: ignore[import-not-found]
+
+        deadline = time.time() + timeout
+        while True:
+            try:
+                win32clipboard.OpenClipboard()
+                return
+            except Exception:
+                if time.time() >= deadline:
+                    raise
+                time.sleep(0.05)
+
+    def _capture_clipboard_text(self) -> ClipboardTextSnapshot:
+        import win32clipboard  # type: ignore[import-not-found]
+        import win32con  # type: ignore[import-not-found]
+
+        self._open_windows_clipboard()
+        try:
+            has_text = bool(
+                win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT)
+            )
+            text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT) if has_text else None
+            return ClipboardTextSnapshot(
+                text=str(text) if text is not None else None,
+                had_unicode_text=has_text,
+            )
+        finally:
+            win32clipboard.CloseClipboard()
+
+    def _write_file_drop_clipboard(self, file_path: Path) -> None:
+        from ctypes import wintypes
+
+        import win32clipboard  # type: ignore[import-not-found]
+        import win32con  # type: ignore[import-not-found]
+
+        class DROPFILES(ctypes.Structure):
+            _fields_ = [
+                ("pFiles", wintypes.DWORD),
+                ("pt", wintypes.POINT),
+                ("fNC", wintypes.BOOL),
+                ("fWide", wintypes.BOOL),
+            ]
+
+        file_list = (str(file_path) + "\0\0").encode("utf-16le")
+        header = DROPFILES()
+        header.pFiles = ctypes.sizeof(DROPFILES)
+        header.fWide = True
+        payload_size = ctypes.sizeof(header) + len(file_list)
+
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.SetClipboardData.restype = wintypes.HANDLE
+
+        handle = kernel32.GlobalAlloc(0x0042, payload_size)
+        if not handle:
+            raise OSError("GlobalAlloc failed")
+        transferred = False
+        try:
+            pointer = kernel32.GlobalLock(handle)
+            if not pointer:
+                raise OSError("GlobalLock failed")
+            try:
+                ctypes.memmove(pointer, ctypes.byref(header), ctypes.sizeof(header))
+                ctypes.memmove(
+                    pointer + ctypes.sizeof(header),
+                    file_list,
+                    len(file_list),
+                )
+            finally:
+                kernel32.GlobalUnlock(handle)
+
+            self._open_windows_clipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                if not user32.SetClipboardData(win32con.CF_HDROP, handle):
+                    raise OSError("SetClipboardData(CF_HDROP) failed")
+                transferred = True
+            finally:
+                win32clipboard.CloseClipboard()
+        finally:
+            if not transferred:
+                kernel32.GlobalFree(handle)
+
+    def _restore_clipboard_text(self, snapshot: ClipboardTextSnapshot) -> None:
+        import win32clipboard  # type: ignore[import-not-found]
+        import win32con  # type: ignore[import-not-found]
+
+        try:
+            self._open_windows_clipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                if snapshot.had_unicode_text:
+                    win32clipboard.SetClipboardText(
+                        snapshot.text or "",
+                        win32con.CF_UNICODETEXT,
+                    )
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception as exc:
+            logger.warning("Unable to restore clipboard text after WeChat file paste: %s", exc)
+
+    def _find_attachment_button(self, *, file_only: bool = False) -> Any | None:
+        self._require_window()
+        names = ("发送文件", "文件", "Send file", "File") if file_only else ATTACHMENT_BUTTON_NAMES
+        message_edit = self._find_message_edit()
+        edit_top: int | None = None
+        if message_edit is not None:
+            try:
+                edit_top = int(message_edit.rectangle().top)
+            except Exception:
+                pass
+        candidates: list[tuple[int, Any]] = []
+        for item in self.locator.descendants(self.window):
+            text = self._element_text(item).strip()
+            if not text or not any(name.casefold() in text.casefold() for name in names):
+                continue
+            control_type = self._element_control_type(item)
+            if control_type not in {"Button", "Pane", "Image", "Text", "Custom"}:
+                continue
+            score = 5 if text.casefold() in {name.casefold() for name in names[:2]} else 1
+            try:
+                rect = item.rectangle()
+                if edit_top is not None:
+                    if not edit_top - 120 <= rect.top <= edit_top + 80:
+                        continue
+                    score += 5
+            except Exception:
+                if edit_top is not None:
+                    continue
+            candidates.append((score, item))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+
+    def _click_attachment_button(self) -> str:
+        target = self._find_attachment_button()
+        if target is not None:
+            self._click_element_or_parent(target)
+            return "uia"
+        if self._click_template(
+            WECHAT_ATTACHMENT_TEMPLATE,
+            current_window_region=True,
+            timeout=1.5,
+        ):
+            return "image"
+        if self._click_window_relative(*ATTACHMENT_BUTTON_REL):
+            return "relative"
+        raise WeChatFileSendError(
+            code="ATTACHMENT_BUTTON_NOT_FOUND",
+            message="无法定位微信聊天窗口中的文件按钮",
+            retryable=True,
+        )
+
+    def _wait_for_native_file_dialog(self, timeout: float) -> Any:
+        desktop = self._get_desktop()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                windows = desktop.windows()
+            except Exception:
+                windows = []
+            for window in windows:
+                title = self._element_text(window).strip()
+                class_name = ""
+                try:
+                    class_name = str(window.element_info.class_name or "")
+                except Exception:
+                    pass
+                if title not in FILE_DIALOG_TITLES and class_name != "#32770":
+                    continue
+                if self._find_file_name_edit(window) is not None:
+                    try:
+                        window.set_focus()
+                    except Exception:
+                        pass
+                    return window
+            time.sleep(0.2)
+        raise WeChatFileSendError(
+            code="FILE_DIALOG_NOT_FOUND",
+            message="点击微信文件按钮后未出现 Windows 文件选择窗口",
+            retryable=True,
+        )
+
+    def _find_file_name_edit(self, dialog: Any) -> Any | None:
+        edits = self.locator.descendants(dialog, control_type="Edit")
+        if not edits:
+            return None
+        for edit in edits:
+            try:
+                if str(edit.element_info.automation_id or "") == "1148":
+                    return edit
+            except Exception:
+                pass
+        labelled = self.locator.find_by_name(
+            dialog,
+            FILE_NAME_LABELS,
+            control_types=("Text",),
+            timeout=0.1,
+        )
+        if labelled is not None:
+            try:
+                label_top = labelled.rectangle().top
+                edits.sort(key=lambda item: abs(item.rectangle().top - label_top))
+                return edits[0]
+            except Exception:
+                pass
+
+        def score(edit: Any) -> tuple[int, int]:
+            try:
+                rect = edit.rectangle()
+                return int(rect.top), int(rect.width())
+            except Exception:
+                return 0, 0
+        edits.sort(key=score, reverse=True)
+        return edits[0]
+
+    def _set_file_dialog_path(self, dialog: Any, file_path: Path) -> None:
+        edit = self._find_file_name_edit(dialog)
+        if edit is None:
+            raise WeChatFileSendError(
+                code="FILE_DIALOG_EDIT_NOT_FOUND",
+                message="无法定位文件选择窗口的文件名输入框",
+                retryable=True,
+            )
+        try:
+            edit.click_input()
+        except Exception:
+            pass
+        try:
+            edit.set_edit_text(str(file_path))
+            return
+        except Exception:
+            pass
+        self._send_keys("^a")
+        self._paste_text_preserving_clipboard(str(file_path))
+
+    def _paste_text_preserving_clipboard(self, text: str) -> None:
+        previous: str | None = None
+        try:
+            import pyperclip  # type: ignore[import-not-found]
+
+            try:
+                previous = pyperclip.paste()
+            except Exception:
+                previous = None
+            pyperclip.copy(text)
+            self._send_keys("^v")
+        except Exception:
+            from pywinauto.keyboard import send_keys  # type: ignore[import-not-found]
+
+            send_keys(text, with_spaces=True, pause=0.02)
+        finally:
+            if previous is not None:
+                try:
+                    import pyperclip  # type: ignore[import-not-found]
+
+                    pyperclip.copy(previous)
+                except Exception:
+                    pass
+
+    def _confirm_file_dialog(self, dialog: Any) -> None:
+        button = self.locator.find_by_name(
+            dialog,
+            OPEN_BUTTON_NAMES,
+            control_types=("Button",),
+            exact=True,
+            timeout=1.5,
+        )
+        if button is None:
+            raise WeChatFileSendError(
+                code="FILE_DIALOG_OPEN_FAILED",
+                message="无法定位文件选择窗口中的打开按钮",
+                retryable=True,
+            )
+        self._click_element_or_parent(button)
+        deadline = time.time() + 4.0
+        while time.time() < deadline:
+            if not self._dialog_is_visible(dialog):
+                return
+            time.sleep(0.2)
+        raise WeChatFileSendError(
+            code="FILE_DIALOG_OPEN_FAILED",
+            message="选择文件后文件窗口仍未关闭，尚未触发发送",
+            retryable=True,
+        )
+
+    @staticmethod
+    def _dialog_is_visible(dialog: Any) -> bool:
+        for method_name in ("is_visible", "exists"):
+            try:
+                method = getattr(dialog, method_name)
+                return bool(method())
+            except Exception:
+                continue
+        return False
+
+    def _snapshot_file_markers(self, file_name: str) -> set[tuple[int, int, int, int, int]]:
+        markers: set[tuple[int, int, int, int, int]] = set()
+        try:
+            items = self.window.descendants()
+        except Exception:
+            return markers
+        for item in items:
+            if file_name.casefold() not in self._element_text(item).casefold():
+                continue
+            try:
+                rect = item.rectangle()
+                markers.add(
+                    (
+                        self._window_handle(item),
+                        int(rect.left),
+                        int(rect.top),
+                        int(rect.width()),
+                        int(rect.height()),
+                    )
+                )
+            except Exception:
+                continue
+        return markers
+
+    def _file_marker_state(
+        self,
+        file_name: str,
+        baseline: set[tuple[int, int, int, int, int]],
+    ) -> str | None:
+        edit = self._find_message_edit()
+        edit_top: int | None = None
+        if edit is not None:
+            try:
+                edit_top = int(edit.rectangle().top)
+            except Exception:
+                pass
+        try:
+            items = self.window.descendants()
+        except Exception:
+            return None
+        states: list[str] = []
+        for item in items:
+            if file_name.casefold() not in self._element_text(item).casefold():
+                continue
+            try:
+                rect = item.rectangle()
+                marker = (
+                    self._window_handle(item),
+                    int(rect.left),
+                    int(rect.top),
+                    int(rect.width()),
+                    int(rect.height()),
+                )
+            except Exception:
+                continue
+            if marker in baseline:
+                continue
+            if edit_top is None:
+                continue
+            states.append("preview" if rect.top >= edit_top - 30 else "sent")
+        if "sent" in states:
+            return "sent"
+        if "preview" in states:
+            return "preview"
+        return None
+
+    def _wait_for_file_preview_or_sent(
+        self,
+        file_name: str,
+        *,
+        baseline: set[tuple[int, int, int, int, int]],
+        timeout: float,
+    ) -> str:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            state = self._file_marker_state(file_name, baseline)
+            if state is not None:
+                return state
+            time.sleep(0.25)
+        return "unknown"
+
+    def _find_send_button_near_input(self) -> Any | None:
+        edit = self._find_message_edit()
+        if edit is None:
+            return None
+        try:
+            edit_rect = edit.rectangle()
+        except Exception:
+            return None
+        candidates: list[Any] = []
+        for item in self.locator.descendants(self.window, control_type="Button"):
+            text = self._element_text(item).strip()
+            if text not in SEND_BUTTON_NAMES:
+                continue
+            try:
+                rect = item.rectangle()
+                if rect.top >= edit_rect.top - 40 and rect.left >= edit_rect.left:
+                    candidates.append(item)
+            except Exception:
+                continue
+        return candidates[0] if candidates else None
+
+    def _send_staged_file(self) -> str:
+        button = self._find_send_button_near_input()
+        if button is not None:
+            self._click_element_or_parent(button)
+            time.sleep(0.5)
+            return "button"
+        if self._click_send_button_visual(timeout=1.5):
+            time.sleep(0.5)
+            return "image"
+        edit = self._find_message_edit()
+        if edit is not None:
+            try:
+                edit.click_input()
+            except Exception:
+                pass
+        self._send_keys("{ENTER}")
+        time.sleep(0.5)
+        return "enter"
+
+    def _verify_outgoing_file(
+        self,
+        file_name: str,
+        *,
+        baseline: set[tuple[int, int, int, int, int]],
+        timeout: float,
+    ) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._file_marker_state(file_name, baseline) == "sent":
+                return True
+            time.sleep(0.25)
+        return False
 
     def _resolve_executable(self) -> Path:
         if self.launch_path:
@@ -2154,6 +2985,51 @@ def _clean_required(value: str | None, label: str) -> str:
     return text
 
 
+def _format_file_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / 1024 / 1024:.1f} MB"
+
+
+def _default_file_send_confirmation(
+    *,
+    recipient: str,
+    file: ValidatedLocalFile,
+) -> bool:
+    from src.core.user_interaction import get_user_interaction_broker
+
+    broker = get_user_interaction_broker()
+    broker.set_title("确认发送微信文件")
+    warning = (
+        "\n\n警告：该文件可能包含可执行内容。确认收件人和文件来源后再发送。"
+        if file.potentially_dangerous
+        else ""
+    )
+    answer = broker.prompt(
+        "准备通过微信发送文件\n\n"
+        f"发送对象：{recipient}\n"
+        f"文件名称：{file.name}\n"
+        f"文件大小：{_format_file_size(file.size_bytes)}\n"
+        f"文件路径：{file.path}"
+        f"{warning}\n\n"
+        "[确认发送] [取消]"
+    )
+    normalized = str(answer or "").strip().lower()
+    return normalized in {
+        "确认发送",
+        "确认",
+        "发送",
+        "approve",
+        "yes",
+        "y",
+        "true",
+        "1",
+        "是",
+    }
+
+
 def follow_official_account(
     account_name: str,
     *,
@@ -2204,8 +3080,91 @@ def send_contact_message(
 ) -> dict[str, Any]:
     contact = _clean_required(contact_name, "contact name")
     text = _clean_required(message, "message")
+    if looks_like_windows_file_path(text):
+        raise WeChatFileSendError(
+            code="ROUTE_VALIDATION_FAILED",
+            message="本地文件路径必须使用微信联系人发送文件技能",
+        )
     client = automation or PywinautoWechatAutomation(launch_path=launch_path)
     client.open()
     client.search_contact(contact)
     client.send_message(text)
     return {"success": True, "contact_name": contact, "message": text}
+
+
+def send_contact_file(
+    *,
+    recipient_name: str,
+    file_path: str,
+    launch_path: str | None = None,
+    automation: PywinautoWechatAutomation | None = None,
+    confirm_fn: Callable[..., bool] | None = None,
+    log_fn: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Validate, confirm, and submit one local file to a verified WeChat chat."""
+
+    recipient = _clean_required(recipient_name, "recipient name")
+    emit = log_fn or (lambda message: logger.info("WeChat file send: %s", message))
+    emit("正在验证文件")
+    validated = validate_local_file(file_path)
+    emit(f"文件已验证：{validated.name}（{_format_file_size(validated.size_bytes)}）")
+
+    client = automation or PywinautoWechatAutomation(launch_path=launch_path)
+    emit("正在打开微信")
+    client.open()
+
+    emit(f"正在查找“{recipient}”")
+    contact = client.search_contact_verified(recipient)
+    if not contact.verified or not contact.displayed_name:
+        raise WeChatFileSendError(
+            code="CONTACT_UNVERIFIED",
+            message="无法确认微信发送对象",
+        )
+    emit(f"已确认发送对象：{contact.displayed_name}")
+
+    emit("等待确认发送")
+    confirmer = confirm_fn or _default_file_send_confirmation
+    if not confirmer(recipient=contact.displayed_name, file=validated):
+        return {
+            "success": False,
+            "cancelled": True,
+            "status": "cancelled",
+            "code": "USER_CANCELLED",
+            "recipient_name": contact.displayed_name,
+            "file_name": validated.name,
+            "file_size_bytes": validated.size_bytes,
+        }
+
+    revalidate_local_file(validated)
+    emit("正在选择文件")
+    try:
+        result = client.send_file(validated.path)
+    except WeChatFileSendError as exc:
+        if not exc.send_may_have_started:
+            raise
+        emit("已触发发送，但无法确认结果；请检查聊天记录，不要直接重试")
+        return {
+            "success": False,
+            "status": "unknown",
+            "code": "SEND_STATUS_UNKNOWN",
+            "message": exc.message,
+            "recipient_name": contact.displayed_name,
+            "file_name": validated.name,
+            "file_size_bytes": validated.size_bytes,
+            "method": str(exc.details.get("method") or "unknown"),
+            "verified": False,
+            "retryable": False,
+            "send_may_have_started": True,
+        }
+
+    emit("文件发送操作已完成")
+    return {
+        "success": result.success,
+        "status": result.status,
+        "recipient_name": contact.displayed_name,
+        "file_name": validated.name,
+        "file_size_bytes": validated.size_bytes,
+        "method": result.method,
+        "verified": result.verified,
+        "phase": result.phase.value,
+    }

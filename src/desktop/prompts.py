@@ -141,6 +141,7 @@ def parse_desktop_prompt(
             {"id": "reject", "label": "拒绝", "value": None},
         ]
 
+    is_wechat_file_send = "微信" in question and "发送文件" in question
     return {
         "prompt_type": prompt_type,
         "title": display_title,
@@ -159,5 +160,9 @@ def parse_desktop_prompt(
         "fields": field_defs,
         "options": options,
         "actions": actions,
-        "risk_level": "low" if prompt_type != "confirmation" else "medium",
+        "risk_level": (
+            "high"
+            if is_wechat_file_send
+            else ("low" if prompt_type != "confirmation" else "medium")
+        ),
     }
