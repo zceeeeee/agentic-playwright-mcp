@@ -1912,7 +1912,7 @@ class AgentLoop:
             logger.info("ACT: script executed successfully")
 
             # 保存成功的脚本到经验库
-            if self._experience and script_to_run:
+            if not self._desktop_only and self._experience and script_to_run:
                 try:
                     page = get_browser_manager().get_page()
                     site = self._extract_site(page.url)
@@ -1959,7 +1959,9 @@ class AgentLoop:
             )
 
             # 尝试自愈：如果有选择器错误，可以降级
-            if "选择器" in step.error or "selector" in step.error.lower():
+            if not self._desktop_only and (
+                "选择器" in step.error or "selector" in step.error.lower()
+            ):
                 return self._try_heal(step)
 
             return AgentState.FAILED

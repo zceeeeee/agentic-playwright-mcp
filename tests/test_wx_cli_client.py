@@ -186,6 +186,21 @@ def test_query_normalization_clamps_limit_and_maps_dates_and_type() -> None:
     assert warnings
 
 
+def test_relative_dates_use_the_local_calendar() -> None:
+    recent, _ = normalize_history_query(
+        chat_name="张三",
+        since="最近 7 天",
+        today=date(2026, 7, 15),
+    )
+    yesterday, _ = normalize_history_query(
+        chat_name="张三",
+        until="昨天",
+        today=date(2026, 7, 15),
+    )
+    assert recent.since == "2026-07-09"
+    assert yesterday.until == "2026-07-14"
+
+
 @pytest.mark.parametrize(
     ("kwargs", "code"),
     [

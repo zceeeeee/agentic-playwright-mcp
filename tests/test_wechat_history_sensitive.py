@@ -4,9 +4,12 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.core.agent_loop import AgentTaskResult
-from src.core.script_engine import ScriptEngine
+from fastapi.testclient import TestClient
+
+from src.core.agent_loop import AgentLoop, AgentTaskResult
+from src.core.script_engine import ScriptEngine, ScriptResult
 from src.core.skill_router import SkillRouter
+from src.desktop.api import create_app
 from src.desktop.database import DesktopDatabase
 from src.desktop.events import DesktopEventHub
 from src.desktop.sensitive_result_store import SensitiveResultStore
@@ -117,6 +120,23 @@ def test_desktop_wechat_task_does_not_launch_browser(tmp_path: Path) -> None:
     service.shutdown()
 
 
+def test_agent_loop_desktop_mode_routes_without_reading_a_browser_page() -> None:
+    browser = MagicMock()
+    browser.is_alive.return_value = False
+    engine = MagicMock()
+    engine.execute.return_value = ScriptResult(success=True, output="done")
+
+    with (
+        patch("src.core.agent_loop.get_browser_manager", return_value=browser),
+        patch("src.core.agent_loop.get_script_engine", return_value=engine),
+    ):
+        result = AgentLoop(max_steps=3, desktop_only=True).run("读取微信历史记录")
+
+    assert result.success is True
+    browser.get_page.assert_not_called()
+    browser.launch.assert_not_called()
+
+
 def test_history_skill_is_registered_and_returns_only_safe_metadata() -> None:
     assert "wechat_read_contact_history" in get_controls_exports()
     source = Path(
@@ -182,3 +202,38 @@ def test_missing_chat_name_uses_required_parameter_prompt() -> None:
     assert decision.skill is not None
     assert decision.skill.id == "domain/wechat_read_contact_history"
     assert "panel_prompt" in decision.script
+
+
+def test_sensitive_summary_api_requires_explicit_approval(tmp_path: Path) -> None:
+    app = create_app(token="test-token", database_path=tmp_path / "api.db")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/sensitive-results/unknown/summarize",
+            headers={"Authorization": "Bearer test-token"},
+            json={"approved": False},
+        )
+    assert response.status_code == 403
+
+
+def test_wx_cli_status_api_does_not_expose_sensitive_data(tmp_path: Path) -> None:
+    status = {
+        "installed": True,
+        "executable": "wx.exe",
+        "version": "0.3.0",
+        "compatible": True,
+        "initialized": True,
+        "daemon_available": True,
+        "sessions_available": True,
+        "error_code": None,
+        "message": "ok",
+    }
+    with patch.object(DesktopTaskService, "wx_cli_status", return_value=status):
+        app = create_app(token="test-token", database_path=tmp_path / "api.db")
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/wx-cli/status",
+                headers={"Authorization": "Bearer test-token"},
+            )
+    assert response.status_code == 200
+    assert response.json() == status
+    assert "messages" not in response.json()

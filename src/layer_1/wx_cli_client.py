@@ -856,7 +856,7 @@ def _normalize_date_value(value: Any, *, today: date, is_until: bool) -> str | N
         return today.isoformat()
     if text == "昨天":
         day = today - timedelta(days=1)
-        return today.isoformat() if is_until else day.isoformat()
+        return day.isoformat()
     relative = re.fullmatch(r"最近\s*(\d{1,3})\s*天", text)
     if relative:
         return (today if is_until else today - timedelta(days=int(relative.group(1)) - 1)).isoformat()

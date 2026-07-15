@@ -378,3 +378,48 @@ test("late events from a superseded task cannot enter the new task output", asyn
   assert.equal(useAgentStore.getState().currentTaskId, "task-late-new");
   assert.equal(useAgentStore.getState().visualState, "running");
 });
+
+test("wechat history events stay outside persisted chat messages", () => {
+  installDesktopBridge();
+  useAgentStore.setState({
+    currentConversationId: "conversation-sensitive",
+    currentTaskId: "task-sensitive",
+    messages: [],
+    confirmations: [],
+    wechatHistoryResults: []
+  });
+
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "wechat-history-1",
+    type: "wechat_history_result",
+    task_id: "task-sensitive",
+    conversation_id: "conversation-sensitive",
+    timestamp: "2026-07-15T00:00:00.000Z",
+    payload: {
+      result_id: "sensitive-1",
+      chat: "张三",
+      chat_type: "private",
+      is_group: false,
+      count: 1,
+      messages: [{
+        timestamp: 1,
+        time: "2026-07-15 08:00:00",
+        sender: "张三",
+        content: "敏感原文",
+        type: "text",
+        local_id: 1
+      }],
+      meta: { status: "ok", unknown_shards_count: 0 },
+      warnings: [],
+      sensitive: true,
+      persist: false
+    }
+  });
+
+  assert.deepEqual(useAgentStore.getState().messages, []);
+  assert.equal(useAgentStore.getState().wechatHistoryResults.length, 1);
+  assert.equal(
+    useAgentStore.getState().wechatHistoryResults[0].messages[0].content,
+    "敏感原文"
+  );
+});

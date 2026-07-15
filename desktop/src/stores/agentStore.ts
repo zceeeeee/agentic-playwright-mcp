@@ -435,10 +435,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set((state) => ({
       messages: [...state.messages, optimistic],
       confirmations: [],
-<<<<<<< HEAD
       wechatHistoryResults: [],
-=======
->>>>>>> 651ecfd987e362e1d9b57b9e7f004814ddca6704
       visualState: "running"
     }));
     const task = await apiRequest<{ id: string }>("/api/tasks", {
@@ -492,7 +489,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   handleBackendEvent: (event) => {
     const state = get();
     if (event.conversation_id && state.currentConversationId && event.conversation_id !== state.currentConversationId) return;
-<<<<<<< HEAD
     if (event.type === "wechat_history_result") {
       const result = {
         ...event.payload,
@@ -507,8 +503,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       }));
       return;
     }
-=======
->>>>>>> 651ecfd987e362e1d9b57b9e7f004814ddca6704
     if (event.task_id && supersededTaskIds.has(event.task_id)) return;
     if (event.type === "agent_state_changed") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
