@@ -308,6 +308,7 @@ class DesktopTaskService:
                         conversation_id=control.conversation_id,
                         payload={"reason": "desktop_only_task"},
                     )
+                self._initialize_wechat_runtime(control)
             elif not browser.is_alive():
                 headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
                 browser.launch(headless=headless)
@@ -440,6 +441,22 @@ class DesktopTaskService:
             with self._lock:
                 if self._active_task_id == control.task_id:
                     self._active_task_id = None
+
+    def _initialize_wechat_runtime(self, control: TaskControl) -> None:
+        from src.layer_1.wx_cli_client import WxCliClient, WxCliError
+
+        self.add_progress(control, "正在自动初始化 wx-cli...", details={"source": "wx_cli"})
+        try:
+            status = WxCliClient().initialize(cancel_event=control.cancel_event)
+        except WxCliError as exc:
+            if control.cancel_event.is_set() or exc.code == "WX_CLI_CANCELLED":
+                raise DesktopTaskCancelled("任务已取消") from exc
+            raise
+        self.add_progress(
+            control,
+            f"wx-cli {status.version or ''} 初始化完成。".replace("  ", " "),
+            details={"source": "wx_cli", "version": status.version},
+        )
 
     def add_progress(
         self,

@@ -1,7 +1,7 @@
 """Safe adapter for the project-local wx-cli runtime.
 
-This module never invokes a shell and never logs wx-cli stdout. It only exposes
-the small read-only command surface required by WeChat history queries.
+This module never invokes a shell and never logs wx-cli stdout. It exposes the
+fixed initialization and read-only command surface required by WeChat tasks.
 """
 
 from __future__ import annotations
@@ -319,6 +319,90 @@ class WxCliClient:
         self.resolver = resolver or WxCliExecutableResolver(self.repository_root)
         self.max_stdout_bytes = max_stdout_bytes
 
+    def initialize(
+        self,
+        *,
+        cancel_event: threading.Event | None = None,
+        timeout: float = 120,
+    ) -> WxCliStatus:
+        """Run ``wx init`` before a WeChat task and verify the resulting state."""
+
+        command = self.resolver.resolve()
+        elevated_force_used = False
+        result = self._invoke(
+            ["init"], timeout=timeout, cancel_event=cancel_event, command=command
+        )
+        if result.returncode != 0:
+            error = self._error_from_command(result)
+            if sys.platform != "win32" or error.code not in {
+                "WX_CLI_COMMAND_FAILED",
+                "WX_CLI_DECRYPT_FAILED",
+                "WX_CLI_NOT_INITIALIZED",
+                "WX_CLI_PERMISSION_DENIED",
+            }:
+                raise error
+            result = self._invoke_elevated_windows(
+                command,
+                ["init", "--force"],
+                timeout=timeout,
+                cancel_event=cancel_event,
+            )
+            elevated_force_used = True
+            if result.returncode != 0:
+                raise WxCliError(
+                    code="WX_CLI_INIT_FAILED",
+                    message=(
+                        "wx-cli 自动初始化失败。请确认微信已登录，并允许 Windows "
+                        "管理员权限提示后重试。"
+                    ),
+                    details={"returncode": result.returncode},
+                    retryable=True,
+                    user_action_required=True,
+                )
+
+        status = self.check_status(cancel_event=cancel_event)
+        if (
+            not status.initialized
+            and sys.platform == "win32"
+            and not elevated_force_used
+            and status.error_code
+            in {
+                "WX_CLI_COMMAND_FAILED",
+                "WX_CLI_DECRYPT_FAILED",
+                "WX_CLI_NOT_INITIALIZED",
+                "WX_CLI_PERMISSION_DENIED",
+            }
+        ):
+            result = self._invoke_elevated_windows(
+                command,
+                ["init", "--force"],
+                timeout=timeout,
+                cancel_event=cancel_event,
+            )
+            if result.returncode != 0:
+                raise WxCliError(
+                    code="WX_CLI_INIT_FAILED",
+                    message=(
+                        "wx-cli 管理员强制初始化失败。请确认微信已登录，"
+                        "并允许 Windows 管理员权限提示后重试。"
+                    ),
+                    details={"returncode": result.returncode},
+                    retryable=True,
+                    user_action_required=True,
+                )
+            status = self.check_status(cancel_event=cancel_event)
+        if not status.initialized:
+            raise WxCliError(
+                code=status.error_code or "WX_CLI_INIT_FAILED",
+                message=(
+                    f"wx-cli 自动初始化后仍无法读取微信会话：{status.message}"
+                ),
+                retryable=True,
+                user_action_required=True,
+            )
+        logger.info("wx-cli automatic initialization completed version=%s", status.version)
+        return status
+
     def check_status(self, *, cancel_event: threading.Event | None = None) -> WxCliStatus:
         try:
             command = self.resolver.resolve()
@@ -568,6 +652,118 @@ class WxCliClient:
             duration_seconds=time.monotonic() - started,
         )
 
+    def _invoke_elevated_windows(
+        self,
+        command: list[str],
+        args: list[str],
+        *,
+        timeout: float,
+        cancel_event: threading.Event | None = None,
+    ) -> _CommandResult:
+        """Run a fixed wx-cli command through the Windows UAC boundary."""
+
+        if sys.platform != "win32":
+            raise WxCliError(
+                code="WX_CLI_PERMISSION_DENIED",
+                message="当前平台不支持 Windows 管理员权限初始化。",
+                user_action_required=True,
+            )
+
+        import ctypes
+        from ctypes import wintypes
+
+        class ShellExecuteInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("fMask", ctypes.c_ulong),
+                ("hwnd", wintypes.HWND),
+                ("lpVerb", wintypes.LPCWSTR),
+                ("lpFile", wintypes.LPCWSTR),
+                ("lpParameters", wintypes.LPCWSTR),
+                ("lpDirectory", wintypes.LPCWSTR),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", wintypes.HINSTANCE),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", wintypes.LPCWSTR),
+                ("hkeyClass", wintypes.HKEY),
+                ("dwHotKey", wintypes.DWORD),
+                ("hIconOrMonitor", wintypes.HANDLE),
+                ("hProcess", wintypes.HANDLE),
+            ]
+
+        executable = str(Path(command[0]).resolve())
+        parameters = subprocess.list2cmdline([*command[1:], *args])
+        info = ShellExecuteInfo()
+        info.cbSize = ctypes.sizeof(info)
+        info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+        info.lpVerb = "runas"
+        info.lpFile = executable
+        info.lpParameters = parameters
+        info.lpDirectory = str(self.repository_root)
+        info.nShow = 0
+
+        started = time.monotonic()
+        if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+            error_code = int(ctypes.windll.kernel32.GetLastError())
+            if error_code == 1223:
+                raise WxCliError(
+                    code="WX_CLI_INIT_CANCELLED",
+                    message="已取消 wx-cli 管理员权限初始化。",
+                    user_action_required=True,
+                )
+            raise WxCliError(
+                code="WX_CLI_PERMISSION_DENIED",
+                message="无法请求 Windows 管理员权限来初始化 wx-cli。",
+                details={"windows_error": error_code},
+                user_action_required=True,
+            )
+
+        handle = info.hProcess
+        try:
+            deadline = started + max(5.0, min(float(timeout), 180.0))
+            while True:
+                wait_result = ctypes.windll.kernel32.WaitForSingleObject(handle, 50)
+                if wait_result == 0:
+                    break
+                if wait_result == 0xFFFFFFFF:
+                    raise WxCliError(
+                        code="WX_CLI_COMMAND_FAILED",
+                        message="等待 wx-cli 管理员初始化进程时发生错误。",
+                        retryable=True,
+                    )
+                if cancel_event is not None and cancel_event.is_set():
+                    ctypes.windll.kernel32.TerminateProcess(handle, 1)
+                    raise WxCliError(
+                        code="WX_CLI_CANCELLED",
+                        message="微信任务已取消，wx-cli 初始化已终止。",
+                    )
+                if time.monotonic() >= deadline:
+                    ctypes.windll.kernel32.TerminateProcess(handle, 1)
+                    raise WxCliError(
+                        code="WX_CLI_TIMEOUT",
+                        message="wx-cli 自动初始化超时，请稍后重试。",
+                        retryable=True,
+                    )
+
+            exit_code = wintypes.DWORD()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(
+                handle, ctypes.byref(exit_code)
+            ):
+                raise WxCliError(
+                    code="WX_CLI_COMMAND_FAILED",
+                    message="无法获取 wx-cli 管理员初始化结果。",
+                    retryable=True,
+                )
+            return _CommandResult(
+                returncode=int(exit_code.value),
+                stdout="",
+                stderr="",
+                duration_seconds=time.monotonic() - started,
+            )
+        finally:
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+
     @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
         if process.poll() is not None:
@@ -724,12 +920,20 @@ class WxCliClient:
     @staticmethod
     def _error_from_command(result: _CommandResult) -> WxCliError:
         text = f"{result.stderr}\n{result.stdout}".lower()
-        if any(token in text for token in ("未初始化", "not initialized", "无法解密", "decrypt", "session.db", "all_keys")):
+        if any(token in text for token in ("无法解密", "decrypt", "session.db")):
+            return WxCliError(
+                code="WX_CLI_DECRYPT_FAILED",
+                message=(
+                    "wx-cli 无法解密 session.db，当前数据库密钥可能为空或已经失效。"
+                ),
+                user_action_required=True,
+            )
+        if any(token in text for token in ("未初始化", "not initialized", "all_keys")):
             return WxCliError(
                 code="WX_CLI_NOT_INITIALIZED",
                 message=(
-                    "wx-cli 尚未初始化。请保持微信已登录，并以管理员身份执行："
-                    "tools\\wx-cli\\node_modules\\.bin\\wx.cmd init"
+                    "wx-cli 尚未初始化。系统将在微信任务开始时自动执行 wx init；"
+                    "请保持微信已登录并允许 Windows 管理员权限提示。"
                 ),
                 user_action_required=True,
             )

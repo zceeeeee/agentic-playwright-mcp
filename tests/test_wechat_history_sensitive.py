@@ -112,10 +112,12 @@ def test_desktop_wechat_task_does_not_launch_browser(tmp_path: Path) -> None:
     with (
         patch("src.desktop.task_service.get_browser_manager", return_value=browser),
         patch("src.desktop.task_service.AgentLoop", return_value=agent) as agent_class,
+        patch.object(service, "_initialize_wechat_runtime") as initialize,
     ):
         service._run_task(control, "微信给张三发送你好")
 
     browser.launch.assert_not_called()
+    initialize.assert_called_once_with(control)
     assert agent_class.call_args.kwargs["desktop_only"] is True
     service.shutdown()
 

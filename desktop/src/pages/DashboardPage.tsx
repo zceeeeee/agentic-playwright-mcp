@@ -252,7 +252,7 @@ function WechatDataSettings() {
   useEffect(() => { void refresh(); }, []);
   return (
     <div className="page-view settings-view">
-      <PageHeading title="微信数据读取" description="使用项目内 wx-cli 读取您自己的本地微信数据。聊天原文只在内存中临时显示。" />
+      <PageHeading title="微信数据读取" description="每个微信任务开始时会自动执行 wx init；需要提权时请允许 Windows 权限提示。聊天原文只在内存中临时显示。" />
       <div className="settings-form">
         <section className="settings-section">
           <h2>wx-cli 状态</h2>
@@ -266,7 +266,7 @@ function WechatDataSettings() {
           <div className="settings-actions">
             <button className="button-primary" disabled={loading} onClick={() => void refresh()}>{loading ? "检测中" : "重新检测"}</button>
             <button className="button-secondary" onClick={() => void copy("install", "npm.cmd install --prefix tools/wx-cli")}>{copied === "install" ? "已复制" : "复制安装命令"}</button>
-            <button className="button-secondary" onClick={() => void copy("init", "tools\\wx-cli\\node_modules\\.bin\\wx.cmd init")}>{copied === "init" ? "已复制" : "复制初始化命令"}</button>
+            <button className="button-secondary" onClick={() => void copy("init", "tools\\wx-cli\\node_modules\\.bin\\wx.cmd init")}>{copied === "init" ? "已复制" : "复制手动初始化命令"}</button>
             <button className="button-secondary" onClick={() => void copy("force", "tools\\wx-cli\\node_modules\\.bin\\wx.cmd init --force")}>{copied === "force" ? "已复制" : "复制强制初始化命令"}</button>
           </div>
         </section>

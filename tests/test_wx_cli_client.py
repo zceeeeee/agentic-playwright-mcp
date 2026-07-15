@@ -6,6 +6,7 @@ import sys
 import threading
 from datetime import date
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,8 +16,10 @@ from src.layer_1.wx_cli_client import (
     WxCliClient,
     WxCliError,
     WxCliExecutableResolver,
+    WxCliStatus,
     WxHistoryMeta,
     WxHistoryQuery,
+    _CommandResult,
     normalize_history_query,
 )
 
@@ -111,6 +114,120 @@ def test_invoke_honors_cancellation(tmp_path: Path) -> None:
     finally:
         timer.cancel()
     assert exc_info.value.code == "WX_CLI_CANCELLED"
+
+
+def test_initialize_runs_wx_init_and_verifies_status(tmp_path: Path) -> None:
+    client = WxCliClient(
+        resolver=StaticResolver(["wx.exe"]),
+        repository_root=tmp_path,
+    )
+    status = WxCliStatus(
+        installed=True,
+        executable="wx.exe",
+        version="0.3.0",
+        compatible=True,
+        initialized=True,
+        daemon_available=True,
+        sessions_available=True,
+        error_code=None,
+        message="ok",
+    )
+    client._invoke = MagicMock(
+        return_value=_CommandResult(0, "", "", 0.1)
+    )
+    client.check_status = MagicMock(return_value=status)
+
+    assert client.initialize() == status
+    client._invoke.assert_called_once_with(
+        ["init"], timeout=120, cancel_event=None, command=["wx.exe"]
+    )
+    client.check_status.assert_called_once_with(cancel_event=None)
+
+
+def test_initialize_uses_windows_elevation_after_permission_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = WxCliClient(
+        resolver=StaticResolver(["wx.exe"]),
+        repository_root=tmp_path,
+    )
+    status = WxCliStatus(
+        installed=True,
+        executable="wx.exe",
+        version="0.3.0",
+        compatible=True,
+        initialized=True,
+        daemon_available=True,
+        sessions_available=True,
+        error_code=None,
+        message="ok",
+    )
+    client._invoke = MagicMock(
+        return_value=_CommandResult(1, "", "permission denied", 0.1)
+    )
+    client._invoke_elevated_windows = MagicMock(
+        return_value=_CommandResult(0, "", "", 0.2)
+    )
+    client.check_status = MagicMock(return_value=status)
+    monkeypatch.setattr("src.layer_1.wx_cli_client.sys.platform", "win32")
+
+    assert client.initialize() == status
+    client._invoke_elevated_windows.assert_called_once_with(
+        ["wx.exe"], ["init", "--force"], timeout=120, cancel_event=None
+    )
+
+
+def test_initialize_forces_elevated_rescan_when_sessions_cannot_decrypt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = WxCliClient(
+        resolver=StaticResolver(["wx.exe"]),
+        repository_root=tmp_path,
+    )
+    broken = WxCliStatus(
+        installed=True,
+        executable="wx.exe",
+        version="0.3.0",
+        compatible=True,
+        initialized=False,
+        daemon_available=True,
+        sessions_available=False,
+        error_code="WX_CLI_DECRYPT_FAILED",
+        message="无法解密 session.db",
+    )
+    healthy = WxCliStatus(
+        installed=True,
+        executable="wx.exe",
+        version="0.3.0",
+        compatible=True,
+        initialized=True,
+        daemon_available=True,
+        sessions_available=True,
+        error_code=None,
+        message="ok",
+    )
+    client._invoke = MagicMock(
+        return_value=_CommandResult(0, "initialized", "", 0.1)
+    )
+    client._invoke_elevated_windows = MagicMock(
+        return_value=_CommandResult(0, "", "", 0.2)
+    )
+    client.check_status = MagicMock(side_effect=[broken, healthy])
+    monkeypatch.setattr("src.layer_1.wx_cli_client.sys.platform", "win32")
+
+    assert client.initialize() == healthy
+    client._invoke_elevated_windows.assert_called_once_with(
+        ["wx.exe"], ["init", "--force"], timeout=120, cancel_event=None
+    )
+    assert client.check_status.call_count == 2
+
+
+def test_decrypt_failure_has_a_specific_error_code() -> None:
+    error = WxCliClient._error_from_command(
+        _CommandResult(1, "", "错误: 无法解密 session.db", 0.1)
+    )
+    assert error.code == "WX_CLI_DECRYPT_FAILED"
+    assert "密钥" in error.message
 
 
 def test_parse_history_wrapper_and_freshness_warning() -> None:
