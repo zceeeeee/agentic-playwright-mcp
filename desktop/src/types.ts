@@ -33,6 +33,7 @@ export type DashboardSection =
   | "models"
   | "skills"
   | "browser"
+  | "wechat"
   | "permissions"
   | "logs"
   | "about";
@@ -110,6 +111,34 @@ export interface RuntimeInfo {
   model: string;
   api_key_masked: string;
   browser_headless: boolean;
+}
+
+export interface WxCliStatus {
+  installed: boolean;
+  initialized: boolean;
+  compatible: boolean;
+  executable?: string | null;
+  invocation_kind?: string | null;
+  version?: string | null;
+  daemon_available: boolean;
+  sessions_available: boolean;
+  failure_stage?: string | null;
+  error_code?: string | null;
+  message: string;
+  diagnostic?: string | null;
+  return_code?: number | null;
+}
+
+export interface WxCliSetupRequest extends WxCliStatus {
+  task_id?: string | null;
+  conversation_id?: string | null;
+  title: string;
+  commands: {
+    install: string;
+    initialize: string;
+    force_initialize: string;
+    verify: string;
+  };
 }
 
 export interface DesktopSettings {

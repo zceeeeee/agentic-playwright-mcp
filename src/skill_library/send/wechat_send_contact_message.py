@@ -23,6 +23,14 @@ def _value(value):
     return text
 
 
+def _looks_like_windows_file_path(value):
+    text = str(value or "")
+    for index in range(max(0, len(text) - 2)):
+        if text[index].isalpha() and text[index + 1 : index + 3] in {":\\", ":/"}:
+            return True
+    return text.strip().startswith("\\\\")
+
+
 def run(
     contact_name="-1",
     message="-1",
@@ -39,6 +47,8 @@ def run(
         raise ValueError("WeChat send requires contact_name")
     if not text:
         raise ValueError("WeChat send requires message")
+    if _looks_like_windows_file_path(text):
+        raise ValueError("Local file path must use wechat_send_contact_file")
 
     if send_fn is None:
         try:

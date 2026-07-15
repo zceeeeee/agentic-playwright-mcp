@@ -10,5 +10,5 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["electron/appearance.ts", "electron/appearanceModel.ts", "electron/backendLogging.ts", "electron/windowBehavior.ts", "electron/windowGeometry.ts", "src/services/api.ts", "src/stores/agentStore.ts", "src/stores/appearanceStore.ts", "src/types.ts", "src/utils/keyboard.ts", "src/utils/skillCatalog.ts", "tests/**/*.ts"]
+  "include": ["electron/appearance.ts", "electron/appearanceModel.ts", "electron/backendLogging.ts", "electron/windowBehavior.ts", "electron/windowGeometry.ts", "src/services/api.ts", "src/stores/agentStore.ts", "src/stores/appearanceStore.ts", "src/types.ts", "src/utils/commandHistory.ts", "src/utils/keyboard.ts", "src/utils/skillCatalog.ts", "tests/**/*.ts"]
 }

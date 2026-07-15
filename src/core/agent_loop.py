@@ -160,6 +160,7 @@ class AgentLoop:
         on_step: Callable[[AgentStep], None] | None = None,
         event_bus: EventBus | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        desktop_only: bool = False,
     ) -> None:
         """初始化 Agent 循环。
 
@@ -175,6 +176,7 @@ class AgentLoop:
         self._on_step = on_step
         self._bus = event_bus if event_bus is not None else get_event_bus()
         self._cancel_check = cancel_check
+        self._desktop_only = desktop_only
 
         # 延迟初始化的模块
         self._vision: VisionModule | None = None
@@ -305,14 +307,14 @@ class AgentLoop:
                 "New tab for task %d: %s", global_idx, task
             )
 
-            # 确保浏览器可用
-            bm = get_browser_manager()
-            if not bm.is_alive():
-                logger.info("Browser not alive, relaunching...")
-                bm.launch()
+            if not self._desktop_only:
+                bm = get_browser_manager()
+                if not bm.is_alive():
+                    logger.info("Browser not alive, relaunching...")
+                    bm.launch()
 
-            new_page = bm.new_tab()
-            bm.switch_page(new_page)
+                new_page = bm.new_tab()
+                bm.switch_page(new_page)
             sub_result = self._run_single(task)
             combined.sub_results.append(sub_result)
             combined.steps.extend(sub_result.steps)
@@ -353,11 +355,11 @@ class AgentLoop:
                 task,
             )
 
-            # 确保浏览器可用（前一个任务可能导致浏览器断开）
-            bm = get_browser_manager()
-            if not bm.is_alive():
-                logger.info("Browser not alive between sequential tasks, relaunching...")
-                bm.launch()
+            if not self._desktop_only:
+                bm = get_browser_manager()
+                if not bm.is_alive():
+                    logger.info("Browser not alive between sequential tasks, relaunching...")
+                    bm.launch()
 
             sub_result = self._run_single(task)
             combined.sub_results.append(sub_result)
@@ -378,7 +380,7 @@ class AgentLoop:
     def _run_single(self, task: str) -> AgentTaskResult:
         """执行单个任务（原始状态机逻辑）。"""
         result = AgentTaskResult(success=False, task=task)
-        state = AgentState.OBSERVE
+        state = AgentState.PLAN if self._desktop_only else AgentState.OBSERVE
         step_number = 0
         pending_script: str | None = None  # PLAN 阶段生成的脚本，传递给 ACT
         pending_actions: list[Any] | None = None
@@ -405,7 +407,7 @@ class AgentLoop:
 
             # 确保浏览器已启动
             bm = get_browser_manager()
-            if not bm.is_alive():
+            if not self._desktop_only and not bm.is_alive():
                 result.error = "浏览器未启动，请先调用 browser_launch"
                 logger.error("Agent task aborted: browser not launched")
                 self._emit_task_after(result, task_id)
@@ -827,10 +829,13 @@ class AgentLoop:
 
         # ── 1. SkillRouter 召回+精排 ──
         with log_timing("agent_plan_skill_router") as meta:
-            page_context = {
-                "url": get_browser_manager().get_page().url,
-                "title": get_browser_manager().get_page().title(),
-            }
+            if self._desktop_only:
+                page_context = {"url": "", "title": "Desktop task"}
+            else:
+                page_context = {
+                    "url": get_browser_manager().get_page().url,
+                    "title": get_browser_manager().get_page().title(),
+                }
             decision = self._skill_router.route(task, page_context=page_context)
             meta["source"] = decision.source
             meta["confidence"] = decision.confidence
@@ -838,6 +843,10 @@ class AgentLoop:
 
         # LLM 判定需要 explore
         if decision.source == "llm_explore":
+            if self._desktop_only:
+                step.result = "桌面任务未命中已注册技能，已停止且不会进入浏览器 Explore"
+                logger.warning("PLAN: desktop-only task rejected LLM Explore fallback")
+                return AgentState.FAILED
             step.action = "LLM 判定进入 Explore 模式"
             step.mode = "explore"
             step.result = f"LLM 路由判定: {decision.reason}"
@@ -885,6 +894,11 @@ class AgentLoop:
                 )
             )
             return AgentState.ACT
+
+        if self._desktop_only:
+            step.result = "桌面任务未命中已注册技能，已停止且不会进入浏览器 Explore"
+            logger.warning("PLAN: desktop-only task did not match a registered skill")
+            return AgentState.FAILED
 
         # ── 2. Explore 经验复用 ──
         experience = explore_agent.find_experience(task, page_context.get("url", ""))
@@ -1898,7 +1912,7 @@ class AgentLoop:
             logger.info("ACT: script executed successfully")
 
             # 保存成功的脚本到经验库
-            if self._experience and script_to_run:
+            if not self._desktop_only and self._experience and script_to_run:
                 try:
                     page = get_browser_manager().get_page()
                     site = self._extract_site(page.url)
@@ -1945,7 +1959,9 @@ class AgentLoop:
             )
 
             # 尝试自愈：如果有选择器错误，可以降级
-            if "选择器" in step.error or "selector" in step.error.lower():
+            if not self._desktop_only and (
+                "选择器" in step.error or "selector" in step.error.lower()
+            ):
                 return self._try_heal(step)
 
             return AgentState.FAILED
@@ -2126,6 +2142,3 @@ def run_task(
 
     agent = AgentLoop(max_steps=max_steps, library_dir=library_dir)
     return agent.run(task)
-
-
-

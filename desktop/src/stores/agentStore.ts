@@ -6,8 +6,11 @@ import type {
   ChatMessage,
   ConfirmationRequest,
   Conversation,
-  RuntimeInfo
+  RuntimeInfo,
+  WxCliSetupRequest,
+  WxCliStatus
 } from "../types.js";
+import type { WeChatHistoryResult } from "../types/wechatHistory.js";
 
 interface AgentStore {
   visualState: AgentVisualState;
@@ -19,6 +22,8 @@ interface AgentStore {
   conversations: Conversation[];
   messages: ChatMessage[];
   confirmations: ConfirmationRequest[];
+  wechatHistoryResults: WeChatHistoryResult[];
+  wxCliSetupRequest: WxCliSetupRequest | null;
   runtime: RuntimeInfo | null;
   backendConnected: boolean;
   initialized: boolean;
@@ -36,6 +41,11 @@ interface AgentStore {
   approveConfirmation(id: string, value?: string, actionId?: string, comment?: string): Promise<void>;
   rejectConfirmation(id: string, comment?: string): Promise<void>;
   cancelCurrentTask(taskId?: string): Promise<void>;
+  loadEarlierWechatHistory(resultId: string, limit?: number): Promise<void>;
+  summarizeWechatHistory(resultId: string): Promise<void>;
+  recheckWxCli(): Promise<WxCliStatus>;
+  initializeWxCli(force?: boolean): Promise<WxCliStatus>;
+  dismissWxCliSetup(): void;
   clearError(): void;
   handleBackendEvent(event: BackendEvent): void;
   addLog(message: string): void;
@@ -46,6 +56,7 @@ let reconnectTimer: number | null = null;
 let conversationSyncTimer: number | null = null;
 let pendingConversationId: string | null = null;
 const seenEvents = new Set<string>();
+const supersededTaskIds = new Set<string>();
 const activeTaskStatuses = new Set(["queued", "running", "waiting_confirmation"]);
 
 interface TaskSummary {
@@ -69,7 +80,7 @@ async function loadConversationSnapshot(conversationId: string) {
     apiRequest<TaskSummary[]>(`/api/tasks?conversation_id=${encodeURIComponent(conversationId)}`)
   ]);
   const activeTask = activeTaskFrom(tasks);
-  return { messages, activeTask, visualState: visualStateFor(activeTask) };
+  return { messages: dedupe(messages), activeTask, visualState: visualStateFor(activeTask) };
 }
 
 async function stopConversationResources(conversationId: string): Promise<void> {
@@ -90,7 +101,37 @@ async function stopConversationResources(conversationId: string): Promise<void> 
 function dedupe(messages: ChatMessage[]): ChatMessage[] {
   const map = new Map<string, ChatMessage>();
   for (const message of messages) map.set(message.id, message);
-  return Array.from(map.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const unique = Array.from(map.values());
+  const taskAnchors = new Map<string, string>();
+  for (const message of unique) {
+    if (!message.task_id) continue;
+    const current = taskAnchors.get(message.task_id);
+    if (!current || message.created_at < current) taskAnchors.set(message.task_id, message.created_at);
+  }
+  return unique.sort((a, b) => {
+    const anchorA = a.task_id ? taskAnchors.get(a.task_id) || a.created_at : a.created_at;
+    const anchorB = b.task_id ? taskAnchors.get(b.task_id) || b.created_at : b.created_at;
+    const anchorOrder = anchorA.localeCompare(anchorB);
+    if (anchorOrder) return anchorOrder;
+    if (a.task_id && a.task_id === b.task_id) return a.created_at.localeCompare(b.created_at);
+    return a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id);
+  });
+}
+
+function eventBelongsToCurrentTask(event: BackendEvent, currentTaskId: string | null): boolean {
+  return !event.task_id || !currentTaskId || event.task_id === currentTaskId;
+}
+
+function markTasksSuperseded(messages: ChatMessage[], currentTaskId: string | null): void {
+  if (currentTaskId) supersededTaskIds.add(currentTaskId);
+  for (const message of messages) {
+    if (message.task_id) supersededTaskIds.add(message.task_id);
+  }
+  while (supersededTaskIds.size > 2000) {
+    const oldest = supersededTaskIds.values().next().value as string | undefined;
+    if (!oldest) break;
+    supersededTaskIds.delete(oldest);
+  }
 }
 
 async function connectEvents(handle: (event: BackendEvent) => void, setConnected: (value: boolean) => void) {
@@ -125,6 +166,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   conversations: [],
   messages: [],
   confirmations: [],
+  wechatHistoryResults: [],
+  wxCliSetupRequest: null,
   runtime: null,
   backendConnected: false,
   initialized: false,
@@ -193,7 +236,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         messages: snapshot.messages,
         currentTaskId: snapshot.activeTask?.id || null,
         visualState: snapshot.visualState,
-        confirmations: []
+        confirmations: [],
+        wechatHistoryResults: [],
+        wxCliSetupRequest: null
       });
       await window.desktopAgent.setActiveConversation(id);
       return true;
@@ -231,7 +276,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         messages: snapshot.messages,
         currentTaskId: snapshot.activeTask?.id || null,
         visualState: snapshot.visualState,
-        confirmations: []
+        confirmations: [],
+        wechatHistoryResults: [],
+        wxCliSetupRequest: null
       });
     } catch (error) {
       set({ conversationError: error instanceof Error ? error.message : "无法同步当前会话" });
@@ -256,7 +303,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         currentTaskId: null,
         visualState: "idle",
         messages: [],
-        confirmations: []
+        confirmations: [],
+        wechatHistoryResults: [],
+        wxCliSetupRequest: null
       }));
       await window.desktopAgent.setActiveConversation(conversation.id);
     } catch (error) {
@@ -323,7 +372,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         currentTaskId: nextSnapshot.activeTask?.id || null,
         visualState: nextSnapshot.visualState,
         messages: nextSnapshot.messages,
-        confirmations: []
+        confirmations: [],
+        wechatHistoryResults: [],
+        wxCliSetupRequest: null
       });
       await window.desktopAgent.setActiveConversation(nextConversation.id);
       return true;
@@ -352,7 +403,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         currentConversationId: conversation.id,
         currentTaskId: null,
         visualState: "idle",
-        confirmations: []
+        confirmations: [],
+        wechatHistoryResults: [],
+        wxCliSetupRequest: null
       });
       await window.desktopAgent.setActiveConversation(conversation.id);
     } catch (error) {
@@ -372,6 +425,18 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       await get().createConversation();
       conversationId = get().currentConversationId;
     }
+    const previousState = get();
+    markTasksSuperseded(previousState.messages, previousState.currentTaskId);
+    if (previousState.currentTaskId && conversationId) {
+      await stopConversationResources(conversationId);
+      set({
+        currentTaskId: null,
+        visualState: "idle",
+        confirmations: [],
+        wechatHistoryResults: [],
+        wxCliSetupRequest: null
+      });
+    }
     const optimistic: ChatMessage = {
       id: `optimistic_${Date.now()}`,
       conversation_id: conversationId!,
@@ -380,12 +445,23 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       content: trimmed,
       created_at: new Date().toISOString()
     };
-    set((state) => ({ messages: [...state.messages, optimistic], visualState: "running" }));
+    set((state) => ({
+      messages: [...state.messages, optimistic],
+      confirmations: [],
+      wechatHistoryResults: [],
+      wxCliSetupRequest: null,
+      visualState: "running"
+    }));
     const task = await apiRequest<{ id: string }>("/api/tasks", {
       method: "POST",
       body: JSON.stringify({ conversation_id: conversationId, content: trimmed, attachments: [] })
     });
-    set({ currentTaskId: task.id });
+    set((state) => ({
+      currentTaskId: task.id,
+      messages: dedupe(state.messages.map((message) => message.id === optimistic.id
+        ? { ...message, task_id: task.id }
+        : message))
+    }));
   },
 
   approveConfirmation: async (id, value = "", actionId = "approve", comment = "") => {
@@ -408,24 +484,101 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     await apiRequest(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   },
 
+  loadEarlierWechatHistory: async (resultId, limit = 50) => {
+    await apiRequest(`/api/sensitive-results/${encodeURIComponent(resultId)}/load-more`, {
+      method: "POST",
+      body: JSON.stringify({ limit })
+    });
+  },
+
+  summarizeWechatHistory: async (resultId) => {
+    await apiRequest(`/api/sensitive-results/${encodeURIComponent(resultId)}/summarize`, {
+      method: "POST",
+      body: JSON.stringify({ approved: true })
+    });
+  },
+
+  recheckWxCli: async () => {
+    const status = await apiRequest<WxCliStatus>("/api/wx-cli/recheck", { method: "POST" });
+    if (status.initialized && status.compatible) set({ wxCliSetupRequest: null });
+    else set((state) => ({
+      wxCliSetupRequest: state.wxCliSetupRequest
+        ? { ...state.wxCliSetupRequest, ...status }
+        : state.wxCliSetupRequest
+    }));
+    return status;
+  },
+
+  initializeWxCli: async (force = false) => {
+    const status = await apiRequest<WxCliStatus>("/api/wx-cli/initialize", {
+      method: "POST",
+      body: JSON.stringify({ force })
+    });
+    if (status.initialized && status.compatible) set({ wxCliSetupRequest: null });
+    return status;
+  },
+
+  dismissWxCliSetup: () => set({ wxCliSetupRequest: null }),
+
   clearError: () => set({ visualState: "idle" }),
 
   handleBackendEvent: (event) => {
     const state = get();
     if (event.conversation_id && state.currentConversationId && event.conversation_id !== state.currentConversationId) return;
+    if (event.type === "wx_cli_setup_required") {
+      set({
+        wxCliSetupRequest: {
+          ...event.payload,
+          task_id: event.task_id,
+          conversation_id: event.conversation_id
+        } as WxCliSetupRequest,
+        visualState: "error"
+      });
+      return;
+    }
+    if (event.type === "wechat_history_result") {
+      const result = {
+        ...event.payload,
+        task_id: event.task_id,
+        conversation_id: event.conversation_id
+      } as WeChatHistoryResult;
+      set((current) => ({
+        wechatHistoryResults: [
+          ...current.wechatHistoryResults.filter((item) => item.result_id !== result.result_id),
+          result
+        ]
+      }));
+      return;
+    }
+    if (event.task_id && supersededTaskIds.has(event.task_id)) return;
     if (event.type === "agent_state_changed") {
+      if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
       set({ visualState: event.payload.state as AgentVisualState });
       return;
     }
+    if (event.type === "task_created") {
+      if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
+      set({ currentTaskId: event.task_id || null, visualState: "running" });
+      return;
+    }
     if (event.type === "task_started") {
+      if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
       set({ currentTaskId: event.task_id || null, visualState: "running" });
       return;
     }
     if (event.type === "task_cancelled") {
-      set({ currentTaskId: null, visualState: "idle" });
+      if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
+      set((current) => ({
+        currentTaskId: null,
+        visualState: "idle",
+        wechatHistoryResults: current.wechatHistoryResults.filter(
+          (item) => item.task_id !== event.task_id
+        )
+      }));
       return;
     }
     if (event.type === "task_succeeded" || event.type === "task_failed") {
+      if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
       set({ currentTaskId: null });
     }
     if (event.type === "assistant_message") {

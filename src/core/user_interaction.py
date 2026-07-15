@@ -31,6 +31,18 @@ class InteractionAdapter(Protocol):
 
     def read_events(self) -> list[dict[str, Any]]: ...
 
+    def cancel_event(self) -> threading.Event: ...
+
+    def publish_sensitive_result(
+        self,
+        kind: str,
+        payload: dict[str, Any],
+        *,
+        ttl_seconds: int = 1800,
+    ) -> str: ...
+
+    def summarize_sensitive_result(self, result_id: str) -> dict[str, Any]: ...
+
 
 class UserInteractionBroker:
     """Route logs and confirmation prompts to the active desktop task."""
@@ -91,6 +103,35 @@ class UserInteractionBroker:
         with self._lock:
             adapter = self._adapter
         return adapter.read_events() if adapter is not None else []
+
+    def cancel_event(self) -> threading.Event | None:
+        with self._lock:
+            adapter = self._adapter
+        return adapter.cancel_event() if adapter is not None else None
+
+    def publish_sensitive_result(
+        self,
+        kind: str,
+        payload: dict[str, Any],
+        *,
+        ttl_seconds: int = 1800,
+    ) -> str:
+        with self._lock:
+            adapter = self._adapter
+        if adapter is None:
+            raise RuntimeError("Sensitive results require an active desktop task")
+        return adapter.publish_sensitive_result(
+            kind,
+            payload,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def summarize_sensitive_result(self, result_id: str) -> dict[str, Any]:
+        with self._lock:
+            adapter = self._adapter
+        if adapter is None:
+            raise RuntimeError("Sensitive summaries require an active desktop task")
+        return adapter.summarize_sensitive_result(result_id)
 
 
 _instance: UserInteractionBroker | None = None

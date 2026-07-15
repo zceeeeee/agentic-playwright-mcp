@@ -1,0 +1,12 @@
+{
+  "name": "agentic-playwright-mcp-wx-cli-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Project-local wx-cli runtime for WeChat integrations.",
+  "scripts": {
+    "wx": "wx"
+  },
+  "dependencies": {
+    "@jackwener/wx-cli": "0.3.0"
+  }
+}

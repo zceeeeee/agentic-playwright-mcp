@@ -190,6 +190,120 @@ skills:
   # 微信客户端
   # ──────────────────────────────────────────────
 
+  - id: "domain/wechat_read_contact_history"
+    name: "微信读取联系人历史聊天记录"
+    type: "domain"
+    platform: "wechat"
+    action: "read_history"
+    triggers: ["微信聊天记录", "微信聊天历史", "历史消息", "消息记录", "聊天记录", "查看微信记录", "读取微信记录", "最近聊天", "文件传输助手"]
+    trigger_patterns:
+      - '^(?!.*(?:不要|别|禁止|取消|删除|清空|恢复|怎么|如何|安全吗))(?=.*(?:微信|wechat|文件传输助手))(?=.*(?:聊天记录|聊天历史|历史消息|消息记录|最近.{0,12}消息|以前.{0,12}聊天|读取.{0,12}记录|查看.{0,12}记录|看看.{0,12}聊天|总结.{0,12}聊天)).+$'
+      - '^(?!.*(?:不要|别|禁止|取消|删除|清空|恢复|怎么|如何|安全吗|发送|发消息|发文件))(?=.*(?:我和|我与|项目讨论群|文件传输助手))(?=.*(?:最近|以前|历史|从\s*\d{4}))(?=.*(?:聊天|消息|记录|总结)).+$'
+    url_patterns: []
+    description: "使用项目内 wx-cli 查询用户自己的本地微信数据库；不操作微信窗口，不把聊天原文写入智能体历史，也不会在未授权时发送给 AI"
+    version: "1.0.0"
+    confirm_before_run: true
+    examples:
+      - "读取我和张三最近 50 条微信聊天记录"
+      - "查看我和张三从 2026-06-01 到 2026-06-30 的微信聊天"
+      - "看看项目讨论群最近 100 条消息"
+      - "读取文件传输助手最近 20 条聊天记录"
+      - "查看我和张三最近的文件消息"
+      - "总结我和张三最近 100 条微信聊天记录"
+    params:
+      chat_name:
+        type: string
+        required: true
+        confirm: false
+        description: "微信联系人备注名、昵称、群聊名称、微信 ID 或文件传输助手"
+        extract_patterns:
+          - '(?:我和|我与)\s*["“]?(.+?)["”]?(?=\s*(?:最近|从|自|的微信|的聊天|的历史|微信聊天|聊天记录|历史消息|消息记录))'
+          - '(?:读取|查看|查询|查找|看看|获取|总结|归纳|分析)\s*["“]?(.+?)["”]?(?=\s*(?:最近|从|自|的微信|的聊天|的历史|微信聊天|聊天记录|历史消息|消息记录))'
+          - '(?:联系人|群聊|会话)\s*["“]?([^"”，,。；;\n]+)["”]?'
+          - '(文件传输助手)'
+      limit:
+        type: string
+        required: false
+        confirm: false
+        description: "读取消息数量，默认 50，单次最多 500"
+        extract_patterns:
+          - '(?:最近|读取|查看|查询|获取|拉取)\s*(\d{1,4})\s*条'
+          - '(\d{1,4})\s*条(?:微信)?(?:聊天记录|聊天消息|消息|记录)'
+      offset:
+        type: string
+        required: false
+        confirm: false
+        description: "分页偏移量"
+        extract_patterns:
+          - '(?:跳过|偏移|offset)\s*(\d{1,6})'
+      since:
+        type: string
+        required: false
+        confirm: false
+        description: "开始时间"
+        extract_patterns:
+          - '(?:从|自|开始时间)\s*(\d{4}-\d{1,2}-\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)'
+          - '(\d{4}年\d{1,2}月\d{1,2}日)\s*(?:开始|起|之后|以来)'
+          - '(最近\s*\d{1,3}\s*天|最近一周|最近一个月|最近30天|今天|昨天)'
+      until:
+        type: string
+        required: false
+        confirm: false
+        description: "结束时间"
+        extract_patterns:
+          - '(?:到|至|截止|结束时间)\s*(\d{4}-\d{1,2}-\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)'
+          - '(?:到|至)\s*(\d{4}年\d{1,2}月\d{1,2}日)'
+      message_type:
+        type: string
+        required: false
+        confirm: false
+        description: "消息类型"
+        extract_patterns:
+          - '(文字|文本|图片|语音|视频|表情|位置|链接|文件|通话|系统)(?:消息|记录)'
+      output_mode:
+        type: string
+        required: false
+        confirm: false
+        description: "display 表示仅展示，summary 表示请求 AI 总结"
+        extract_patterns:
+          - '(总结|归纳|分析|梳理)'
+
+  - id: "domain/wechat_send_contact_file"
+    name: "微信联系人发送文件"
+    type: "domain"
+    platform: "wechat"
+    action: "send_file"
+    triggers: ["微信", "wechat", "发送文件", "发文件", "传文件", "文件传输助手", "本地文件"]
+    trigger_patterns:
+      - '^(?!.*(?:不要|别|禁止|取消|请问|怎么|如何))(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号))(?=.*(?:发送文件|发文件|传文件|发送|发|传))(?=.*(?:[A-Za-z]:[\/]|\\)).+$'
+      - '^(?!.*(?:不要|别|禁止|取消|请问|怎么|如何))(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号)).*(?:发送文件|发文件|传文件).*$'
+    url_patterns: []
+    description: "打开 Windows 微信客户端，搜索并验证指定联系人或群聊，直接发送一个本地文件"
+    version: "1.0.0"
+    examples:
+      - '微信给张三发送"D:\comp_sci\培养方案.pdf"'
+      - '用微信把"D:\docs\年度报告 2026.pdf"发给文件传输助手'
+      - '微信发送"D:\project\需求说明.docx"给项目讨论群'
+    params:
+      recipient_name:
+        type: string
+        required: true
+        confirm: false
+        description: "微信联系人、群聊或文件传输助手的名称"
+        extract_patterns:
+          - '(?:微信|wechat)\s*(?:给|向)\s*["“]?(.+?)["”]?\s*(?:发送文件|发文件|传文件|发送|发|传)'
+          - '(?:发给|发送给|传给)\s*["“]?([^"”\n]+?)["”]?\s*$'
+          - '(?:给|向)\s*["“]?([^"”\n]+?)["”]?\s*$'
+          - '(?:给|向)\s*["“]?(.+?)["”]?\s*(?:发送|发|传)'
+      file_path:
+        type: string
+        required: true
+        confirm: false
+        description: "需要发送的本地文件绝对路径；路径包含空格时必须使用引号包裹"
+        extract_patterns:
+          - '["“]((?:[A-Za-z]:[\\/]|\\\\)[^"”\r\n]+)["”]'
+          - '((?:[A-Za-z]:[\\/]|\\\\)[^"”\s]+?\.[A-Za-z0-9]{1,16})(?=\s*(?:给|发给|发送给|传给|$))'
+
   - id: "domain/wechat_send_contact_message"
     name: "微信联系人发消息"
     type: "domain"
@@ -197,7 +311,7 @@ skills:
     action: "send"
     triggers: ["微信", "wechat", "发送", "发消息", "私信", "联系人", "文件传输助手"]
     trigger_patterns:
-      - "^(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号)).*(?:给|向).{1,40}(?:发送|发消息|私信|发)"
+      - '^(?=.*(?:微信|wechat))(?!.*(?:公众号|服务号))(?!.*(?:发送文件|发文件|传文件|文件路径|文件地址))(?!.*(?:[A-Za-z]:[\/]|\\)).*(?:给|向).{1,40}(?:发送|发消息|私信|发)'
     url_patterns: []
     description: "打开微信客户端，搜索指定联系人并发送一段消息"
     version: "1.0.0"
@@ -1059,8 +1173,16 @@ sources:
     file: "export/wps_writer_export.py"
     entry: "run"
 
+  - id: "domain/wechat_read_contact_history"
+    file: "read/wechat_read_contact_history.py"
+    entry: "run"
+
   - id: "domain/wechat_send_contact_message"
     file: "send/wechat_send_contact_message.py"
+    entry: "run"
+
+  - id: "domain/wechat_send_contact_file"
+    file: "send/wechat_send_contact_file.py"
     entry: "run"
 
   - id: "domain/wechat_follow_official_account"

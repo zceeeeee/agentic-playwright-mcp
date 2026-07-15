@@ -22,7 +22,12 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
     if (!pending || submitting) return;
     setSubmitting(true);
     try {
-      await approve(confirmation.confirmation_id, option.value ?? option.label, option.id);
+      const value = option.value ?? option.label;
+      if (String(value).trim() === "取消") {
+        await reject(confirmation.confirmation_id, "用户取消");
+      } else {
+        await approve(confirmation.confirmation_id, value, option.id);
+      }
     } finally {
       setSubmitting(false);
     }

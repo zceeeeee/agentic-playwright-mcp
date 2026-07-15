@@ -23,7 +23,13 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(body.detail || `HTTP ${response.status}`);
+    const detail = body.detail;
+    const message = typeof detail === "string"
+      ? detail
+      : detail && typeof detail === "object" && typeof detail.message === "string"
+        ? detail.message
+        : `HTTP ${response.status}`;
+    throw new Error(message);
   }
   return response.json() as Promise<T>;
 }
