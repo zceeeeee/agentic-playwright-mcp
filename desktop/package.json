@@ -4,7 +4,6 @@
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
-    "prebuild": "node electron/prepareWxCli.mjs",
     "build:main": "tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
     "build": "npm run build:main && npm run build:renderer",
@@ -12,18 +11,6 @@
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
-  },
-  "build": {
-    "extraResources": [
-      {
-        "from": "resources/tools/wx-cli/wx.exe",
-        "to": "tools/wx-cli/wx.exe"
-      },
-      {
-        "from": "THIRD_PARTY_NOTICES.md",
-        "to": "THIRD_PARTY_NOTICES.md"
-      }
-    ]
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",

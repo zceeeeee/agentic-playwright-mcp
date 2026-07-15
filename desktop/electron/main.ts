@@ -406,7 +406,6 @@ function settingsForBackend(): NodeJS.ProcessEnv {
   const env = withUtf8PythonEnvironment({
     ...process.env,
     DESKTOP_AGENT_TOKEN: backendToken,
-    AGENT_DESKTOP_RESOURCES_PATH: process.resourcesPath,
     LLM_PROVIDER: provider,
     BROWSER_HEADLESS: stored.browserHeadless || "false",
     DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",

@@ -6,11 +6,8 @@ import type {
   ChatMessage,
   ConfirmationRequest,
   Conversation,
-  RuntimeInfo,
-  WxCliSetupRequest,
-  WxCliStatus
+  RuntimeInfo
 } from "../types.js";
-import type { WeChatHistoryResult } from "../types/wechatHistory.js";
 
 interface AgentStore {
   visualState: AgentVisualState;
@@ -22,8 +19,6 @@ interface AgentStore {
   conversations: Conversation[];
   messages: ChatMessage[];
   confirmations: ConfirmationRequest[];
-  wechatHistoryResults: WeChatHistoryResult[];
-  wxCliSetupRequest: WxCliSetupRequest | null;
   runtime: RuntimeInfo | null;
   backendConnected: boolean;
   initialized: boolean;
@@ -41,11 +36,6 @@ interface AgentStore {
   approveConfirmation(id: string, value?: string, actionId?: string, comment?: string): Promise<void>;
   rejectConfirmation(id: string, comment?: string): Promise<void>;
   cancelCurrentTask(taskId?: string): Promise<void>;
-  loadEarlierWechatHistory(resultId: string, limit?: number): Promise<void>;
-  summarizeWechatHistory(resultId: string): Promise<void>;
-  recheckWxCli(): Promise<WxCliStatus>;
-  initializeWxCli(force?: boolean): Promise<WxCliStatus>;
-  dismissWxCliSetup(): void;
   clearError(): void;
   handleBackendEvent(event: BackendEvent): void;
   addLog(message: string): void;
@@ -166,8 +156,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   conversations: [],
   messages: [],
   confirmations: [],
-  wechatHistoryResults: [],
-  wxCliSetupRequest: null,
   runtime: null,
   backendConnected: false,
   initialized: false,
@@ -236,9 +224,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         messages: snapshot.messages,
         currentTaskId: snapshot.activeTask?.id || null,
         visualState: snapshot.visualState,
-        confirmations: [],
-        wechatHistoryResults: [],
-        wxCliSetupRequest: null
+        confirmations: []
       });
       await window.desktopAgent.setActiveConversation(id);
       return true;
@@ -276,9 +262,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         messages: snapshot.messages,
         currentTaskId: snapshot.activeTask?.id || null,
         visualState: snapshot.visualState,
-        confirmations: [],
-        wechatHistoryResults: [],
-        wxCliSetupRequest: null
+        confirmations: []
       });
     } catch (error) {
       set({ conversationError: error instanceof Error ? error.message : "无法同步当前会话" });
@@ -303,9 +287,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         currentTaskId: null,
         visualState: "idle",
         messages: [],
-        confirmations: [],
-        wechatHistoryResults: [],
-        wxCliSetupRequest: null
+        confirmations: []
       }));
       await window.desktopAgent.setActiveConversation(conversation.id);
     } catch (error) {
@@ -372,9 +354,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         currentTaskId: nextSnapshot.activeTask?.id || null,
         visualState: nextSnapshot.visualState,
         messages: nextSnapshot.messages,
-        confirmations: [],
-        wechatHistoryResults: [],
-        wxCliSetupRequest: null
+        confirmations: []
       });
       await window.desktopAgent.setActiveConversation(nextConversation.id);
       return true;
@@ -403,9 +383,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         currentConversationId: conversation.id,
         currentTaskId: null,
         visualState: "idle",
-        confirmations: [],
-        wechatHistoryResults: [],
-        wxCliSetupRequest: null
+        confirmations: []
       });
       await window.desktopAgent.setActiveConversation(conversation.id);
     } catch (error) {
@@ -429,13 +407,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     markTasksSuperseded(previousState.messages, previousState.currentTaskId);
     if (previousState.currentTaskId && conversationId) {
       await stopConversationResources(conversationId);
-      set({
-        currentTaskId: null,
-        visualState: "idle",
-        confirmations: [],
-        wechatHistoryResults: [],
-        wxCliSetupRequest: null
-      });
+      set({ currentTaskId: null, visualState: "idle", confirmations: [] });
     }
     const optimistic: ChatMessage = {
       id: `optimistic_${Date.now()}`,
@@ -448,8 +420,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set((state) => ({
       messages: [...state.messages, optimistic],
       confirmations: [],
-      wechatHistoryResults: [],
-      wxCliSetupRequest: null,
       visualState: "running"
     }));
     const task = await apiRequest<{ id: string }>("/api/tasks", {
@@ -484,72 +454,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     await apiRequest(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   },
 
-  loadEarlierWechatHistory: async (resultId, limit = 50) => {
-    await apiRequest(`/api/sensitive-results/${encodeURIComponent(resultId)}/load-more`, {
-      method: "POST",
-      body: JSON.stringify({ limit })
-    });
-  },
-
-  summarizeWechatHistory: async (resultId) => {
-    await apiRequest(`/api/sensitive-results/${encodeURIComponent(resultId)}/summarize`, {
-      method: "POST",
-      body: JSON.stringify({ approved: true })
-    });
-  },
-
-  recheckWxCli: async () => {
-    const status = await apiRequest<WxCliStatus>("/api/wx-cli/recheck", { method: "POST" });
-    if (status.initialized && status.compatible) set({ wxCliSetupRequest: null });
-    else set((state) => ({
-      wxCliSetupRequest: state.wxCliSetupRequest
-        ? { ...state.wxCliSetupRequest, ...status }
-        : state.wxCliSetupRequest
-    }));
-    return status;
-  },
-
-  initializeWxCli: async (force = false) => {
-    const status = await apiRequest<WxCliStatus>("/api/wx-cli/initialize", {
-      method: "POST",
-      body: JSON.stringify({ force })
-    });
-    if (status.initialized && status.compatible) set({ wxCliSetupRequest: null });
-    return status;
-  },
-
-  dismissWxCliSetup: () => set({ wxCliSetupRequest: null }),
-
   clearError: () => set({ visualState: "idle" }),
 
   handleBackendEvent: (event) => {
     const state = get();
     if (event.conversation_id && state.currentConversationId && event.conversation_id !== state.currentConversationId) return;
-    if (event.type === "wx_cli_setup_required") {
-      set({
-        wxCliSetupRequest: {
-          ...event.payload,
-          task_id: event.task_id,
-          conversation_id: event.conversation_id
-        } as WxCliSetupRequest,
-        visualState: "error"
-      });
-      return;
-    }
-    if (event.type === "wechat_history_result") {
-      const result = {
-        ...event.payload,
-        task_id: event.task_id,
-        conversation_id: event.conversation_id
-      } as WeChatHistoryResult;
-      set((current) => ({
-        wechatHistoryResults: [
-          ...current.wechatHistoryResults.filter((item) => item.result_id !== result.result_id),
-          result
-        ]
-      }));
-      return;
-    }
     if (event.task_id && supersededTaskIds.has(event.task_id)) return;
     if (event.type === "agent_state_changed") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
@@ -568,13 +477,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     }
     if (event.type === "task_cancelled") {
       if (!eventBelongsToCurrentTask(event, state.currentTaskId)) return;
-      set((current) => ({
-        currentTaskId: null,
-        visualState: "idle",
-        wechatHistoryResults: current.wechatHistoryResults.filter(
-          (item) => item.task_id !== event.task_id
-        )
-      }));
+      set({ currentTaskId: null, visualState: "idle" });
       return;
     }
     if (event.type === "task_succeeded" || event.type === "task_failed") {

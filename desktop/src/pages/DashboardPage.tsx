@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Bot,
-  Database,
   Eye,
   EyeOff,
   GitFork,
@@ -21,7 +20,7 @@ import {
 } from "lucide-react";
 import { apiRequest, desktopSettings } from "../services/api";
 import { useAgentStore } from "../stores/agentStore";
-import type { DesktopSettings, WxCliStatus } from "../types";
+import type { DesktopSettings } from "../types";
 import { ChatPanel } from "../components/ChatPanel";
 import { AppearanceSettings } from "../components/AppearanceSettings";
 import type { DashboardSection } from "../types";
@@ -34,7 +33,6 @@ const navigation: Array<{ id: DashboardSection; label: string; icon: typeof Bot 
   { id: "api", label: "API 与模型", icon: KeyRound },
   { id: "skills", label: "技能管理", icon: ListTree },
   { id: "browser", label: "浏览器设置", icon: MonitorCog },
-  { id: "wechat", label: "微信数据读取", icon: Database },
   { id: "permissions", label: "权限设置", icon: LockKeyhole },
   { id: "logs", label: "运行日志", icon: ScrollText },
   { id: "about", label: "关于产品", icon: Info }
@@ -76,7 +74,6 @@ export function DashboardPage() {
         {section === "history" ? <HistoryView onOpenConversation={() => setSection("chat")} /> : null}
         {section === "appearance" ? <AppearanceSettings /> : null}
         {section === "api" || section === "browser" ? <SettingsView initialSection={section} /> : null}
-        {section === "wechat" ? <WechatDataSettings /> : null}
         {section === "skills" ? <SkillsView onImportCommand={(command) => {
           state.setChatDraft(command);
           setSection("chat");
@@ -223,80 +220,6 @@ function PermissionsView() {
       <div className="settings-form">
         <label className="toggle-row"><span><strong>敏感操作需要确认</strong><small>提交、发布和删除操作会显示确认卡片</small></span><input type="checkbox" checked={confirmSensitive} onChange={(event) => setConfirmSensitive(event.target.checked)} /></label>
         <label className="toggle-row"><span><strong>允许自动下载</strong><small>允许任务把网页文件保存到本机</small></span><input type="checkbox" checked={allowDownloads} onChange={(event) => setAllowDownloads(event.target.checked)} /></label>
-      </div>
-    </div>
-  );
-}
-
-function WechatDataSettings() {
-  const initializeWxCli = useAgentStore((state) => state.initializeWxCli);
-  const [status, setStatus] = useState<WxCliStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [setupMode, setSetupMode] = useState<"init" | "force" | null>(null);
-  const [setupError, setSetupError] = useState("");
-  const [copied, setCopied] = useState("");
-
-  async function refresh() {
-    setLoading(true);
-    try {
-      setStatus(await apiRequest<WxCliStatus>("/api/wx-cli/status"));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function copy(label: string, command: string) {
-    await navigator.clipboard.writeText(command);
-    setCopied(label);
-    window.setTimeout(() => setCopied(""), 1600);
-  }
-
-  async function initialize(force: boolean) {
-    setSetupMode(force ? "force" : "init");
-    setSetupError("");
-    try {
-      setStatus(await initializeWxCli(force));
-    } catch (error) {
-      setSetupError(error instanceof Error ? error.message : "wx-cli 初始化失败");
-      await refresh();
-    } finally {
-      setSetupMode(null);
-    }
-  }
-
-  useEffect(() => { void refresh(); }, []);
-  return (
-    <div className="page-view settings-view">
-      <PageHeading title="微信数据读取" description="历史记录任务只检查 wx-cli 状态，不会自动初始化。初始化仅在您点击按钮后执行；聊天原文只在内存中临时显示。" />
-      <div className="settings-form">
-        <section className="settings-section">
-          <h2>wx-cli 状态</h2>
-          <dl className="wx-status-list">
-            <dt>安装</dt><dd>{status?.installed ? "已安装" : "未安装"}</dd>
-            <dt>版本</dt><dd>{status?.version || "-"}</dd>
-            <dt>初始化</dt><dd>{status?.initialized ? "正常" : "未初始化"}</dd>
-            <dt>Daemon</dt><dd>{status?.daemon_available ? "运行中" : "未运行"}</dd>
-            <dt>失败阶段</dt><dd>{status?.failure_stage || "-"}</dd>
-            <dt>错误代码</dt><dd>{status?.error_code || "-"}</dd>
-          </dl>
-          <p>{status?.message || "正在检测 wx-cli…"}</p>
-          <div className="settings-actions">
-            <button className="button-primary" disabled={loading} onClick={() => void refresh()}>{loading ? "检测中" : "重新检测"}</button>
-            <button className="button-secondary" disabled={setupMode !== null} onClick={() => void initialize(false)}>{setupMode === "init" ? "初始化中" : "以管理员权限初始化"}</button>
-            <button className="button-secondary" disabled={setupMode !== null} onClick={() => void initialize(true)}>{setupMode === "force" ? "重新初始化中" : "强制重新初始化"}</button>
-            <button className="button-secondary" onClick={() => void copy("install", "npm.cmd install --prefix tools/wx-cli")}>{copied === "install" ? "已复制" : "复制安装命令"}</button>
-            <button className="button-secondary" onClick={() => void copy("init", "tools\\wx-cli\\node_modules\\.bin\\wx.cmd init")}>{copied === "init" ? "已复制" : "复制手动初始化命令"}</button>
-            <button className="button-secondary" onClick={() => void copy("force", "tools\\wx-cli\\node_modules\\.bin\\wx.cmd init --force")}>{copied === "force" ? "已复制" : "复制强制初始化命令"}</button>
-          </div>
-          {status?.diagnostic ? <details className="wx-setup-diagnostic"><summary>查看诊断详情</summary><pre>{status.diagnostic}</pre></details> : null}
-          {setupError ? <p className="wx-setup-error">{setupError}</p> : null}
-        </section>
-        <section className="settings-section">
-          <h2>隐私策略</h2>
-          <label className="toggle-row"><span><strong>每次读取前确认</strong><small>固定启用，读取前必须确认具体会话和范围。</small></span><input type="checkbox" checked readOnly /></label>
-          <label className="toggle-row"><span><strong>保存微信原文到智能体历史</strong><small>固定关闭。原文不会写入 SQLite。</small></span><input type="checkbox" checked={false} readOnly /></label>
-          <label className="toggle-row"><span><strong>AI 分析前再次确认</strong><small>固定启用，只有明确授权后原文才会发送给当前 AI 服务。</small></span><input type="checkbox" checked readOnly /></label>
-        </section>
       </div>
     </div>
   );

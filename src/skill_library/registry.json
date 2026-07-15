@@ -81,16 +81,6 @@
       "description": "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题、正文或 Markdown 文件，设置字体、颜色、斜体和本地插图，保存 docx 并导出 PDF"
     },
     {
-      "id": "wechat_read_contact_history",
-      "name": "微信读取联系人历史聊天记录",
-      "type": "domain",
-      "triggers": ["微信聊天记录", "微信聊天历史", "历史消息", "消息记录", "查看微信记录", "读取微信记录"],
-      "url_patterns": [],
-      "file": "read/wechat_read_contact_history.py",
-      "function": "run",
-      "description": "使用项目内 wx-cli 查询用户自己的本地微信历史消息"
-    },
-    {
       "id": "wechat_send_contact_file",
       "name": "微信联系人发送文件",
       "type": "domain",

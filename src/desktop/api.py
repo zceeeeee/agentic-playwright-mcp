@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-import yaml
 from fastapi import (
     Depends,
     FastAPI,
@@ -19,6 +18,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import yaml
 
 from src.desktop.database import DesktopDatabase
 from src.desktop.events import DesktopEventHub
@@ -44,18 +44,6 @@ class ConfirmationRequest(BaseModel):
     comment: str = ""
     value: str = ""
     action_id: str = ""
-
-
-class LoadMoreSensitiveResultRequest(BaseModel):
-    limit: int = Field(default=50, ge=1, le=500)
-
-
-class SummarizeSensitiveResultRequest(BaseModel):
-    approved: bool = False
-
-
-class InitializeWxCliRequest(BaseModel):
-    force: bool = False
 
 
 def _masked(value: str) -> str:
@@ -122,32 +110,6 @@ def create_app(
             "browser_headless": os.getenv("BROWSER_HEADLESS", "false").lower() == "true",
         }
 
-    @app.get("/api/wx-cli/status", dependencies=[auth])
-    def wx_cli_status() -> dict[str, Any]:
-        return service.wx_cli_status()
-
-    @app.post("/api/wx-cli/recheck", dependencies=[auth])
-    def recheck_wx_cli() -> dict[str, Any]:
-        return service.wx_cli_status()
-
-    @app.post("/api/wx-cli/initialize", dependencies=[auth])
-    def initialize_wx_cli(body: InitializeWxCliRequest) -> dict[str, Any]:
-        try:
-            return service.initialize_wx_cli(force=body.force)
-        except Exception as exc:
-            code = getattr(exc, "code", "WX_CLI_INIT_FAILED")
-            stage = getattr(exc, "stage", None) or "init"
-            diagnostic = getattr(exc, "diagnostic", None)
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": code,
-                    "stage": stage,
-                    "message": str(exc),
-                    "diagnostic": diagnostic,
-                },
-            ) from exc
-
     @app.get("/api/conversations", dependencies=[auth])
     def conversations() -> list[dict[str, Any]]:
         return database.list_conversations()
@@ -204,36 +166,6 @@ def create_app(
         if not service.cancel_task(task_id):
             raise HTTPException(status_code=404, detail="Task not found")
         return {"ok": True}
-
-    @app.post("/api/sensitive-results/{result_id}/load-more", dependencies=[auth])
-    def load_more_sensitive_result(
-        result_id: str, body: LoadMoreSensitiveResultRequest
-    ) -> dict[str, Any]:
-        try:
-            return service.load_more_sensitive_history(result_id, limit=body.limit)
-        except KeyError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail="敏感结果已过期，请重新读取微信聊天记录。",
-            ) from exc
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    @app.post("/api/sensitive-results/{result_id}/summarize", dependencies=[auth])
-    def summarize_sensitive_result(
-        result_id: str, body: SummarizeSensitiveResultRequest
-    ) -> dict[str, Any]:
-        if not body.approved:
-            raise HTTPException(status_code=403, detail="需要明确授权 AI 分析聊天记录")
-        try:
-            return service.summarize_sensitive_history(result_id)
-        except KeyError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail="敏感结果已过期，请重新读取微信聊天记录。",
-            ) from exc
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/confirmations/{confirmation_id}/approve", dependencies=[auth])
     def approve_confirmation(

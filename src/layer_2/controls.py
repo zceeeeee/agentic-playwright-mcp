@@ -9,7 +9,6 @@ Layer 2 — 控件层（Controls）。
 
 from __future__ import annotations
 
-import os
 import time
 
 # ---------------------------------------------------------------------------
@@ -807,129 +806,6 @@ def wechat_send_contact_file(
     )
 
 
-def wechat_read_contact_history(
-    chat_name: str,
-    limit: str | int = 50,
-    offset: str | int = 0,
-    since: str | None = None,
-    until: str | None = None,
-    message_type: str | None = None,
-    output_mode: str = "display",
-) -> dict:
-    """Read local WeChat history through the fixed wx-cli adapter."""
-    from src.core.user_interaction import get_user_interaction_broker
-    from src.layer_1.wechat_history_service import WechatHistoryService
-
-    broker = get_user_interaction_broker()
-    service = WechatHistoryService()
-
-    def select_candidate(candidates):
-        broker.set_title("选择微信会话")
-        labels = [
-            f"{index + 1}. {candidate.display_name} · "
-            f"{'群聊' if candidate.is_group else '私聊'}"
-            for index, candidate in enumerate(candidates)
-        ]
-        answer = str(
-            broker.prompt(
-                "找到了多个可能的微信会话，请选择要读取的会话。\n\n"
-                + " ".join(f"[{label}]" for label in labels)
-                + " [取消]"
-            )
-            or ""
-        ).strip()
-        if answer == "取消":
-            raise RuntimeError("用户取消读取微信历史记录")
-        for index, label in enumerate(labels):
-            if answer == label or answer.startswith(f"{index + 1}."):
-                return candidates[index]
-        raise RuntimeError("没有选择有效的微信会话")
-
-    prepared = service.prepare(
-        chat_name=chat_name,
-        limit=limit,
-        offset=offset,
-        since=since,
-        until=until,
-        message_type=message_type,
-        cancel_event=broker.cancel_event(),
-        candidate_selector=select_candidate,
-    )
-    query = prepared.requested_query
-    candidate = prepared.candidate
-    chat_type_label = "群聊" if candidate.is_group else "私聊"
-    match_note = (
-        f"\n你输入的是：{query.chat_name}\n实际匹配会话：{candidate.display_name}\n"
-        if prepared.fuzzy_match
-        else ""
-    )
-    broker.set_title("确认读取微信历史记录")
-    broker.prompt(
-        "确认读取微信历史记录\n\n"
-        f"会话：{candidate.display_name}\n"
-        f"类型：{chat_type_label}\n"
-        f"数量：最近 {query.limit} 条\n"
-        f"开始时间：{query.since or '未限制'}\n"
-        f"结束时间：{query.until or '未限制'}\n"
-        f"消息类型：{query.message_type or '全部'}\n"
-        f"{match_note}\n"
-        "记录将从本机 wx-cli 读取。默认不会上传给 AI，也不会把聊天原文"
-        "保存到桌面智能体历史。"
-    )
-
-    result = service.read(prepared, cancel_event=broker.cancel_event())
-    payload = result.to_sensitive_payload()
-    payload["_cursor"] = {
-        "username": candidate.username,
-        "next_offset": query.offset + result.count,
-        "since": query.since,
-        "until": query.until,
-        "message_type": query.message_type,
-    }
-    result_id = broker.publish_sensitive_result(
-        "wechat_history", payload, ttl_seconds=1800
-    )
-
-    mode = str(output_mode or "display").strip().lower()
-    summary_requested = mode in {"summary", "总结", "归纳", "分析", "梳理"}
-    summary_generated = False
-    if summary_requested:
-        provider = os.getenv("LLM_PROVIDER", "openai")
-        endpoint = (
-            os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-            if provider == "anthropic"
-            else os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        )
-        broker.set_title("需要授权 AI 分析微信聊天记录")
-        answer = str(
-            broker.prompt(
-                "需要授权 AI 分析微信聊天记录\n\n"
-                f"将读取“{candidate.display_name}”的 {result.count} 条记录。\n"
-                "如继续，选中的聊天内容将发送给当前配置的 AI 服务商进行总结。\n\n"
-                f"当前 AI 服务：{provider} / {endpoint}\n\n"
-                "[仅查看原文] [允许 AI 总结] [取消]"
-            )
-            or ""
-        ).strip()
-        if answer == "允许 AI 总结":
-            broker.summarize_sensitive_result(result_id)
-            summary_generated = True
-        elif answer == "取消":
-            raise RuntimeError("用户取消微信聊天记录总结")
-
-    return {
-        "success": True,
-        "sensitive_result_id": result_id,
-        "chat": result.chat,
-        "chat_type": result.chat_type,
-        "count": result.count,
-        "meta_status": result.meta.status,
-        "raw_messages_omitted": True,
-        "summary_requested": summary_requested,
-        "summary_generated": summary_generated,
-    }
-
-
 def get_controls_exports() -> Dict[str, Any]:
     """返回控件层所有可导出的函数。
 
@@ -969,7 +845,6 @@ def get_controls_exports() -> Dict[str, Any]:
         "wechat_send_official_account_message": wechat_send_official_account_message,
         "wechat_send_contact_message": wechat_send_contact_message,
         "wechat_send_contact_file": wechat_send_contact_file,
-        "wechat_read_contact_history": wechat_read_contact_history,
         # Cookie 持久化
         "save_cookies": save_cookies,
         "load_cookies": load_cookies,

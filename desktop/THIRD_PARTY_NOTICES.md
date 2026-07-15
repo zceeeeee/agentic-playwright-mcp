@@ -28,17 +28,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-## wx-cli
-
-The desktop package can bundle wx-cli version 0.3.0 from
-https://github.com/jackwener/wx-cli.
-
-wx-cli is licensed under the Apache License 2.0. The bundled executable is used
-only to query the current user's local WeChat data after explicit confirmation.
-The application does not bundle or redistribute wx-cli configuration, database
-keys, decrypted caches, or user data.
-
-Copyright (c) jackwener/wx-cli contributors.
-
-License text: https://www.apache.org/licenses/LICENSE-2.0

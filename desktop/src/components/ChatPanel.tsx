@@ -35,7 +35,7 @@ export function ChatPanel({ dashboard = false }: { dashboard?: boolean }) {
           <button title="更多" onClick={() => void window.desktopAgent.showPetMenu()}><MoreHorizontal size={18} /></button>
         </div>
       </header>
-      <MessageList compact={!dashboard} />
+      <MessageList />
       <ChatInput />
       {historyOpen ? <HistoryPanel onClose={() => setHistoryOpen(false)} /> : null}
       {!dashboard ? <WindowResizeHandles /> : null}

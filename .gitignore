@@ -16,7 +16,6 @@ logs/
 node_modules/
 desktop/dist-electron/
 desktop/.test-dist/
-desktop/resources/tools/wx-cli/wx.exe
 .pytest_cache/
 .mypy_cache/
 site/
