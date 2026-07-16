@@ -307,6 +307,17 @@ class ScriptEngine:
                 log("Panel prompt target was closed; reopening page and retrying")
                 return _pm.prompt(_get_page().get_page(), str(question))
 
+        def panel_offer(
+            question: str,
+            on_resolve: Callable[[dict[str, Any]], None] | None = None,
+        ) -> str | None:
+            """Show a desktop confirmation without pausing script execution."""
+            return _pm.offer(
+                _get_page().get_page(),
+                str(question),
+                on_resolve=on_resolve,
+            )
+
         def panel_read() -> dict:
             """读取用户通过面板输入的最新数据。"""
             return _pm.read_data(_get_page().get_page()) or {}
@@ -421,6 +432,48 @@ class ScriptEngine:
                     return True
                 page.wait_for_timeout(1000)
 
+        def _offer_to_save_manual_login(domain: str) -> None:
+            """Capture auth now and offer to persist it without blocking the task."""
+            bm = self._get_browser_manager()
+            try:
+                if bm._context is None:
+                    raise RuntimeError("no active browser context")
+                state = bm._context.storage_state()
+            except Exception as exc:
+                log(f"Failed to capture login information for {domain}: {exc}")
+                return
+
+            def save_if_approved(resolution: dict[str, Any]) -> None:
+                answer = str(resolution.get("value") or "").strip().lower()
+                wants_save = bool(resolution.get("approved")) and answer in {
+                    "yes",
+                    "y",
+                    "1",
+                    "true",
+                    "是",
+                }
+                if not wants_save:
+                    log(f"User chose not to save login for {domain}")
+                    return
+                try:
+                    from src.core.auth_manager import get_auth_manager
+
+                    get_auth_manager().save_state(domain, state)
+                    log(f"Saved login information for {domain}")
+                except Exception as exc:
+                    log(f"Failed to save login information for {domain}: {exc}")
+
+            confirmation_id = panel_offer(
+                f"检测到 {domain} 已完成手动登录。"
+                "是否保存这次登录信息，供后续任务使用？[yes] [no]",
+                save_if_approved,
+            )
+            if confirmation_id is None:
+                log(f"Skipped login save prompt for {domain}: desktop UI is unavailable")
+                return
+            auth_decisions[domain] = "manual_save_pending"
+            log(f"Login save choice for {domain} is waiting in the background")
+
         def ensure_auth(
             domain: str,
             target_url: str | None = None,
@@ -471,10 +524,14 @@ class ScriptEngine:
 
             if not wait_for_manual:
                 return False
-            return _wait_for_manual_login(domain, target_url)
+            logged_in = _wait_for_manual_login(domain, target_url)
+            if logged_in:
+                _offer_to_save_manual_login(domain)
+            return logged_in
 
         ns["panel_log"] = panel_log
         ns["panel_prompt"] = panel_prompt
+        ns["panel_offer"] = panel_offer
         ns["panel_read"] = panel_read
         ns["panel_read_events"] = panel_read_events
         ns["panel_show"] = panel_show

@@ -405,6 +405,89 @@ class TestBrowserPrimitives:
         assert bm.cleaned is True
         assert bm._context.logged_in is False
 
+    @pytest.mark.parametrize(
+        ("save_answer", "expected_saved"),
+        [("yes", ["example"]), ("no", [])],
+    )
+    def test_manual_login_prompts_to_save_after_declining_saved_login(
+        self, save_answer, expected_saved
+    ):
+        class FakeContext:
+            def __init__(self, logged_in: bool):
+                self.logged_in = logged_in
+
+            def storage_state(self):
+                cookies = (
+                    [{"name": "session", "value": "manual", "domain": "example.com"}]
+                    if self.logged_in
+                    else []
+                )
+                return {"cookies": cookies, "origins": []}
+
+        class FakePage:
+            def __init__(self, context):
+                self.context = context
+                self.url = "about:blank"
+                self.goto_calls = []
+
+            def goto(self, url, **kwargs):
+                self.url = url
+                self.goto_calls.append((url, kwargs))
+
+            def wait_for_timeout(self, _milliseconds):
+                self.context.logged_in = True
+
+        class FakeBrowserManager:
+            def __init__(self):
+                self._context = FakeContext(True)
+                self.page = FakePage(self._context)
+
+            def get_page(self):
+                return self.page
+
+            def start_clean_context(self):
+                self._context = FakeContext(False)
+                self.page = FakePage(self._context)
+                return self.page
+
+        bm = FakeBrowserManager()
+        panel = MagicMock()
+        panel.prompt.return_value = "no"
+        pending_resolutions = []
+
+        def offer(_page, _question, on_resolve=None):
+            pending_resolutions.append(on_resolve)
+            return "confirm_save_auth"
+
+        panel.offer.side_effect = offer
+        auth_manager = MagicMock()
+        auth_manager.has_auth.return_value = True
+
+        with (
+            patch("src.panel.get_panel_manager", return_value=panel),
+            patch("src.core.auth_manager.get_auth_manager", return_value=auth_manager),
+        ):
+            result = ScriptEngine(bm).execute(
+                "print(ensure_auth('example', 'https://example.com/login'))"
+            )
+
+        assert result.success is True
+        assert result.output.strip().endswith("True")
+        assert bm.page.goto_calls[0][0] == "https://example.com/login"
+        assert panel.prompt.call_count == 1
+        assert panel.offer.call_count == 1
+        auth_manager.save_state.assert_not_called()
+
+        pending_resolutions[0](
+            {
+                "approved": True,
+                "value": save_answer,
+                "action_id": "option_0",
+            }
+        )
+        saved_domains = [call.args[0] for call in auth_manager.save_state.call_args_list]
+        assert saved_domains == expected_saved
+
 
 # ---------------------------------------------------------------------------
 # Custom function registration

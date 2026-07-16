@@ -29,6 +29,11 @@ class FakeInteractionAdapter:
         self.prompts.append((question, title, fields or []))
         return "approved"
 
+    def offer(self, question: str, *, title: str = "", fields=None, on_resolve=None):
+        self.prompts.append((question, title, fields or []))
+        self.offered_callback = on_resolve
+        return "confirm_background"
+
     def read_data(self):
         return {"answer": "approved"}
 
@@ -56,6 +61,20 @@ def test_interaction_broker_routes_without_page_dom() -> None:
         )
     ]
     assert broker.read_data() == {"answer": "approved"}
+
+
+def test_interaction_broker_offer_does_not_wait_for_resolution() -> None:
+    broker = UserInteractionBroker()
+    adapter = FakeInteractionAdapter()
+    broker.attach(adapter)
+    resolved = []
+
+    confirmation_id = broker.offer("是否保存登录？", resolved.append)
+
+    assert confirmation_id == "confirm_background"
+    assert resolved == []
+    adapter.offered_callback({"approved": True, "value": "yes"})
+    assert resolved == [{"approved": True, "value": "yes"}]
 
 
 def test_database_persists_history_and_confirmation_is_single_use(tmp_path) -> None:
@@ -218,6 +237,44 @@ def test_confirmation_resolution_preserves_selected_option(tmp_path) -> None:
     assert wait.resolved is True
     assert wait.value == "AI生成"
     assert wait.action_id == "option_0"
+    service.shutdown()
+
+
+def test_non_blocking_confirmation_runs_callback_without_waiting(tmp_path) -> None:
+    database = DesktopDatabase(tmp_path / "background-confirmation.db")
+    database.create_conversation("conversation_1", "测试")
+    database.add_message(
+        "message_1",
+        "conversation_1",
+        role="user",
+        message_type="user",
+        content="登录后继续任务",
+    )
+    database.create_task("task_1", "conversation_1", "message_1")
+    database.create_confirmation(
+        "confirm_1",
+        "task_1",
+        "保存登录",
+        "是否保存？",
+        {"non_blocking": True},
+    )
+    service = DesktopTaskService(database, DesktopEventHub())
+    resolutions = []
+    wait = ConfirmationWait(blocking=False, on_resolve=resolutions.append)
+    service.register_confirmation("confirm_1", wait)
+
+    assert service.resolve_confirmation(
+        "confirm_1", approved=True, value="yes", action_id="option_0"
+    )
+    assert resolutions == [
+        {
+            "approved": True,
+            "comment": "",
+            "value": "yes",
+            "action_id": "option_0",
+        }
+    ]
+    assert "confirm_1" not in service._confirmations
     service.shutdown()
 
 

@@ -174,6 +174,18 @@ class TestSaveAuth:
         am.save_auth("baidu", mock_context)
         assert auth_dir.is_dir()
 
+    def test_saves_previously_captured_state(self, auth_manager, tmp_auth_dir):
+        state = {
+            "cookies": [{"name": "session", "value": "captured"}],
+            "origins": [],
+        }
+
+        result_path = auth_manager.save_state("zhihu", state)
+
+        assert result_path == tmp_auth_dir / "zhihu.json"
+        assert json.loads(result_path.read_text(encoding="utf-8")) == state
+        assert not (tmp_auth_dir / "zhihu.json.tmp").exists()
+
 
 # ---------------------------------------------------------------------------
 # delete_auth

@@ -378,3 +378,45 @@ test("late events from a superseded task cannot enter the new task output", asyn
   assert.equal(useAgentStore.getState().currentTaskId, "task-late-new");
   assert.equal(useAgentStore.getState().visualState, "running");
 });
+
+test("background confirmation does not pause or disappear when task succeeds", () => {
+  installDesktopBridge();
+  useAgentStore.setState({
+    currentConversationId: "conversation-background",
+    currentTaskId: "task-background",
+    visualState: "running",
+    confirmations: []
+  });
+
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "background-confirmation",
+    type: "confirmation_required",
+    task_id: "task-background",
+    conversation_id: "conversation-background",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    payload: {
+      confirmation_id: "confirm-background",
+      title: "保存登录信息",
+      message: "是否保存？",
+      risk_level: "medium",
+      prompt_type: "choice",
+      non_blocking: true,
+      options: []
+    }
+  });
+
+  assert.equal(useAgentStore.getState().visualState, "running");
+  assert.equal(useAgentStore.getState().confirmations[0]?.non_blocking, true);
+
+  useAgentStore.getState().handleBackendEvent({
+    event_id: "background-task-success",
+    type: "task_succeeded",
+    task_id: "task-background",
+    conversation_id: "conversation-background",
+    timestamp: "2026-01-01T00:00:01.000Z",
+    payload: {}
+  });
+
+  assert.equal(useAgentStore.getState().currentTaskId, null);
+  assert.equal(useAgentStore.getState().confirmations[0]?.status, "pending");
+});

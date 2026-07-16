@@ -518,11 +518,12 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         fields: event.payload.fields,
         options: event.payload.options,
         actions: event.payload.actions,
+        non_blocking: Boolean(event.payload.non_blocking),
         status: "pending"
       };
       set((current) => ({
         confirmations: [...current.confirmations.filter((item) => item.confirmation_id !== confirmation.confirmation_id), confirmation],
-        visualState: "waiting_confirmation"
+        visualState: confirmation.non_blocking ? current.visualState : "waiting_confirmation"
       }));
       return;
     }

@@ -6,7 +6,7 @@ to the desktop interaction broker and never inspect or mutate page DOM.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from src.core.user_interaction import get_user_interaction_broker
 
@@ -41,6 +41,15 @@ class PanelManager:
     def prompt(self, page: Any, question: str) -> Any:
         del page
         return get_user_interaction_broker().prompt(question)
+
+    def offer(
+        self,
+        page: Any,
+        question: str,
+        on_resolve: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str | None:
+        del page
+        return get_user_interaction_broker().offer(question, on_resolve)
 
     def set_fields(self, page: Any, fields: list[dict[str, Any]]) -> None:
         del page

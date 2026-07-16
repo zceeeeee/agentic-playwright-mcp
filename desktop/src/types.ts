@@ -83,6 +83,7 @@ export interface ConfirmationRequest {
   fields?: Array<Record<string, unknown>>;
   options?: ConfirmationOption[];
   actions?: ConfirmationOption[];
+  non_blocking?: boolean;
   status: "pending" | "approved" | "rejected";
   comment?: string;
   selected_value?: string;

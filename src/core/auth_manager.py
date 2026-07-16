@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -113,6 +114,19 @@ class AuthManager:
         path = self._auth_path(domain)
         context.storage_state(path=str(path))
         logger.info("Auth saved for domain=%s -> %s", domain, path)
+        return path
+
+    def save_state(self, domain: str, state: Dict[str, Any]) -> Path:
+        """Persist a previously captured Playwright storage-state snapshot."""
+        self._auth_dir.mkdir(parents=True, exist_ok=True)
+        path = self._auth_path(domain)
+        temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+        with open(temporary_path, "w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        temporary_path.replace(path)
+        logger.info("Auth snapshot saved for domain=%s -> %s", domain, path)
         return path
 
     def delete_auth(self, domain: str) -> bool:

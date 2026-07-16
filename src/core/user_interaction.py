@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 import threading
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from src.logging import get_logger
 
@@ -26,6 +26,15 @@ class InteractionAdapter(Protocol):
         title: str = "",
         fields: list[dict[str, Any]] | None = None,
     ) -> Any: ...
+
+    def offer(
+        self,
+        question: str,
+        *,
+        title: str = "",
+        fields: list[dict[str, Any]] | None = None,
+        on_resolve: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str | None: ...
 
     def read_data(self) -> dict[str, Any] | None: ...
 
@@ -73,6 +82,26 @@ class UserInteractionBroker:
             return input(f"{question}\n> ")
         logger.warning("No desktop interaction client is connected for prompt: %s", question)
         return None
+
+    def offer(
+        self,
+        question: str,
+        on_resolve: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str | None:
+        """Show a confirmation without pausing the active task."""
+        with self._lock:
+            adapter = self._adapter
+            title = self._title
+            fields = list(self._fields)
+        if adapter is None:
+            logger.warning("No desktop interaction client is connected for offer: %s", question)
+            return None
+        return adapter.offer(
+            str(question),
+            title=title,
+            fields=fields,
+            on_resolve=on_resolve,
+        )
 
     def set_title(self, title: str) -> None:
         with self._lock:

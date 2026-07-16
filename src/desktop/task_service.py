@@ -8,7 +8,7 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from src.core.agent_loop import AgentLoop, AgentStep
 from src.core.browser_manager import get_browser_manager
@@ -55,6 +55,8 @@ class ConfirmationWait:
     comment: str = ""
     value: str = ""
     action_id: str = ""
+    blocking: bool = True
+    on_resolve: Callable[[dict[str, Any]], None] | None = None
 
 
 @dataclass
@@ -146,6 +148,43 @@ class DesktopInteractionAdapter:
         if prompt["prompt_type"] == "confirm_value" and wait.action_id == "keep":
             return ""
         return wait.value or ("yes" if prompt["prompt_type"] == "confirmation" else "")
+
+    def offer(
+        self,
+        question: str,
+        *,
+        title: str = "",
+        fields: list[dict[str, Any]] | None = None,
+        on_resolve: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str:
+        """Publish a confirmation while allowing the task to keep running."""
+        confirmation_id = f"confirm_{uuid.uuid4().hex}"
+        wait = ConfirmationWait(blocking=False, on_resolve=on_resolve)
+        prompt = parse_desktop_prompt(question, title=title, fields=fields)
+        metadata = {
+            key: value for key, value in prompt.items() if key not in {"title", "message"}
+        }
+        metadata["non_blocking"] = True
+        self._service.database.create_confirmation(
+            confirmation_id,
+            self._control.task_id,
+            prompt["title"],
+            prompt["message"],
+            metadata,
+        )
+        self._service.register_confirmation(confirmation_id, wait)
+        self._service.events.publish(
+            "confirmation_required",
+            task_id=self._control.task_id,
+            conversation_id=self._control.conversation_id,
+            payload={
+                "confirmation_id": confirmation_id,
+                "title": prompt["title"],
+                "message": prompt["message"],
+                **metadata,
+            },
+        )
+        return confirmation_id
 
     def read_data(self) -> dict[str, Any] | None:
         return self._last_data
@@ -447,6 +486,21 @@ class DesktopTaskService:
                 wait.action_id = action_id
                 wait.resolved = True
                 wait.condition.notify_all()
+            if not wait.blocking:
+                self.unregister_confirmation(confirmation_id)
+                if wait.on_resolve is not None:
+                    resolution = {
+                        "approved": approved,
+                        "comment": comment,
+                        "value": value,
+                        "action_id": action_id,
+                    }
+                    try:
+                        wait.on_resolve(resolution)
+                    except Exception as exc:
+                        logger.exception(
+                            "Non-blocking confirmation callback failed: %s", exc
+                        )
         task_id = confirmation.get("task_id")
         task = self.database.get_task(str(task_id)) if task_id else None
         self.events.publish(
