@@ -20,6 +20,7 @@ from src.core.explore.models import (
     Action,
     ActionBatch,
     ActionRecord,
+    ActionType,
     ElementInfo,
     ExploreConfig,
     ExploreExperience,
@@ -84,6 +85,7 @@ class ExploreAgent:
         self._current_snapshot = None
         self._last_panel_answer: str | None = None
         self._entry_bootstrap_attempted: set[str] = set()
+        self._explicit_entry_attempted: set[str] = set()
         self.just_navigated_to_entry = False
         self.explore_mode_active = False  # 整个任务生命周期内标记 Explore 模式
 
@@ -163,6 +165,7 @@ class ExploreAgent:
         self._current_snapshot = None
         self._last_panel_answer = None
         self._entry_bootstrap_attempted = set()
+        self._explicit_entry_attempted = set()
         self.just_navigated_to_entry = False
         self.explore_mode_active = False
         self._action_history = []
@@ -265,7 +268,27 @@ class ExploreAgent:
 
         return None
 
+    def bootstrap_explicit_entry(self, task: str) -> str | None:
+        """Open a user-provided URL once before Explore begins."""
+        target_url = self.extract_first_url(task)
+        if not target_url or task in self._explicit_entry_attempted:
+            return None
+
+        self._explicit_entry_attempted.add(task)
+        self._entry_bootstrap_attempted.add(task)
+        page = self._get_browser_manager().get_page()
+        current_url = str(getattr(page, "url", "") or "")
+        if self.entry_urls_equivalent(current_url, target_url):
+            self.just_navigated_to_entry = True
+            self.explore_mode_active = True
+            logger.info("Explore explicit entry already open: %s", target_url)
+            return target_url
+
+        return self._goto_initial_entry_url(target_url)
+
     def bootstrap_entry_page(self, task: str) -> str | None:
+        if self.extract_first_url(task) and not self.should_force_explicit_entry(task):
+            return None
         if task in self._entry_bootstrap_attempted:
             return None
 
@@ -368,6 +391,8 @@ class ExploreAgent:
         schema = {
             "type": "object",
             "properties": {
+                "task_complete": {"type": "boolean"},
+                "completion_summary": {"type": ["string", "null"]},
                 "actions": {
                     "type": "array",
                     "items": {
@@ -425,7 +450,7 @@ class ExploreAgent:
                     },
                 }
             },
-            "required": ["actions"],
+            "required": ["actions", "task_complete"],
         }
         prompt = (
             "你是 Explore 模式浏览器操作规划器。根据用户任务和 ARIA 快照，"
@@ -435,6 +460,9 @@ class ExploreAgent:
             f"深度扫描: {'是' if snapshot.deep_scanned else '否'}\n"
             f"ARIA 快照:\n{json.dumps(snapshot.model_dump(mode='json'), ensure_ascii=False)}\n\n"
             "规则:\n"
+            "1. 每次响应都必须填写 task_complete。只有当前页面和操作历史已经明确证明"
+            "用户任务完成时才设为 true，并填写 completion_summary；此时 actions 返回空数组。"
+            "只要仍需点击、输入、等待、读取或确认，就必须设为 false。\n"
             "2. click/double_click/fill/select/check/uncheck/hover/drag/upload 必须填写 ref。\n"
             "3. fill/select/type/upload 必须填写 value。\n"
             "4. keyboard 的 value 是按键名（Enter, Escape, Tab, Control+a 等）。\n"
@@ -460,7 +488,9 @@ class ExploreAgent:
             "19. 如果快照已经标记 deep_scanned=true，说明已经深度扫描过，不要再 request_deep_scan。"
             "此时仍找不到目标元素，使用 pause_for_input 问用户。\n"
             "20. 当任务完成时（例如：已经找到并操作了目标元素，或者已经获取到所需信息），"
-            "使用 complete 动作结束任务。complete 的 value 可以填写任务完成的摘要。\n"
+            "优先在下一次快照规划时返回 task_complete=true。"
+            "如果本批次无需页面跳转且前面的动作成功后即可确定完成，也可以使用 complete 动作结束任务。"
+            "complete 的 value 可以填写任务完成的摘要。\n"
             "21. complete 应作为本批次最后一步。\n"
             "22. 如果页面显示登录表单、验证码、人机验证等需要人工介入的内容，"
             "且从操作历史中可以看到已经尝试过类似操作但失败了，"
@@ -492,10 +522,12 @@ class ExploreAgent:
         # ── 示例 ──
         prompt += (
             '\n输出格式示例:\n'
-            '{"actions": ['
+            '{"task_complete": false, "completion_summary": null, "actions": ['
             '{"action": "fill", "ref": "e12", "value": "台风", "snapshot_v": "v1"}, '
             '{"action": "keyboard", "value": "Enter", "condition": "networkidle"}'
             "]}\n"
+            "如果当前页面已经完成任务:\n"
+            '{"task_complete": true, "completion_summary": "已显示台风搜索结果", "actions": []}\n'
         )
         if self._last_panel_answer:
             prompt += f"\n\n上一次用户回答: {self._last_panel_answer}"
@@ -529,10 +561,24 @@ class ExploreAgent:
         if not isinstance(data, dict):
             return data
 
-        if "actions" in data:
-            actions = data.get("actions")
+        normalized = dict(data)
+        if "task_complete" not in normalized:
+            for key in ("completed", "done", "is_complete", "task_completed"):
+                if key in normalized:
+                    normalized["task_complete"] = ExploreAgent._coerce_completion_flag(
+                        normalized.get(key)
+                    )
+                    break
+        if "completion_summary" not in normalized:
+            for key in ("summary", "completion", "result"):
+                value = normalized.get(key)
+                if isinstance(value, str) and value.strip():
+                    normalized["completion_summary"] = value.strip()
+                    break
+
+        if "actions" in normalized:
+            actions = normalized.get("actions")
             if isinstance(actions, dict) and "action" in actions:
-                normalized = dict(data)
                 normalized["actions"] = [actions]
                 return normalized
             # 过滤掉 LLM 返回的非字典项（如 "string"、"null" 等 schema 类型名字面量）
@@ -543,22 +589,60 @@ class ExploreAgent:
                         "normalize: filtered %d non-dict action items",
                         len(actions) - len(filtered),
                     )
-                normalized = dict(data)
                 normalized["actions"] = filtered
                 return normalized
-            return data
+            return normalized
 
-        if "action" in data:
-            return {"actions": [data]}
+        if "action" in normalized:
+            action = {
+                key: value
+                for key, value in normalized.items()
+                if key not in {
+                    "task_complete",
+                    "completion_summary",
+                    "completed",
+                    "done",
+                    "is_complete",
+                    "task_completed",
+                    "summary",
+                    "completion",
+                    "result",
+                }
+            }
+            return {
+                "actions": [action],
+                "task_complete": normalized.get("task_complete", False),
+                "completion_summary": normalized.get("completion_summary"),
+            }
 
         for key in ("steps", "operations"):
-            value = data.get(key)
+            value = normalized.get(key)
             if isinstance(value, list):
-                return {"actions": value, "task_id": data.get("task_id")}
+                normalized["actions"] = value
+                return normalized
             if isinstance(value, dict) and "action" in value:
-                return {"actions": [value], "task_id": data.get("task_id")}
+                normalized["actions"] = [value]
+                return normalized
 
-        return data
+        return normalized
+
+    @staticmethod
+    def _coerce_completion_flag(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() in {
+                "true",
+                "yes",
+                "done",
+                "complete",
+                "completed",
+                "finished",
+                "1",
+            }
+        return False
 
     def execute(self, step: Any, executor: ExploreExecutor | None = None) -> str:
         if not step.actions:
@@ -590,6 +674,8 @@ class ExploreAgent:
                     self._maybe_record_site_knowledge(action_result.value)
                 # 如果执行了 complete 动作，任务完成
                 if action_result.action == "complete":
+                    summary = action_result.value or "任务已完成"
+                    step.result = f"Explore 任务已完成: {summary}"
                     self.save_experience(step)
                     return "done"
             self.save_experience(step)
@@ -715,10 +801,8 @@ class ExploreAgent:
 
         返回用户的回答文本，如果用户取消则返回 None。
         """
-        from src.core.explore.models import Action as ExploreAction, ActionType
-
         executor = self.ensure_executor()
-        action = ExploreAction(action=ActionType.PAUSE_FOR_INPUT, value=question)
+        action = Action(action=ActionType.PAUSE_FOR_INPUT, value=question)
         try:
             answer = executor._pause_for_input(action)
             if answer:
@@ -923,6 +1007,72 @@ class ExploreAgent:
     def is_blank_page(url: str | None) -> bool:
         value = (url or "").strip().lower()
         return value in {"", "about:blank"} or value.startswith("about:blank?")
+
+    @staticmethod
+    def entry_urls_equivalent(left: str, right: str) -> bool:
+        """Compare entry URLs without refreshing for fragments or trailing slashes."""
+
+        def comparison_key(value: str) -> tuple[str, str, str, str]:
+            parsed = urlparse(value)
+            path = parsed.path.rstrip("/") or "/"
+            return (
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                path,
+                parsed.query,
+            )
+
+        return comparison_key(left) == comparison_key(right)
+
+    @classmethod
+    def should_force_explicit_entry(cls, task: str) -> bool:
+        """Return whether a URL task has work beyond opening the page."""
+        target_url = cls.extract_first_url(task)
+        if not target_url:
+            return False
+
+        remainder = re.sub(
+            re.escape(target_url),
+            "",
+            task,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if remainder == task and target_url.startswith("https://"):
+            remainder = re.sub(
+                re.escape(target_url.removeprefix("https://")),
+                "",
+                task,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+
+        remainder = re.sub(
+            r"[\s\"'`“”‘’，。；、,:：!?！？()\[\]{}]+",
+            "",
+            remainder,
+        ).lower()
+        navigation_only_words = (
+            "请帮我",
+            "麻烦帮我",
+            "帮我",
+            "麻烦",
+            "请",
+            "打开",
+            "访问",
+            "进入",
+            "前往",
+            "跳转到",
+            "跳转",
+            "浏览",
+            "navigate",
+            "goto",
+            "visit",
+            "open",
+        )
+        for word in navigation_only_words:
+            remainder = remainder.replace(word, "")
+        return bool(remainder)
 
     @classmethod
     def resolve_initial_entry_url(cls, task: str) -> str | None:

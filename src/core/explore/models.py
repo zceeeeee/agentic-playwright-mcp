@@ -138,6 +138,14 @@ class ActionBatch(BaseModel):
     """Batch of atomic Explore actions."""
 
     actions: list[Action]
+    task_complete: bool = Field(
+        False,
+        description="Whether the current page already proves that the user task is complete",
+    )
+    completion_summary: Optional[str] = Field(
+        None,
+        description="Short user-facing summary when task_complete is true",
+    )
     task_id: Optional[str] = None
     plan_intent: Optional[str] = Field(None, description="本批次的整体意图描述")
     steps_description: Optional[str] = Field(None, description="步骤说明")

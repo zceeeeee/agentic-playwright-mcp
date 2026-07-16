@@ -313,14 +313,37 @@ class TaskSplitter:
 
     def _connector_split(self, task: str) -> List[str]:
         """按连接词（然后、接着、并且 等）拆分。"""
-        parts = self._CONNECTOR_PATTERN.split(task)
+        protected, spans = self._protect_connector_spans(task)
+        parts = self._CONNECTOR_PATTERN.split(protected)
         cleaned = []
         for part in parts:
+            for placeholder, original in spans.items():
+                part = part.replace(placeholder, original)
             part = part.strip()
             part = self._strip_trailing_punctuation(part)
             if part and not self._is_pure_punctuation(part):
                 cleaned.append(part)
         return cleaned
+
+    @staticmethod
+    def _protect_connector_spans(text: str) -> tuple[str, dict[str, str]]:
+        """Hide URLs, paths, and quoted content from connector matching."""
+        spans: dict[str, str] = {}
+
+        def protect(match: re.Match) -> str:
+            placeholder = f"\ue000{len(spans)}\ue001"
+            spans[placeholder] = match.group(0)
+            return placeholder
+
+        protected = text
+        patterns = (
+            r'"[^"]*"|“[^”]*”|\'[^\']*\'|‘[^’]*’|「[^」]*」',
+            r"https?://[^\s<>\"'“”‘’「」]+",
+            r"(?<![A-Za-z0-9_])[A-Za-z]:(?:[\\/])?[^\s,，;；。\r\n]+",
+        )
+        for pattern in patterns:
+            protected = re.sub(pattern, protect, protected)
+        return protected, spans
 
     # -------------------------------------------------------------------
     # L3: LLM 拆分

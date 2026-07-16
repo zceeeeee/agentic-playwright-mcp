@@ -80,6 +80,22 @@ class TestURLProtectionFlat:
         assert "https://www.baidu.com" in result[0]
         assert "搜索Python" in result[1]
 
+    def test_connector_word_inside_url_is_not_split(self):
+        splitter = TaskSplitter()
+        task = '"https://ncesnext.com"搜索大物'
+
+        result = splitter.split_flat(task)
+
+        assert result == [task]
+
+    def test_connector_word_inside_unquoted_url_is_not_split(self):
+        splitter = TaskSplitter()
+        task = "在 https://ncesnext.com/ 上搜索大物"
+
+        result = splitter.split_flat(task)
+
+        assert result == [task]
+
 
 class TestFilePathProtectionFlat:
     """本地文件路径里的扩展名不应该被当作句号拆分（split_flat）。"""

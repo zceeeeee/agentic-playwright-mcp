@@ -800,6 +800,9 @@ class AgentLoop:
         #     跳过技能匹配，避免在已导航的目标站点上误匹配通用技能 ──
         if explore_agent.has_pending_snapshot:
             batch = explore_agent.plan_actions(task)
+            completion_state = self._complete_explore_plan(step, batch)
+            if completion_state is not None:
+                return completion_state
             if batch and batch.actions:
                 step.action = "执行 Explore 操作"
                 step.mode = "explore"
@@ -836,30 +839,6 @@ class AgentLoop:
             meta["confidence"] = decision.confidence
             meta["skill_id"] = decision.skill.id if decision.skill else None
 
-        # LLM 判定需要 explore
-        if decision.source == "llm_explore":
-            if self._desktop_only:
-                step.result = "桌面任务未命中已注册技能，已停止且不会进入浏览器 Explore"
-                logger.warning("PLAN: desktop-only task rejected LLM Explore fallback")
-                return AgentState.FAILED
-            step.action = "LLM 判定进入 Explore 模式"
-            step.mode = "explore"
-            step.result = f"LLM 路由判定: {decision.reason}"
-            logger.info("PLAN: LLM router chose explore (reason=%s)", decision.reason)
-            self._bus.emit(
-                Event(
-                    name=EVENT_AGENT_PLAN,
-                    phase=Phase.AFTER,
-                    data={
-                        "step_number": step.step_number,
-                        "source": "llm_explore",
-                        "confidence": decision.confidence,
-                    },
-                    result=step.result,
-                )
-            )
-            return AgentState.EXPLORE
-
         # 技能命中
         if decision.skill and decision.script:
             step.action = f"使用技能: {decision.skill.name}"
@@ -894,6 +873,48 @@ class AgentLoop:
             step.result = "桌面任务未命中已注册技能，已停止且不会进入浏览器 Explore"
             logger.warning("PLAN: desktop-only task did not match a registered skill")
             return AgentState.FAILED
+
+        explicit_url = None
+        if explore_agent.should_force_explicit_entry(task):
+            explicit_url = explore_agent.bootstrap_explicit_entry(task)
+        if explicit_url:
+            step.action = "Explore 前打开用户指定网址"
+            step.mode = "explore"
+            step.result = f"Explore 优先打开用户指定网址: {explicit_url}"
+            logger.info("PLAN: Explore explicit URL opened %s", explicit_url)
+            self._bus.emit(
+                Event(
+                    name=EVENT_AGENT_PLAN,
+                    phase=Phase.AFTER,
+                    data={
+                        "step_number": step.step_number,
+                        "source": "explore_explicit_url",
+                        "url": explicit_url,
+                    },
+                    result=step.result,
+                )
+            )
+            return AgentState.OBSERVE
+
+        # LLM 判定需要 explore
+        if decision.source == "llm_explore":
+            step.action = "LLM 判定进入 Explore 模式"
+            step.mode = "explore"
+            step.result = f"LLM 路由判定: {decision.reason}"
+            logger.info("PLAN: LLM router chose explore (reason=%s)", decision.reason)
+            self._bus.emit(
+                Event(
+                    name=EVENT_AGENT_PLAN,
+                    phase=Phase.AFTER,
+                    data={
+                        "step_number": step.step_number,
+                        "source": "llm_explore",
+                        "confidence": decision.confidence,
+                    },
+                    result=step.result,
+                )
+            )
+            return AgentState.EXPLORE
 
         # ── 2. Explore 经验复用 ──
         experience = explore_agent.find_experience(task, page_context.get("url", ""))
@@ -967,6 +988,9 @@ class AgentLoop:
         # ── 4. Explore 模式 ──
         if explore_agent.has_pending_snapshot:
             batch = explore_agent.plan_actions(task)
+            completion_state = self._complete_explore_plan(step, batch)
+            if completion_state is not None:
+                return completion_state
             if batch and batch.actions:
                 step.action = "执行 Explore 操作"
                 step.mode = "explore"
@@ -983,6 +1007,30 @@ class AgentLoop:
         step.result = "技能和规则未命中，进入 Explore 模式"
         logger.info("PLAN: entering Explore mode")
         return AgentState.EXPLORE
+
+    @staticmethod
+    def _complete_explore_plan(
+        step: AgentStep,
+        batch: Any,
+    ) -> AgentState | None:
+        """Finish Explore when the planner explicitly marks the current state complete."""
+
+        if batch is None or not getattr(batch, "task_complete", False):
+            return None
+        if getattr(batch, "actions", None):
+            logger.warning(
+                "PLAN: ignored contradictory Explore completion marker with pending actions"
+            )
+            return None
+        summary = str(
+            getattr(batch, "completion_summary", "") or "当前页面已满足任务要求"
+        ).strip()
+        step.action = "完成 Explore 任务"
+        step.mode = "explore"
+        step.success = True
+        step.result = f"Explore 任务已完成: {summary}"
+        logger.info("PLAN: Explore marked task complete: %s", summary)
+        return AgentState.DONE
 
     def _generate_script(self, task: str, page_summary: str) -> str | None:
         """根据任务描述生成脚本。
