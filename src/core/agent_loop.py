@@ -42,7 +42,6 @@ from src.core.event_bus import (
     Phase,
     get_event_bus,
 )
-from src.core.experience import ExperienceManager, get_experience_manager
 from src.core.explore.agent import ExploreAgent
 from src.core.intent_parser import LLMIntentParser, get_llm_intent_parser
 from src.core.llm_utils import chat_json_with_retry
@@ -184,7 +183,6 @@ class AgentLoop:
         self._skill_router: SkillRouter | None = None
         self._script_engine = None
         self._script_generator = ScriptGenerator()
-        self._experience: ExperienceManager | None = None
         self._llm_parser: LLMIntentParser | None = None
         self._task_splitter: TaskSplitter | None = None
         self._explore_agent: ExploreAgent | None = None
@@ -529,9 +527,6 @@ class AgentLoop:
         if self._script_engine is None:
             self._script_engine = get_script_engine()
             self._script_engine.register_functions(get_controls_exports())
-
-        if self._experience is None:
-            self._experience = get_experience_manager()
 
         if self._llm_parser is None:
             self._llm_parser = get_llm_intent_parser()
@@ -1910,20 +1905,6 @@ class AgentLoop:
             if result.output:
                 step.result += f": {result.output.strip()[:100]}"
             logger.info("ACT: script executed successfully")
-
-            # 保存成功的脚本到经验库
-            if not self._desktop_only and self._experience and script_to_run:
-                try:
-                    page = get_browser_manager().get_page()
-                    site = self._extract_site(page.url)
-                    self._experience.save_script(
-                        task=step.action or "unknown",
-                        script=script_to_run,
-                        site=site,
-                    )
-                    logger.debug("ACT: saved script to experience")
-                except Exception:
-                    pass  # 保存失败不影响主流程
 
             self._bus.emit(
                 Event(

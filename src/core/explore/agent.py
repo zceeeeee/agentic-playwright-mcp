@@ -586,6 +586,8 @@ class ExploreAgent:
             for action_result in result.results:
                 if action_result.action in ("panel_prompt", "pause_for_input") and action_result.value is not None:
                     self._last_panel_answer = action_result.value
+                    # 遇到登录/验证码时沉淀站点知识
+                    self._maybe_record_site_knowledge(action_result.value)
                 # 如果执行了 complete 动作，任务完成
                 if action_result.action == "complete":
                     self.save_experience(step)
@@ -689,6 +691,24 @@ class ExploreAgent:
             snapshot_names=[node.name for node in self._iter_snapshot_nodes(self._current_snapshot.nodes) if node.name],
         )
         self._experience_mgr.save(experience)
+
+    def _maybe_record_site_knowledge(self, panel_text: str) -> None:
+        """如果面板问题涉及登录/验证码等，沉淀站点知识。"""
+        keywords = ("登录", "登陆", "验证码", "人机验证", "滑块", "captcha", "login", "verify")
+        if not any(kw in panel_text.lower() for kw in keywords):
+            return
+        try:
+            page = self._get_browser_manager().get_page()
+            current_url = str(getattr(page, "url", "") or "")
+            site = self.extract_site(current_url)
+            if not site:
+                return
+            from src.core.experience import get_experience_manager
+            gotcha = panel_text.strip()[:100]
+            get_experience_manager().add_knowledge(site, gotcha=gotcha)
+            logger.info("Explore: 沉淀站点知识 [%s] %s", site, gotcha)
+        except Exception:
+            pass
 
     def ask_user_for_help(self, question: str) -> str | None:
         """直接暂停询问用户，不触发历史记录/循环检测等副作用。

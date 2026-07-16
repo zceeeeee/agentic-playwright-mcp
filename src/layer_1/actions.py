@@ -9,6 +9,7 @@ Layer 1 — 基础原语（Helpers）。
 import os
 import time
 from typing import List
+from urllib.parse import urlparse
 
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -22,6 +23,53 @@ from src.core.event_bus import (
     Phase,
     get_event_bus,
 )
+
+
+def _extract_site(url: str) -> str:
+    """从 URL 提取站点名（去掉 www.，取第一段域名）。"""
+    try:
+        hostname = urlparse(url).hostname or ""
+        return hostname.removeprefix("www.").split(".")[0]
+    except Exception:
+        return ""
+
+
+def _reorder_by_experience(selector_list: List[str], page_url: str) -> List[str]:
+    """按历史可靠性重排选择器列表。出错时静默返回原列表。"""
+    if len(selector_list) <= 1:
+        return selector_list
+    try:
+        from src.core.experience import get_experience_manager
+        exp = get_experience_manager()
+        site = _extract_site(page_url)
+        if not site:
+            return selector_list
+        best = exp.get_best_selectors(site, element=selector_list[0])
+        if not best:
+            return selector_list
+        reliable = [s for s in best if s in selector_list]
+        rest = [s for s in selector_list if s not in reliable]
+        return reliable + rest
+    except Exception:
+        return selector_list
+
+
+def _record_selector_result(
+    page_url: str, element: str, selector: str, success: bool
+) -> None:
+    """记录选择器成功/失败。出错时静默忽略。"""
+    try:
+        from src.core.experience import get_experience_manager
+        exp = get_experience_manager()
+        site = _extract_site(page_url)
+        if not site:
+            return
+        if success:
+            exp.record_selector_success(site, element, selector)
+        else:
+            exp.record_selector_failure(site, element, selector)
+    except Exception:
+        pass
 
 
 def do_goto(page: Page, url: str) -> str:
@@ -107,10 +155,14 @@ def do_click(
     # Allow hooks to modify selector list
     selector_list = event.data.get("selector_list", selector_list)
 
+    # 按历史可靠性重排选择器
+    selector_list = _reorder_by_experience(selector_list, page.url)
+
     for i, selector in enumerate(selector_list):
         try:
             if page.is_visible(selector, timeout=1000):
                 page.click(selector, timeout=timeout)
+                _record_selector_result(page.url, selector_list[0], selector, True)
                 result = {
                     "success": True,
                     "used_selector": selector,
@@ -134,6 +186,8 @@ def do_click(
             continue
 
     # 所有选择器均失败 — 截屏留证
+    for sel in selector_list:
+        _record_selector_result(page.url, selector_list[0], sel, False)
     screenshot_path = _save_error_screenshot(page, "click")
     result = {
         "success": False,
@@ -194,10 +248,14 @@ def do_fill(
     selector_list = event.data.get("selector_list", selector_list)
     value = event.data.get("value", value)
 
+    # 按历史可靠性重排选择器
+    selector_list = _reorder_by_experience(selector_list, page.url)
+
     for i, selector in enumerate(selector_list):
         try:
             if page.is_visible(selector, timeout=1000):
                 page.fill(selector, value, timeout=timeout)
+                _record_selector_result(page.url, selector_list[0], selector, True)
                 result = {
                     "success": True,
                     "used_selector": selector,
@@ -221,6 +279,8 @@ def do_fill(
         except Exception:
             continue
 
+    for sel in selector_list:
+        _record_selector_result(page.url, selector_list[0], sel, False)
     screenshot_path = _save_error_screenshot(page, "fill")
     result = {
         "success": False,
