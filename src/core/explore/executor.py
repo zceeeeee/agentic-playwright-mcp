@@ -102,6 +102,7 @@ class ExploreExecutor:
         self._ref_locator_cache: dict[str, Any] = {}
         self._ref_role_map: dict[str, tuple[str, str]] = {}  # ref → (role, name)
         self._needs_snapshot = False
+        self._deep_scan_requested = False
         # Explore 模式禁用 login_guard，因为 Explore 本身有 pause_for_input 机制处理登录
         # login_guard 会误检测页面上的"登录"文字，导致所有操作被跳过
         self._login_guard = GenericLoginGuard(
@@ -118,6 +119,7 @@ class ExploreExecutor:
         results: list[ActionResult] = []
         try:
             self._needs_snapshot = False
+            self._deep_scan_requested = False
             batch = self._coerce_batch(batch)
             self._validate_batch(batch)
             self._validate_version(batch.actions)
@@ -135,6 +137,13 @@ class ExploreExecutor:
                         results=results,
                         error=result.error,
                         error_code=result.error_code,
+                    )
+                if self._deep_scan_requested:
+                    return ExecutionResult(
+                        success=True,
+                        status="deep_scan_completed",
+                        results=results,
+                        need_snapshot=True,
                     )
                 if self._needs_snapshot:
                     return ExecutionResult(
@@ -306,7 +315,7 @@ class ExploreExecutor:
             elif action.action == ActionType.REQUEST_DEEP_SCAN:
                 if self._snapshot_gen is not None:
                     self.update_snapshot(self._snapshot_gen.force_deep_scan(self._page))
-                    self._needs_snapshot = True
+                    self._deep_scan_requested = True
                     return ActionResult(
                         action=action.action,
                         ref=action.ref,
@@ -429,7 +438,34 @@ class ExploreExecutor:
         self._get_locator(ref).uncheck(timeout=self._action_timeout())
 
     def _goto(self, url: str) -> None:
+        import logging
+        logger = logging.getLogger(__name__)
         self._page.goto(url, wait_until="load")
+        # SPA 页面 load 后内容可能尚未渲染，等待网络空闲和 DOM 内容
+        try:
+            self._page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:
+            logger.debug("networkidle wait timed out for %s", url)
+        try:
+            self._page.wait_for_function(
+                "() => document.body && document.body.children.length >= 2",
+                timeout=5000,
+            )
+        except Exception:
+            logger.debug("DOM content wait timed out for %s", url)
+        # 诊断：输出页面实际状态
+        try:
+            diag = self._page.evaluate(
+                "() => ({"
+                "  url: location.href,"
+                "  title: document.title,"
+                "  bodyChildren: document.body ? document.body.children.length : -1,"
+                "  bodyHTML: document.body ? document.body.innerHTML.length : 0,"
+                "})"
+            )
+            logger.info("After goto %s: %s", url, diag)
+        except Exception as exc:
+            logger.warning("Post-goto diagnostic failed: %s", exc)
 
     def _scroll(self, direction: str, amount: int) -> None:
         delta = amount if direction == "down" else -amount

@@ -475,33 +475,6 @@ class SnapshotGenerator:
             return {}
         return tree
 
-    # -- evaluate with timeout --------------------------------------------------
-    _EVAL_TIMEOUT_S = 15  # 15s，防止 SPA 页面 JS 主线程繁忙导致无限阻塞
-
-    def _evaluate_with_timeout(self, page: Any, js_fn: str, arg: Any = None) -> Any:
-        """Run ``page.evaluate()`` in a worker thread with a hard timeout.
-
-        ``js_fn`` is the JS expression passed to ``page.evaluate()``.
-        Uses a daemon thread so a hung evaluate never blocks the agent loop.
-
-        Note: ``Promise.race`` timeout does NOT work when the browser JS main
-        thread is blocked (timer callbacks can't fire), so we need a
-        Python-level thread timeout.
-        """
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(page.evaluate, js_fn, arg)
-            try:
-                return future.result(timeout=self._EVAL_TIMEOUT_S)
-            except concurrent.futures.TimeoutError:
-                logger.warning(
-                    "page.evaluate timed out after %ss — "
-                    "JS main thread likely blocked; returning empty result",
-                    self._EVAL_TIMEOUT_S,
-                )
-                raise TimeoutError(f"page.evaluate timed out ({self._EVAL_TIMEOUT_S}s)")
-
     def _extract_via_custom_js(self, page: Any, focus: FocusTarget | None = None) -> dict:
         """Fallback: use custom JS for ARIA extraction."""
         options = {
@@ -509,7 +482,9 @@ class SnapshotGenerator:
             "focus": focus.model_dump() if focus else None,
         }
         try:
-            raw = self._evaluate_with_timeout(page, _ARIA_EXTRACTION_JS_FALLBACK, options)
+            raw = page.evaluate(_ARIA_EXTRACTION_JS_FALLBACK, options)
+        except TypeError:
+            raw = page.evaluate(_ARIA_EXTRACTION_JS_FALLBACK)
         except Exception:
             raw = {}
         return raw if isinstance(raw, dict) else {}
@@ -562,7 +537,9 @@ class SnapshotGenerator:
             "focus": focus.model_dump() if focus else None,
         }
         try:
-            raw = self._evaluate_with_timeout(page, _ARIA_DEEP_SCAN_JS, options)
+            raw = page.evaluate(_ARIA_DEEP_SCAN_JS, options)
+        except TypeError:
+            raw = page.evaluate(_ARIA_DEEP_SCAN_JS)
         except Exception:
             raw = {}
         return raw if isinstance(raw, dict) else {}

@@ -95,6 +95,9 @@ class ExploreAgent:
         self._consecutive_same_page: int = 0  # 连续相同页面计数
         self._last_page_signature: str | None = None  # 上一次页面签名
         self._circuit_breakers: dict[str, int] = {}  # 动作类型 → 连续失败次数
+        self._consecutive_empty_snapshots: int = 0  # 连续空快照计数（含 deep_scan 后仍为空）
+        self._deep_scan_just_ran: bool = False  # 上一步是否刚执行过 deep_scan
+        self._last_goto_url: str | None = None  # 上一次 goto 的目标 URL
         self._blocker_threshold: int = 3  # 连续失败 N 次触发 blocker
 
     def _get_browser_manager(self):
@@ -172,6 +175,9 @@ class ExploreAgent:
         self._consecutive_same_page = 0
         self._last_page_signature = None
         self._circuit_breakers = {}
+        self._consecutive_empty_snapshots = 0
+        self._deep_scan_just_ran = False
+        self._last_goto_url = None
 
     # ── 失败记忆与循环检测 ──────────────────────────────────────
 
@@ -363,6 +369,10 @@ class ExploreAgent:
     def snapshot(self, step: Any) -> None:
         page = self._get_browser_manager().get_page()
         snapshot = self._snapshot_generator().snapshot(page, mode=SnapshotMode.COMPACT)
+        # 如果上一步刚执行过 deep_scan，标记本次快照为已深度扫描
+        if self._deep_scan_just_ran:
+            snapshot.deep_scanned = True
+            self._deep_scan_just_ran = False
         step.snapshot = snapshot
         self._last_snapshot = snapshot
         self._current_snapshot = snapshot
@@ -379,6 +389,12 @@ class ExploreAgent:
         ]
         if interactive:
             logger.info("Explore 快照交互元素:\n%s", "\n".join(interactive))
+            self._consecutive_empty_snapshots = 0
+        else:
+            self._consecutive_empty_snapshots += 1
+            logger.warning(
+                "Explore 快照无交互元素 (连续第 %d 次)", self._consecutive_empty_snapshots
+            )
         self.ensure_executor().update_snapshot(snapshot)
 
     def plan_actions(self, task: str) -> ActionBatch | None:
@@ -456,13 +472,13 @@ class ExploreAgent:
             "你是 Explore 模式浏览器操作规划器。根据用户任务和 ARIA 快照，"
             "输出一个短的原子操作数组。\n\n"
             f"用户任务: {task}\n\n"
+            f"当前页面 URL: {snapshot.url}\n"
             f"当前快照版本: {snapshot.version}\n"
             f"深度扫描: {'是' if snapshot.deep_scanned else '否'}\n"
             f"ARIA 快照:\n{json.dumps(snapshot.model_dump(mode='json'), ensure_ascii=False)}\n\n"
             "规则:\n"
-            "1. 每次响应都必须填写 task_complete。只有当前页面和操作历史已经明确证明"
-            "用户任务完成时才设为 true，并填写 completion_summary；此时 actions 返回空数组。"
-            "只要仍需点击、输入、等待、读取或确认，就必须设为 false。\n"
+            "1. 如果当前 URL 已经是目标网站（快照 url 包含目标域名），不要再 goto 同一个网站。"
+            "应该在当前页面上寻找可交互元素。\n"
             "2. click/double_click/fill/select/check/uncheck/hover/drag/upload 必须填写 ref。\n"
             "3. fill/select/type/upload 必须填写 value。\n"
             "4. keyboard 的 value 是按键名（Enter, Escape, Tab, Control+a 等）。\n"
@@ -517,6 +533,26 @@ class ExploreAgent:
                 f"\n🚨 熔断警告：{broken} 类操作已连续失败 {count} 次。"
                 f"不要再尝试 {broken} 操作。如果是登录/验证码等需要人工介入的场景，"
                 f"请使用 pause_for_input 告知用户并等待用户手动操作。\n"
+            )
+
+        # ── 空快照警告 ──
+        if self._consecutive_empty_snapshots >= 2:
+            prompt += (
+                f"\n⚠️ 空快照警告：已经连续 {self._consecutive_empty_snapshots} 次快照返回 0 个可交互元素。"
+                "request_deep_scan 已经尝试过但无效，不要再使用 request_deep_scan。\n"
+                "可能的原因：页面尚未加载完成、页面使用了 Canvas/WebGL 渲染、"
+                "反爬机制阻止了内容渲染、或页面在 iframe 中。\n"
+                "请使用 pause_for_input 询问用户是否需要手动操作，或尝试其他策略"
+                "（如 scroll、click_at 坐标点击、evaluate 执行 JS）。\n"
+            )
+
+        # ── 重复导航警告 ──
+        if self._last_goto_url and snapshot.url and self._last_goto_url in snapshot.url:
+            prompt += (
+                f"\n⚠️ 重复导航警告：当前页面已经在 {snapshot.url}，"
+                f"上一次 goto 目标也是 {self._last_goto_url}。"
+                "不要再 goto 同一个网站。如果页面内容为空，请尝试其他策略"
+                "（如 scroll、click_at、evaluate、pause_for_input）。\n"
             )
 
         # ── 示例 ──
@@ -667,6 +703,12 @@ class ExploreAgent:
         if result.success:
             step.success = True
             step.result = f"Explore 执行成功: {result.status}"
+            # 跟踪 deep_scan 状态，让后续 snapshot 知道已经 deep_scan 过
+            if result.status == "deep_scan_completed":
+                self._deep_scan_just_ran = True
+            # 导航成功后重置空快照计数器（新页面需要重新评估）
+            if result.status == "navigation_occurred":
+                self._consecutive_empty_snapshots = 0
             for action_result in result.results:
                 if action_result.action in ("panel_prompt", "pause_for_input") and action_result.value is not None:
                     self._last_panel_answer = action_result.value
@@ -678,6 +720,10 @@ class ExploreAgent:
                     step.result = f"Explore 任务已完成: {summary}"
                     self.save_experience(step)
                     return "done"
+            # 跟踪 goto 目标 URL
+            for action in step.actions:
+                if action.action == "goto" and action.url:
+                    self._last_goto_url = action.url
             self.save_experience(step)
             # 执行成功后，返回 "explore" 让程序继续拍快照、规划下一步操作
             # 只有当任务明确完成时才返回 "done"
@@ -848,6 +894,16 @@ class ExploreAgent:
             page.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:
             logger.debug("networkidle wait timed out, continuing anyway")
+
+        # 额外等待：SPA 页面 networkidle 后 JS 可能仍在渲染 DOM
+        # 等待 body 有至少 3 个子元素（排除纯加载页/空白页）
+        try:
+            page.wait_for_function(
+                "() => document.body && document.body.children.length >= 3",
+                timeout=5000,
+            )
+        except Exception:
+            logger.debug("DOM content wait timed out, continuing anyway")
 
         logger.info("Explore bootstrap navigated to %s", target_url)
         self.just_navigated_to_entry = True
