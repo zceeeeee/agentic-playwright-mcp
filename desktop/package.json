@@ -55,7 +55,7 @@
           ]
         }
       ],
-      "icon": "assets/icons/icon.ico",
+      "icon": "assets/icons/icon-win.png",
       "executableName": "FeatherDesk",
       "artifactName": "FeatherDesk-${version}-Setup.${ext}"
     },

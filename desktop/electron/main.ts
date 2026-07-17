@@ -57,7 +57,12 @@ let activeConversationId: string | null = null;
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
-const appIconPath = path.join(desktopRoot, "assets", "icons", "icon-256.png");
+const appIconPath = path.join(
+  desktopRoot,
+  "assets",
+  "icons",
+  process.platform === "win32" ? "icon-win.png" : "icon-256.png"
+);
 
 app.setName(APP_NAME);
 
@@ -512,7 +517,9 @@ function updateTrayMenu(): void {
 }
 
 function createTray(): void {
-  const iconPath = path.join(desktopRoot, "assets", "tray-icon.svg");
+  const iconPath = process.platform === "win32"
+    ? appIconPath
+    : path.join(desktopRoot, "assets", "tray-icon.svg");
   const image = nativeImage.createFromPath(iconPath).resize({ width: 20, height: 20 });
   tray = new Tray(image);
   tray.setToolTip(APP_NAME);
