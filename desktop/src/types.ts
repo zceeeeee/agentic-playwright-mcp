@@ -124,6 +124,9 @@ export interface DesktopSettings {
   browserHeadless: boolean;
   maxSteps: number;
   useCloakBrowser: boolean;
+  browserEngine?: string;  // "playwright" | "cloakbrowser" | "local_chrome"
+  localChromePath?: string;
+  localChromeDebugPort?: number;
 }
 
 export interface DesktopBridge {

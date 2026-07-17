@@ -1261,6 +1261,9 @@ HTML_TEMPLATE = """
                     <input type="checkbox" id="keepOpen" checked />
                     保持浏览器开启
                 </label>
+                <button class="btn btn-link" onclick="openBrowserSettings()" style="margin-left: auto;">
+                    ⚙️ 浏览器设置
+                </button>
             </div>
         </div>
     </div>
@@ -1495,6 +1498,7 @@ HTML_TEMPLATE = """
                 use_cloak: document.getElementById('useCloak').checked,
                 max_steps: parseInt(document.getElementById('maxSteps').value) || 10,
                 keep_open: keepOpen,
+                browser_engine: selectedBrowserEngine,
             };
 
             let taskSuccess = false;
@@ -1982,6 +1986,161 @@ HTML_TEMPLATE = """
             if (e.target === e.currentTarget) closeSetupModal();
         });
     </script>
+
+    <!-- ── Browser Settings Modal ── -->
+    <div class="modal-overlay" id="browserSettingsModal">
+        <div class="modal-box">
+            <h2>浏览器设置</h2>
+            <p class="modal-desc">选择浏览器引擎。使用本地 Chrome 可复用已登录的状态和书签。</p>
+
+            <div class="provider-chips">
+                <div class="provider-chip selected" data-engine="cloakbrowser" onclick="selectBrowserEngine('cloakbrowser')">
+                    <div class="chip-name">CloakBrowser</div>
+                    <div class="chip-desc">反检测</div>
+                </div>
+                <div class="provider-chip" data-engine="playwright" onclick="selectBrowserEngine('playwright')">
+                    <div class="chip-name">Playwright</div>
+                    <div class="chip-desc">标准</div>
+                </div>
+                <div class="provider-chip" data-engine="local_chrome" onclick="selectBrowserEngine('local_chrome')">
+                    <div class="chip-name">本地 Chrome</div>
+                    <div class="chip-desc">复用登录</div>
+                </div>
+            </div>
+
+            <div id="localChromeConfig" style="display:none">
+                <div class="modal-field">
+                    <label for="chromePath">Chrome 路径</label>
+                    <input type="text" id="chromePath" placeholder="留空则自动检测">
+                    <div class="modal-hint">例如: C:\Program Files\Google\Chrome\Application\chrome.exe</div>
+                </div>
+                <div class="modal-field">
+                    <label for="chromeDebugPort">调试端口</label>
+                    <input type="number" id="chromeDebugPort" value="9222" min="1024" max="65535">
+                    <div class="modal-hint">Chrome 远程调试端口，默认 9222</div>
+                </div>
+            </div>
+
+            <div class="modal-error" id="browserSettingsError"></div>
+
+            <div class="modal-actions">
+                <button class="btn-modal-ghost" onclick="closeBrowserSettings()">取消</button>
+                <button class="btn-modal-primary" id="browserSettingsSaveBtn" onclick="saveBrowserSettings()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ── Browser Settings Modal Logic ── */
+        let selectedBrowserEngine = 'cloakbrowser';
+
+        function selectBrowserEngine(engine) {
+            selectedBrowserEngine = engine;
+            document.querySelectorAll('#browserSettingsModal .provider-chip').forEach(el => {
+                el.classList.toggle('selected', el.dataset.engine === engine);
+            });
+            // 显示/隐藏本地 Chrome 配置
+            document.getElementById('localChromeConfig').style.display =
+                engine === 'local_chrome' ? 'block' : 'none';
+        }
+
+        function openBrowserSettings() {
+            document.getElementById('browserSettingsModal').classList.add('active');
+            // 加载当前配置
+            loadBrowserSettings();
+        }
+
+        function closeBrowserSettings() {
+            document.getElementById('browserSettingsModal').classList.remove('active');
+        }
+
+        async function loadBrowserSettings() {
+            try {
+                const resp = await fetch('/api/config');
+                const config = await resp.json();
+                const browser = config.browser || {};
+                const engine = browser.engine || 'cloakbrowser';
+                const localChrome = browser.local_chrome || {};
+
+                selectBrowserEngine(engine);
+                document.getElementById('chromePath').value = localChrome.executable_path || '';
+                document.getElementById('chromeDebugPort').value = localChrome.debug_port || 9222;
+            } catch (e) {
+                console.warn('Failed to load browser settings:', e);
+            }
+        }
+
+        async function saveBrowserSettings() {
+            const btn = document.getElementById('browserSettingsSaveBtn');
+            const errEl = document.getElementById('browserSettingsError');
+            errEl.style.display = 'none';
+
+            btn.disabled = true;
+            btn.textContent = '保存中...';
+
+            try {
+                const config = {
+                    'browser.engine': selectedBrowserEngine,
+                };
+
+                if (selectedBrowserEngine === 'local_chrome') {
+                    config['browser.local_chrome.executable_path'] =
+                        document.getElementById('chromePath').value.trim();
+                    config['browser.local_chrome.debug_port'] =
+                        parseInt(document.getElementById('chromeDebugPort').value) || 9222;
+                }
+
+                const resp = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config),
+                });
+                const result = await resp.json();
+
+                if (result.success) {
+                    closeBrowserSettings();
+                    // 更新选项区域的显示
+                    updateEngineDisplay();
+                } else {
+                    errEl.textContent = result.error || '保存失败';
+                    errEl.style.display = 'block';
+                }
+            } catch (e) {
+                errEl.textContent = '请求失败: ' + e.message;
+                errEl.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '保存';
+            }
+        }
+
+        function updateEngineDisplay() {
+            // 更新 useCloak 复选框状态以保持兼容
+            const useCloak = document.getElementById('useCloak');
+            if (selectedBrowserEngine === 'cloakbrowser') {
+                useCloak.checked = true;
+            } else {
+                useCloak.checked = false;
+            }
+        }
+
+        // 点击遮罩关闭
+        document.getElementById('browserSettingsModal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeBrowserSettings();
+        });
+
+        // 页面加载后同步引擎状态
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const resp = await fetch('/api/config');
+                const config = await resp.json();
+                selectedBrowserEngine = config.browser?.engine || 'cloakbrowser';
+                updateEngineDisplay();
+            } catch (e) {
+                console.warn('Failed to sync browser engine:', e);
+            }
+        });
+    </script>
 </body>
 </html>
 """
@@ -2010,6 +2169,7 @@ def api_run():
     max_steps = data.get("max_steps", 10)
     keep_open = data.get("keep_open", False)
     load_auth_domain = data.get("load_auth_domain")
+    browser_engine = data.get("browser_engine", "")
 
     if not task:
         return jsonify({"success": False, "error": "任务描述不能为空"})
@@ -2019,10 +2179,27 @@ def api_run():
 
     try:
         # 设置环境变量
-        if use_cloak:
+        if browser_engine:
+            # 优先使用前端传递的引擎配置
+            os.environ["BROWSER_ENGINE"] = browser_engine
+        elif use_cloak:
             os.environ["USE_CLOAKBROWSER"] = "true"
+            os.environ["BROWSER_ENGINE"] = "cloakbrowser"
         else:
             os.environ["USE_CLOAKBROWSER"] = "false"
+            os.environ["BROWSER_ENGINE"] = "playwright"
+
+        # 加载本地 Chrome 配置（如果需要）
+        if browser_engine == "local_chrome":
+            from src.config_manager import get_config_manager
+            config = get_config_manager()
+            local_chrome = config.get_local_chrome_config()
+            os.environ["LOCAL_CHROME_PATH"] = local_chrome["executable_path"]
+            os.environ["LOCAL_CHROME_DEBUG_PORT"] = str(local_chrome["debug_port"])
+            os.environ["LOCAL_CHROME_USER_DATA"] = local_chrome["user_data_dir"]
+            os.environ["LOCAL_CHROME_AUTO_LAUNCH"] = (
+                "true" if local_chrome["auto_launch"] else "false"
+            )
 
         # 重置所有状态（确保线程安全）
         reset_script_engine()

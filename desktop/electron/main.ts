@@ -410,14 +410,26 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     }
   }
   const provider = stored.provider || "openai";
+  const browserEngine = stored.browserEngine || (stored.useCloakBrowser !== "false" ? "cloakbrowser" : "playwright");
+
   const env = withUtf8PythonEnvironment({
     ...process.env,
     DESKTOP_AGENT_TOKEN: backendToken,
     LLM_PROVIDER: provider,
     BROWSER_HEADLESS: stored.browserHeadless || "false",
     DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",
-    USE_CLOAKBROWSER: stored.useCloakBrowser || "true"
+    USE_CLOAKBROWSER: stored.useCloakBrowser || "true",
+    BROWSER_ENGINE: browserEngine
   });
+
+  // 本地 Chrome 配置
+  if (browserEngine === "local_chrome") {
+    env.LOCAL_CHROME_PATH = stored.localChromePath || "";
+    env.LOCAL_CHROME_DEBUG_PORT = stored.localChromeDebugPort || "9222";
+    env.LOCAL_CHROME_AUTO_LAUNCH = "true";
+    env.LOCAL_CHROME_USER_DATA = "";
+  }
+
   if (provider === "anthropic") {
     env.ANTHROPIC_API_KEY = apiKey || process.env.ANTHROPIC_API_KEY;
     env.ANTHROPIC_BASE_URL = stored.baseUrl || process.env.ANTHROPIC_BASE_URL;
@@ -591,16 +603,21 @@ function registerIpc(): void {
   ipcMain.handle("settings:get", () => {
     const settings = readJson<Record<string, string>>(userFile("settings.json"), {});
     const maxSteps = Math.min(100, Math.max(5, Math.round(Number(settings.maxSteps || "20")) || 20));
+    const useCloak = settings.useCloakBrowser !== "false";
+    const browserEngine = settings.browserEngine || (useCloak ? "cloakbrowser" : "playwright");
     return {
-      provider: settings.provider || "openai",
-      baseUrl: settings.baseUrl || "https://api.openai.com/v1",
-      model: settings.model || "gpt-4o-mini",
+      provider: String(settings.provider || "openai"),
+      baseUrl: String(settings.baseUrl || "https://api.openai.com/v1"),
+      model: String(settings.model || "gpt-4o-mini"),
       temperature: Number(settings.temperature || "0.2"),
       requestTimeout: Number(settings.requestTimeout || "60"),
       browserHeadless: settings.browserHeadless === "true",
-      maxSteps,
-      useCloakBrowser: settings.useCloakBrowser !== "false",
-      apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : ""
+      maxSteps: maxSteps,
+      useCloakBrowser: useCloak,
+      apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : "",
+      browserEngine: String(browserEngine),
+      localChromePath: String(settings.localChromePath || ""),
+      localChromeDebugPort: Number(settings.localChromeDebugPort || "9222")
     };
   });
   ipcMain.handle("settings:save", async (_event, incoming: Record<string, unknown>) => {
@@ -620,6 +637,19 @@ function registerIpc(): void {
       Math.min(100, Math.max(5, Math.round(Number(incoming.maxSteps ?? 20)) || 20))
     );
     existing.useCloakBrowser = String(incoming.useCloakBrowser !== false);
+
+    // 本地浏览器配置
+    const browserEngine = String(incoming.browserEngine || "cloakbrowser");
+    existing.browserEngine = browserEngine;
+    if (browserEngine === "local_chrome") {
+      existing.localChromePath = String(incoming.localChromePath || "");
+      existing.localChromeDebugPort = String(incoming.localChromeDebugPort || "9222");
+      existing.useCloakBrowser = "false";
+    } else {
+      // 非本地 Chrome 时，根据引擎类型设置 useCloakBrowser
+      existing.useCloakBrowser = String(browserEngine === "cloakbrowser");
+    }
+
     writeJson(userFile("settings.json"), existing);
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };

@@ -39,6 +39,50 @@ def _is_cloak_enabled() -> bool:
     return os.getenv("USE_CLOAKBROWSER", "true").strip().lower() == "true"
 
 
+def _detect_chrome_path() -> str | None:
+    """自动检测本地 Chrome 安装路径。"""
+    import platform
+    from pathlib import Path
+
+    if platform.system() == "Windows":
+        candidates = [
+            Path(os.environ.get("PROGRAMFILES", ""))
+            / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", ""))
+            / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Google/Chrome/Application/chrome.exe",
+        ]
+    elif platform.system() == "Darwin":
+        candidates = [
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        ]
+    else:  # Linux
+        candidates = [
+            Path("/usr/bin/google-chrome"),
+            Path("/usr/bin/google-chrome-stable"),
+        ]
+
+    for path in candidates:
+        if path.exists():
+            return str(path)
+    return None
+
+
+def _get_engine_type() -> str:
+    """根据环境变量决定引擎类型。
+
+    优先级:
+    1. BROWSER_ENGINE 环境变量（新配置）
+    2. USE_CLOAKBROWSER 环境变量（旧配置兼容）
+    """
+    engine = os.getenv("BROWSER_ENGINE", "").strip().lower()
+    if engine in ("playwright", "cloakbrowser", "local_chrome"):
+        return engine
+    # 兼容旧配置
+    return "cloakbrowser" if _is_cloak_enabled() else "playwright"
+
+
 def _import_cloakbrowser():
     """Lazy-import cloakbrowser. Raises ImportError if not installed."""
     try:
@@ -77,7 +121,7 @@ class BrowserManager:
     ) -> Page:
         """启动浏览器并返回默认页面。
 
-        根据 USE_CLOAKBROWSER 环境变量自动选择引擎。
+        根据 BROWSER_ENGINE 或 USE_CLOAKBROWSER 环境变量自动选择引擎。
 
         Args:
             headless: 是否无头模式运行。
@@ -88,9 +132,23 @@ class BrowserManager:
         Returns:
             启动后的默认 Page 实例。
         """
-        use_cloak = _is_cloak_enabled()
+        engine = _get_engine_type()
 
-        if use_cloak:
+        if engine == "local_chrome":
+            # 本地 Chrome 需要先初始化 Playwright
+            if self._playwright is None:
+                try:
+                    self._playwright = sync_playwright().start()
+                except RuntimeError as exc:
+                    if "asyncio loop" in str(exc).lower():
+                        import asyncio
+
+                        asyncio.set_event_loop(asyncio.new_event_loop())
+                        self._playwright = sync_playwright().start()
+                    else:
+                        raise
+            return self._connect_local_chrome()
+        elif engine == "cloakbrowser":
             return self._launch_cloakbrowser(headless, humanize, proxy)
         else:
             return self._launch_playwright(headless, slow_mo)
@@ -223,6 +281,114 @@ class BrowserManager:
                 "humanize": humanize,
                 "proxy": proxy,
             },
+            result=self._page,
+        )
+        bus.emit(after_event)
+        return self._page
+
+    def _connect_local_chrome(self) -> Page:
+        """通过 CDP 连接本地 Chrome 浏览器。"""
+        import subprocess
+        import time
+        from pathlib import Path
+        from urllib.error import URLError
+        from urllib.request import urlopen
+
+        bus = get_event_bus()
+        event = Event(
+            name=EVENT_BROWSER_LAUNCH,
+            phase=Phase.BEFORE,
+            data={"engine": "local_chrome"},
+        )
+        bus.emit(event)
+        if event.cancelled:
+            raise RuntimeError(
+                event.metadata.get("cancel_reason", "Browser launch cancelled by hook")
+            )
+
+        # 获取配置
+        chrome_path = os.getenv("LOCAL_CHROME_PATH", "").strip()
+        if not chrome_path:
+            chrome_path = _detect_chrome_path() or ""
+        port = int(os.getenv("LOCAL_CHROME_DEBUG_PORT", "9222"))
+        user_data = os.getenv("LOCAL_CHROME_USER_DATA", "").strip()
+        auto_launch = os.getenv("LOCAL_CHROME_AUTO_LAUNCH", "true").lower() == "true"
+
+        if not chrome_path:
+            raise RuntimeError(
+                "未找到 Chrome 浏览器。请在浏览器设置中指定 Chrome 路径，"
+                "或手动设置 LOCAL_CHROME_PATH 环境变量。"
+            )
+
+        # 检查是否已有 Chrome 在调试模式运行
+        def _is_chrome_running_on_port() -> bool:
+            try:
+                urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
+                return True
+            except (URLError, OSError):
+                return False
+
+        if not _is_chrome_running_on_port():
+            if not auto_launch:
+                raise RuntimeError(
+                    f"Chrome 未在端口 {port} 运行。请先手动启动 Chrome：\n"
+                    f'"{chrome_path}" --remote-debugging-port={port}'
+                )
+
+            # 自动启动 Chrome
+            cmd = [chrome_path, f"--remote-debugging-port={port}"]
+            if user_data:
+                cmd.append(f"--user-data-dir={user_data}")
+            else:
+                # 使用独立的 profile 避免与用户正在使用的 Chrome 冲突
+                default_profile = str(
+                    Path.home() / ".agentic-playwright" / "chrome-profile"
+                )
+                cmd.append(f"--user-data-dir={default_profile}")
+
+            logger.info("Auto-launching Chrome with debug port %d", port)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # 等待 Chrome 启动
+            for _ in range(20):  # 最多等待 10 秒
+                time.sleep(0.5)
+                if _is_chrome_running_on_port():
+                    break
+            else:
+                raise RuntimeError(
+                    "Chrome 启动超时，请检查路径是否正确或手动启动 Chrome"
+                )
+
+        # 连接到 Chrome
+        self._engine = "local_chrome"
+        self._disconnected = False
+        logger.info("Connecting to local Chrome on port %d", port)
+
+        self._browser = self._playwright.chromium.connect_over_cdp(
+            f"http://127.0.0.1:{port}"
+        )
+        try:
+            self._browser.on("disconnected", self._on_browser_disconnected)
+        except Exception:
+            pass
+
+        # 获取已有上下文和页面
+        if self._browser.contexts:
+            self._context = self._browser.contexts[0]
+            if self._context.pages:
+                self._page = self._context.pages[0]
+            else:
+                self._page = self._context.new_page()
+        else:
+            self._context = self._browser.new_context()
+            self._page = self._context.new_page()
+
+        log_browser_event("connected", engine="local_chrome", port=port)
+
+        after_event = Event(
+            name=EVENT_BROWSER_LAUNCH,
+            phase=Phase.AFTER,
+            data={"engine": "local_chrome", "port": port},
             result=self._page,
         )
         bus.emit(after_event)

@@ -21,8 +21,14 @@ DEFAULT_CONFIG = {
         "model": "mimo-v2.5",
     },
     "browser": {
-        "engine": "cloakbrowser",
+        "engine": "cloakbrowser",  # "playwright" | "cloakbrowser" | "local_chrome"
         "headless": False,
+        "local_chrome": {
+            "executable_path": "",  # Chrome 可执行文件路径（留空自动检测）
+            "debug_port": 9222,     # CDP 远程调试端口
+            "user_data_dir": "",    # 用户数据目录（留空使用独立 profile）
+            "auto_launch": True,    # 是否自动启动 Chrome
+        },
     },
 }
 
@@ -97,6 +103,16 @@ class ConfigManager:
         return {
             "engine": self.get("browser.engine", "cloakbrowser"),
             "headless": self.get("browser.headless", False),
+            "local_chrome": self.get_local_chrome_config(),
+        }
+
+    def get_local_chrome_config(self) -> dict:
+        """获取本地 Chrome 浏览器配置。"""
+        return {
+            "executable_path": self.get("browser.local_chrome.executable_path", ""),
+            "debug_port": self.get("browser.local_chrome.debug_port", 9222),
+            "user_data_dir": self.get("browser.local_chrome.user_data_dir", ""),
+            "auto_launch": self.get("browser.local_chrome.auto_launch", True),
         }
 
     def setup_interactive(self) -> bool:
@@ -217,6 +233,16 @@ class ConfigManager:
             "true" if browser["engine"] == "cloakbrowser" else "false"
         )
         os.environ["BROWSER_HEADLESS"] = "true" if browser["headless"] else "false"
+
+        # 本地 Chrome 配置
+        os.environ["BROWSER_ENGINE"] = browser["engine"]
+        local_chrome = browser["local_chrome"]
+        os.environ["LOCAL_CHROME_PATH"] = local_chrome["executable_path"]
+        os.environ["LOCAL_CHROME_DEBUG_PORT"] = str(local_chrome["debug_port"])
+        os.environ["LOCAL_CHROME_USER_DATA"] = local_chrome["user_data_dir"]
+        os.environ["LOCAL_CHROME_AUTO_LAUNCH"] = (
+            "true" if local_chrome["auto_launch"] else "false"
+        )
 
 
 # ---------------------------------------------------------------------------

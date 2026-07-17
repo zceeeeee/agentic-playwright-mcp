@@ -103,11 +103,20 @@ def create_app(
             if provider == "anthropic"
             else os.getenv("OPENAI_MODEL", "")
         )
+
+        # 获取浏览器引擎配置
+        browser_engine = os.getenv("BROWSER_ENGINE", "").strip().lower()
+        if not browser_engine:
+            # 兼容旧配置
+            use_cloak = os.getenv("USE_CLOAKBROWSER", "true").strip().lower() == "true"
+            browser_engine = "cloakbrowser" if use_cloak else "playwright"
+
         return {
             "provider": provider,
             "model": model_name,
             "api_key_masked": _masked(os.getenv(key_name, "")),
             "browser_headless": os.getenv("BROWSER_HEADLESS", "false").lower() == "true",
+            "browser_engine": browser_engine,
         }
 
     @app.get("/api/conversations", dependencies=[auth])

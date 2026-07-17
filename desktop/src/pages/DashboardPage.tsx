@@ -135,7 +135,10 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
     requestTimeout: 60,
     browserHeadless: false,
     maxSteps: 20,
-    useCloakBrowser: true
+    useCloakBrowser: true,
+    browserEngine: "cloakbrowser",
+    localChromePath: "",
+    localChromeDebugPort: 9222
   });
   const [saved, setSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -171,9 +174,94 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
       ) : null}
       {initialSection === "browser" ? (
         <div className="settings-form">
-          <label className="toggle-row"><span><strong>无头模式</strong><small>后台运行浏览器，不显示窗口</small></span><input type="checkbox" checked={settings.browserHeadless} onChange={(event) => setSettings({ ...settings, browserHeadless: event.target.checked })} /></label>
-          <label className="toggle-row"><span><strong>启用 CloakBrowser</strong><small>使用带反检测能力的浏览器引擎；关闭后使用 Chromium。</small></span><input type="checkbox" checked={settings.useCloakBrowser} onChange={(event) => setSettings({ ...settings, useCloakBrowser: event.target.checked })} /></label>
-          <label>最大循环步数<input type="number" min="5" max="100" step="1" value={settings.maxSteps} onChange={(event) => setSettings({ ...settings, maxSteps: Number(event.target.value) })} /><small className="field-help">单个任务最多执行 5–100 步，默认 20 步。</small></label>
+          <section className="settings-section">
+            <h2>浏览器引擎</h2>
+            <label className="toggle-row"><span><strong>无头模式</strong><small>后台运行浏览器，不显示窗口</small></span><input type="checkbox" checked={settings.browserHeadless} onChange={(event) => setSettings({ ...settings, browserHeadless: event.target.checked })} /></label>
+
+            <div className="engine-selector">
+              <label><strong>选择浏览器引擎</strong></label>
+              <div className="engine-options">
+                <label className={`engine-option ${settings.browserEngine === "cloakbrowser" ? "selected" : ""}`}>
+                  <input
+                    type="radio"
+                    name="browserEngine"
+                    value="cloakbrowser"
+                    checked={settings.browserEngine === "cloakbrowser"}
+                    onChange={() => setSettings({ ...settings, browserEngine: "cloakbrowser", useCloakBrowser: true })}
+                  />
+                  <div>
+                    <strong>CloakBrowser</strong>
+                    <small>反检测浏览器，适合需要登录的网站</small>
+                  </div>
+                </label>
+                <label className={`engine-option ${settings.browserEngine === "playwright" ? "selected" : ""}`}>
+                  <input
+                    type="radio"
+                    name="browserEngine"
+                    value="playwright"
+                    checked={settings.browserEngine === "playwright"}
+                    onChange={() => setSettings({ ...settings, browserEngine: "playwright", useCloakBrowser: false })}
+                  />
+                  <div>
+                    <strong>Playwright</strong>
+                    <small>标准浏览器引擎</small>
+                  </div>
+                </label>
+                <label className={`engine-option ${settings.browserEngine === "local_chrome" ? "selected" : ""}`}>
+                  <input
+                    type="radio"
+                    name="browserEngine"
+                    value="local_chrome"
+                    checked={settings.browserEngine === "local_chrome"}
+                    onChange={() => setSettings({ ...settings, browserEngine: "local_chrome" })}
+                  />
+                  <div>
+                    <strong>本地 Chrome</strong>
+                    <small>连接本地 Chrome，可复用已登录状态和书签</small>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {settings.browserEngine === "local_chrome" ? (
+              <div className="local-chrome-config">
+                <label>
+                  Chrome 路径
+                  <input
+                    type="text"
+                    value={settings.localChromePath || ""}
+                    placeholder="留空则自动检测（例如：C:\Program Files\Google\Chrome\Application\chrome.exe）"
+                    onChange={(event) => setSettings({ ...settings, localChromePath: event.target.value })}
+                  />
+                  <small className="field-help">Chrome 可执行文件的完整路径，留空会自动检测系统安装的 Chrome</small>
+                </label>
+                <label>
+                  调试端口
+                  <input
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    value={settings.localChromeDebugPort || 9222}
+                    onChange={(event) => setSettings({ ...settings, localChromeDebugPort: Number(event.target.value) })}
+                  />
+                  <small className="field-help">Chrome 远程调试端口，默认 9222</small>
+                </label>
+                <div className="local-chrome-hint">
+                  <p><strong>使用方式：</strong></p>
+                  <ul>
+                    <li><strong>自动启动</strong>：系统会自动启动 Chrome 并连接</li>
+                    <li><strong>手动启动</strong>：先运行 <code>chrome.exe --remote-debugging-port=9222</code>，再执行任务</li>
+                  </ul>
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          <section className="settings-section">
+            <h2>执行参数</h2>
+            <label>最大循环步数<input type="number" min="5" max="100" step="1" value={settings.maxSteps} onChange={(event) => setSettings({ ...settings, maxSteps: Number(event.target.value) })} /><small className="field-help">单个任务最多执行 5–100 步，默认 20 步。</small></label>
+          </section>
+
           <button className="button-secondary" onClick={() => void apiRequest("/api/browser/close", { method: "POST" })}>关闭当前浏览器</button>
         </div>
       ) : null}
