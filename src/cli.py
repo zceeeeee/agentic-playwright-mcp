@@ -528,9 +528,12 @@ def doctor(fix: bool) -> None:
     # ------------------------------------------------------------------
     # 7. Optional: CloakBrowser
     # ------------------------------------------------------------------
-    click.echo("\n[7/7] Optional: CloakBrowser (stealth)")
-    use_cloak = os.getenv("USE_CLOAKBROWSER", "true").strip().lower() == "true"
-    if use_cloak:
+    click.echo("\n[7/7] Browser engine")
+    engine = os.getenv("BROWSER_ENGINE", "").strip().lower()
+    if engine not in {"playwright", "cloakbrowser", "local_chrome"}:
+        use_cloak = os.getenv("USE_CLOAKBROWSER", "true").strip().lower() == "true"
+        engine = "cloakbrowser" if use_cloak else "playwright"
+    if engine == "cloakbrowser":
         try:
             import cloakbrowser  # noqa: F401
 
@@ -540,8 +543,20 @@ def doctor(fix: bool) -> None:
             msg = "USE_CLOAKBROWSER=true but cloakbrowser not installed. Run: pip install agentic-playwright-mcp[stealth]"
             errors.append(msg)
             click.echo(f"  {_check_mark(False)}")
+    elif engine == "local_chrome":
+        from src.core.browser_manager import _detect_chrome_path
+
+        configured_path = os.getenv("LOCAL_CHROME_PATH", "").strip()
+        chrome_path = configured_path or _detect_chrome_path()
+        if chrome_path and Path(chrome_path).is_file():
+            click.echo(f"  Local Chrome: {chrome_path} {_check_mark(True)}")
+            passed.append("Local Chrome")
+        else:
+            msg = "Local Chrome was not found. Configure LOCAL_CHROME_PATH."
+            errors.append(msg)
+            click.echo(f"  {msg} {_check_mark(False)}")
     else:
-        click.echo("  Not enabled (default Playwright engine)")
+        click.echo("  Playwright engine enabled")
 
     # ------------------------------------------------------------------
     # Summary

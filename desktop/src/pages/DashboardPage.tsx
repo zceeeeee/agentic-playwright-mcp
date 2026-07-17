@@ -135,7 +135,11 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
     requestTimeout: 60,
     browserHeadless: false,
     maxSteps: 20,
-    useCloakBrowser: true
+    useCloakBrowser: true,
+    browserEngine: "cloakbrowser",
+    localChromePath: "",
+    localChromeDebugPort: 9222,
+    localChromeUserData: ""
   });
   const [saved, setSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -172,7 +176,28 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
       {initialSection === "browser" ? (
         <div className="settings-form">
           <label className="toggle-row"><span><strong>无头模式</strong><small>后台运行浏览器，不显示窗口</small></span><input type="checkbox" checked={settings.browserHeadless} onChange={(event) => setSettings({ ...settings, browserHeadless: event.target.checked })} /></label>
-          <label className="toggle-row"><span><strong>启用 CloakBrowser</strong><small>使用带反检测能力的浏览器引擎；关闭后使用 Chromium。</small></span><input type="checkbox" checked={settings.useCloakBrowser} onChange={(event) => setSettings({ ...settings, useCloakBrowser: event.target.checked })} /></label>
+          <label>浏览器模式
+            <select
+              value={settings.browserEngine}
+              onChange={(event) => {
+                const browserEngine = event.target.value as DesktopSettings["browserEngine"];
+                setSettings({ ...settings, browserEngine, useCloakBrowser: browserEngine === "cloakbrowser" });
+              }}
+            >
+              <option value="cloakbrowser">CloakBrowser（临时反检测浏览器）</option>
+              <option value="playwright">Playwright（临时 Chromium）</option>
+              <option value="local_chrome">本地 Chrome（持久登录模式）</option>
+            </select>
+            <small className="field-help">本地 Chrome 使用 FeatherDesk 专属 Profile，首次登录后可持续复用，不会修改日常 Chrome 数据。</small>
+          </label>
+          {settings.browserEngine === "local_chrome" ? (
+            <section className="settings-section">
+              <h2>本地 Chrome</h2>
+              <label>Chrome 路径<input value={settings.localChromePath} placeholder="留空自动检测" onChange={(event) => setSettings({ ...settings, localChromePath: event.target.value })} /><small className="field-help">例如 C:\Program Files\Google\Chrome\Application\chrome.exe</small></label>
+              <label>调试端口<input type="number" min="1024" max="65535" value={settings.localChromeDebugPort} onChange={(event) => setSettings({ ...settings, localChromeDebugPort: Number(event.target.value) })} /></label>
+              <label>持久化数据目录<input value={settings.localChromeUserData} placeholder="留空使用 ~/.featherdesk/chrome-profile" onChange={(event) => setSettings({ ...settings, localChromeUserData: event.target.value })} /><small className="field-help">可自定义，但不要填写日常 Chrome 的默认 User Data 目录。</small></label>
+            </section>
+          ) : null}
           <label>最大循环步数<input type="number" min="5" max="100" step="1" value={settings.maxSteps} onChange={(event) => setSettings({ ...settings, maxSteps: Number(event.target.value) })} /><small className="field-help">单个任务最多执行 5–100 步，默认 20 步。</small></label>
           <button className="button-secondary" onClick={() => void apiRequest("/api/browser/close", { method: "POST" })}>关闭当前浏览器</button>
         </div>

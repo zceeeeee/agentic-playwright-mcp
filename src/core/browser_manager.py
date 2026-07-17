@@ -16,6 +16,11 @@ Playwright / CloakBrowser 浏览器生命周期管理器。
 from __future__ import annotations
 
 import os
+import subprocess
+import time
+from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
@@ -39,6 +44,50 @@ def _is_cloak_enabled() -> bool:
     return os.getenv("USE_CLOAKBROWSER", "true").strip().lower() == "true"
 
 
+def _get_engine_type() -> str:
+    """Return the configured engine while preserving the legacy toggle."""
+    engine = os.getenv("BROWSER_ENGINE", "").strip().lower()
+    if engine in {"playwright", "cloakbrowser", "local_chrome"}:
+        return engine
+    return "cloakbrowser" if _is_cloak_enabled() else "playwright"
+
+
+def _detect_chrome_path() -> str | None:
+    """Find a locally installed Chrome executable."""
+    candidates = []
+    if os.name == "nt":
+        for base in (
+            os.getenv("PROGRAMFILES"),
+            os.getenv("PROGRAMFILES(X86)"),
+            os.getenv("LOCALAPPDATA"),
+        ):
+            if base:
+                candidates.append(
+                    Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"
+                )
+    elif os.uname().sysname == "Darwin":
+        candidates.append(Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
+    else:
+        candidates.extend(
+            Path(path)
+            for path in (
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+            )
+        )
+    return next((str(path) for path in candidates if path.is_file()), None)
+
+
+def _local_chrome_endpoint_ready(port: int) -> bool:
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1):
+            return True
+    except (URLError, OSError):
+        return False
+
+
 def _import_cloakbrowser():
     """Lazy-import cloakbrowser. Raises ImportError if not installed."""
     try:
@@ -59,7 +108,8 @@ class BrowserManager:
         self._browser = None
         self._context: BrowserContext | None = None
         self._page = None
-        self._engine: str = "playwright"  # "playwright" | "cloakbrowser"
+        self._engine: str = "playwright"
+        self._local_chrome_process = None
         self._current_domain: str | None = None
         self._disconnected: bool = False  # 浏览器是否已断开连接
 
@@ -88,12 +138,13 @@ class BrowserManager:
         Returns:
             启动后的默认 Page 实例。
         """
-        use_cloak = _is_cloak_enabled()
+        engine = _get_engine_type()
 
-        if use_cloak:
+        if engine == "local_chrome":
+            return self._connect_local_chrome()
+        if engine == "cloakbrowser":
             return self._launch_cloakbrowser(headless, humanize, proxy)
-        else:
-            return self._launch_playwright(headless, slow_mo)
+        return self._launch_playwright(headless, slow_mo)
 
     def _launch_playwright(self, headless: bool, slow_mo: int) -> Page:
         """使用官方 Playwright 启动 Chromium。"""
@@ -228,6 +279,120 @@ class BrowserManager:
         bus.emit(after_event)
         return self._page
 
+    def _start_playwright_driver(self) -> None:
+        """Start the Playwright driver used for a CDP connection."""
+        if self._playwright is not None:
+            return
+        try:
+            self._playwright = sync_playwright().start()
+        except RuntimeError as exc:
+            if "asyncio loop" not in str(exc).lower():
+                raise
+            import asyncio
+
+            asyncio.set_event_loop(asyncio.new_event_loop())
+            self._playwright = sync_playwright().start()
+
+    def _connect_local_chrome(self) -> Page:
+        """Launch installed Chrome with a persistent profile and connect via CDP."""
+        bus = get_event_bus()
+        event = Event(
+            name=EVENT_BROWSER_LAUNCH,
+            phase=Phase.BEFORE,
+            data={"engine": "local_chrome"},
+        )
+        bus.emit(event)
+        if event.cancelled:
+            raise RuntimeError(
+                event.metadata.get("cancel_reason", "Browser launch cancelled by hook")
+            )
+
+        try:
+            port = int(os.getenv("LOCAL_CHROME_DEBUG_PORT", "9222"))
+        except ValueError as exc:
+            raise RuntimeError("LOCAL_CHROME_DEBUG_PORT must be an integer") from exc
+        if not 1024 <= port <= 65535:
+            raise RuntimeError("Local Chrome debug port must be between 1024 and 65535")
+
+        endpoint = f"http://127.0.0.1:{port}"
+        auto_launch = (
+            os.getenv("LOCAL_CHROME_AUTO_LAUNCH", "true").strip().lower() == "true"
+        )
+        profile_dir = Path(
+            os.getenv("LOCAL_CHROME_USER_DATA", "").strip()
+            or Path.home() / ".featherdesk" / "chrome-profile"
+        ).expanduser().resolve()
+
+        if not _local_chrome_endpoint_ready(port):
+            if not auto_launch:
+                raise RuntimeError(
+                    f"Chrome is not listening on {endpoint}. Start it with "
+                    f"--remote-debugging-port={port} and a non-default --user-data-dir."
+                )
+            chrome_path = os.getenv("LOCAL_CHROME_PATH", "").strip()
+            chrome_path = chrome_path or _detect_chrome_path() or ""
+            if not chrome_path or not Path(chrome_path).is_file():
+                raise RuntimeError(
+                    "Chrome was not found. Set the Chrome path in browser settings."
+                )
+
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            command = [
+                chrome_path,
+                f"--remote-debugging-port={port}",
+                "--remote-debugging-address=127.0.0.1",
+                f"--user-data-dir={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+            popen_kwargs = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = getattr(
+                    subprocess, "CREATE_NO_WINDOW", 0
+                )
+            logger.info(
+                "Starting local Chrome",
+                extra={"port": port, "profile_dir": str(profile_dir)},
+            )
+            self._local_chrome_process = subprocess.Popen(command, **popen_kwargs)
+            for _ in range(30):
+                if _local_chrome_endpoint_ready(port):
+                    break
+                if self._local_chrome_process.poll() is not None:
+                    raise RuntimeError("Local Chrome exited before CDP became ready")
+                time.sleep(0.5)
+            else:
+                raise RuntimeError(
+                    f"Local Chrome started but CDP was not ready on port {port}. "
+                    "Close other Chrome instances using this FeatherDesk profile and retry."
+                )
+
+        self._start_playwright_driver()
+        self._engine = "local_chrome"
+        self._disconnected = False
+        self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+        try:
+            self._browser.on("disconnected", self._on_browser_disconnected)
+        except Exception:
+            pass
+        if not self._browser.contexts:
+            raise RuntimeError("Local Chrome exposed no browser context")
+        self._context = self._browser.contexts[0]
+        self._page = self._context.new_page()
+        log_browser_event("connected", engine="local_chrome", port=port)
+
+        after_event = Event(
+            name=EVENT_BROWSER_LAUNCH,
+            phase=Phase.AFTER,
+            data={"engine": "local_chrome", "port": port},
+            result=self._page,
+        )
+        bus.emit(after_event)
+        return self._page
+
     def _on_browser_disconnected(self) -> None:
         """浏览器断开连接时的回调（用户手动关闭窗口等）。"""
         logger.info("Browser disconnected detected")
@@ -326,6 +491,16 @@ class BrowserManager:
 
         logger.info("Closing browser", extra={"engine": self._engine})
 
+        # A CDP connection points at a user-visible, persistent Chrome process.
+        # Close only the task tab and detach; never terminate the user's Chrome.
+        if self._engine == "local_chrome" and self._page is not None:
+            try:
+                if not self._page.is_closed():
+                    self._page.close()
+            except Exception as exc:
+                logger.warning("Error closing local Chrome task tab: %s", exc)
+            self._disconnected = True
+
         # 在调用 Playwright close 之前，确认浏览器真的还连接着
         # 用户手动关闭窗口但 Chromium 进程还在时，is_connected() 可能返回 True
         # 但实际页面已不可访问，此时调用 close() 会触发闪烁
@@ -352,13 +527,14 @@ class BrowserManager:
             # 但必须调 browser.close() — CloakBrowser 把 pw.stop() 绑在了
             # browser.close() 的 patch 里，不调的话 asyncio loop 永远不会清理
             logger.info("Browser disconnected, calling close for cleanup")
-            try:
-                if self._browser is not None:
-                    self._browser.close()
-            except Exception as exc:
-                logger.warning(
-                    "Error closing disconnected browser", extra={"error": str(exc)}
-                )
+            if self._engine != "local_chrome":
+                try:
+                    if self._browser is not None:
+                        self._browser.close()
+                except Exception as exc:
+                    logger.warning(
+                        "Error closing disconnected browser", extra={"error": str(exc)}
+                    )
 
         # 无论是否已断开，都清理引用
         self._browser = None
@@ -366,12 +542,13 @@ class BrowserManager:
         self._page = None
         self._current_domain = None
         self._disconnected = False
+        self._local_chrome_process = None
 
         # 清理 Playwright / CloakBrowser 的 asyncio loop
         # 无论哪个引擎，底层都有 asyncio loop，断开后必须重置
         import asyncio
 
-        if self._engine == "playwright":
+        if self._engine in {"playwright", "local_chrome"}:
             try:
                 if self._playwright is not None:
                     self._playwright.stop()
@@ -438,6 +615,21 @@ class BrowserManager:
         if self._browser is None or not self.is_alive():
             raise RuntimeError("浏览器尚未启动，无法创建干净上下文。")
 
+        if self._engine == "local_chrome":
+            old_page = self._page
+            self._page = self._context.new_page()
+            self._current_domain = None
+            if old_page is not None:
+                try:
+                    if not old_page.is_closed():
+                        old_page.close()
+                except Exception:
+                    pass
+            logger.info(
+                "Started a new task tab in the persistent local Chrome context"
+            )
+            return self._page
+
         old_context = self._context
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
@@ -477,6 +669,23 @@ class BrowserManager:
 
         # 浏览器已启动 → 只替换 context
         if self.is_alive() and self._browser is not None:
+            if self._engine == "local_chrome":
+                auth_data = am.load_auth(domain)
+                cookies = (auth_data or {}).get("cookies") or []
+                if cookies:
+                    self._context.add_cookies(cookies)
+                    logger.info("Loaded auth cookies for domain=%s", domain)
+                old_page = self._page
+                self._page = self._context.new_page()
+                if old_page is not None:
+                    try:
+                        if not old_page.is_closed():
+                            old_page.close()
+                    except Exception:
+                        pass
+                self._current_domain = domain
+                return self._page
+
             # 关闭旧 context
             if self._context is not None:
                 try:
@@ -503,6 +712,14 @@ class BrowserManager:
 
         # launch() 已创建 context，如果有 auth 则重新创建带 auth 的 context
         auth_data = am.load_auth(domain)
+        if self._engine == "local_chrome":
+            cookies = (auth_data or {}).get("cookies") or []
+            if cookies:
+                self._context.add_cookies(cookies)
+                logger.info("Loaded auth cookies for domain=%s", domain)
+            self._current_domain = domain
+            return self._page
+
         if auth_data and self._browser is not None:
             # 关闭无 auth 的 context
             if self._context is not None:

@@ -108,6 +108,12 @@ def create_app(
             "model": model_name,
             "api_key_masked": _masked(os.getenv(key_name, "")),
             "browser_headless": os.getenv("BROWSER_HEADLESS", "false").lower() == "true",
+            "browser_engine": os.getenv("BROWSER_ENGINE", "").strip().lower()
+            or (
+                "cloakbrowser"
+                if os.getenv("USE_CLOAKBROWSER", "true").lower() == "true"
+                else "playwright"
+            ),
         }
 
     @app.get("/api/conversations", dependencies=[auth])

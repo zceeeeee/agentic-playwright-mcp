@@ -329,6 +329,26 @@ USE_CLOAKBROWSER=true browser-agent gui
 | Cloudflare Turnstile | FAIL | **PASS** |
 | FingerprintJS | DETECTED | **PASS** |
 
+## 本地 Chrome 持久登录模式
+
+桌面端进入“浏览器设置”，将“浏览器模式”切换为“本地 Chrome”。
+FeatherDesk 会打开电脑上安装的 Google Chrome，并使用独立且持久保存的
+`~/.featherdesk/chrome-profile`。第一次在这个窗口手动登录网站后，后续任务会
+复用该登录状态。
+
+也可以通过环境变量启用：
+
+```bash
+BROWSER_ENGINE=local_chrome
+LOCAL_CHROME_DEBUG_PORT=9222
+# 可选：LOCAL_CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+# 可选：LOCAL_CHROME_USER_DATA=D:\FeatherDesk\chrome-profile
+```
+
+不要把 `LOCAL_CHROME_USER_DATA` 设置成日常 Chrome 的默认 User Data 目录。
+Chrome 136 起不允许对默认数据目录启用远程调试；使用专属目录也能避免配置
+冲突或损坏。关闭任务时 FeatherDesk 只关闭任务标签页，不会退出本地 Chrome。
+
 ## Cookie 持久化
 
 支持按站点保存和恢复登录状态（cookie + localStorage），使用 Playwright 的 `storage_state` 机制。
@@ -367,7 +387,7 @@ agentic-playwright-mcp/
 │   │   ├── script_generator.py    # 任务意图解析（规则）
 │   │   ├── intent_parser.py       # LLM 意图解析（兜底）
 │   │   ├── experience.py          # 经验进化系统
-│   │   ├── browser_manager.py     # 双引擎浏览器管理（自动注入面板）
+│   │   ├── browser_manager.py     # 多引擎浏览器管理（自动注入面板）
 │   │   ├── event_bus.py           # 事件钩子系统
 │   │   ├── recovery.py            # 错误恢复
 │   │   └── vision.py              # 视觉模块

@@ -23,6 +23,12 @@ DEFAULT_CONFIG = {
     "browser": {
         "engine": "cloakbrowser",
         "headless": False,
+        "local_chrome": {
+            "executable_path": "",
+            "debug_port": 9222,
+            "user_data_dir": "",
+            "auto_launch": True,
+        },
     },
 }
 
@@ -97,6 +103,18 @@ class ConfigManager:
         return {
             "engine": self.get("browser.engine", "cloakbrowser"),
             "headless": self.get("browser.headless", False),
+            "local_chrome": self.get_local_chrome_config(),
+        }
+
+    def get_local_chrome_config(self) -> dict:
+        """Return local Chrome connection settings."""
+        return {
+            "executable_path": self.get(
+                "browser.local_chrome.executable_path", ""
+            ),
+            "debug_port": self.get("browser.local_chrome.debug_port", 9222),
+            "user_data_dir": self.get("browser.local_chrome.user_data_dir", ""),
+            "auto_launch": self.get("browser.local_chrome.auto_launch", True),
         }
 
     def setup_interactive(self) -> bool:
@@ -213,10 +231,18 @@ class ConfigManager:
                 os.environ["VISION_API_KEY"] = vision["api_key"]
 
         browser = self.get_browser_config()
+        os.environ["BROWSER_ENGINE"] = browser["engine"]
         os.environ["USE_CLOAKBROWSER"] = (
             "true" if browser["engine"] == "cloakbrowser" else "false"
         )
         os.environ["BROWSER_HEADLESS"] = "true" if browser["headless"] else "false"
+        local_chrome = browser["local_chrome"]
+        os.environ["LOCAL_CHROME_PATH"] = str(local_chrome["executable_path"])
+        os.environ["LOCAL_CHROME_DEBUG_PORT"] = str(local_chrome["debug_port"])
+        os.environ["LOCAL_CHROME_USER_DATA"] = str(local_chrome["user_data_dir"])
+        os.environ["LOCAL_CHROME_AUTO_LAUNCH"] = (
+            "true" if local_chrome["auto_launch"] else "false"
+        )
 
 
 # ---------------------------------------------------------------------------

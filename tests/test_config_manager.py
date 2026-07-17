@@ -118,6 +118,18 @@ class TestApplyToEnv:
         assert os.environ.get("VISION_API_KEY") == "tp-xxx"
         assert os.environ.get("USE_CLOAKBROWSER") == "true"
 
+    def test_apply_local_chrome(self, config):
+        config.set("browser.engine", "local_chrome")
+        config.set("browser.local_chrome.debug_port", 9333)
+        config.set("browser.local_chrome.user_data_dir", "D:/feather-profile")
+
+        config.apply_to_env()
+
+        assert os.environ.get("BROWSER_ENGINE") == "local_chrome"
+        assert os.environ.get("USE_CLOAKBROWSER") == "false"
+        assert os.environ.get("LOCAL_CHROME_DEBUG_PORT") == "9333"
+        assert os.environ.get("LOCAL_CHROME_USER_DATA") == "D:/feather-profile"
+
 
 # ---------------------------------------------------------------------------
 # Singleton

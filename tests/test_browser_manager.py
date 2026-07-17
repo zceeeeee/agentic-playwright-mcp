@@ -9,6 +9,7 @@ import pytest
 
 from src.core.browser_manager import (
     BrowserManager,
+    _get_engine_type,
     _is_cloak_enabled,
     get_browser_manager,
     reset_browser_manager,
@@ -46,6 +47,20 @@ class TestIsCloakEnabled:
         """Should parse various env string values correctly."""
         with patch.dict("os.environ", {"USE_CLOAKBROWSER": value}):
             assert _is_cloak_enabled() is expected
+
+
+class TestEngineType:
+    def test_explicit_engine_takes_precedence(self):
+        with patch.dict(
+            "os.environ",
+            {"BROWSER_ENGINE": "local_chrome", "USE_CLOAKBROWSER": "true"},
+        ):
+            assert _get_engine_type() == "local_chrome"
+
+    def test_legacy_toggle_remains_supported(self):
+        with patch.dict("os.environ", {"USE_CLOAKBROWSER": "false"}):
+            os.environ.pop("BROWSER_ENGINE", None)
+            assert _get_engine_type() == "playwright"
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +242,56 @@ class TestBrowserManagerCloak:
         mock_browser.close.assert_called_once()
         # _playwright should remain None — never started
         assert bm._playwright is None
+
+
+class TestBrowserManagerLocalChrome:
+    def test_clean_task_replaces_only_the_task_tab(self):
+        manager = BrowserManager()
+        manager._engine = "local_chrome"
+        manager._browser = MagicMock()
+        manager._browser.is_connected.return_value = True
+        manager._context = MagicMock()
+        old_page = MagicMock()
+        old_page.is_closed.return_value = False
+        new_page = MagicMock()
+        manager._context.new_page.return_value = new_page
+        manager._page = old_page
+
+        assert manager.start_clean_context() is new_page
+
+        old_page.close.assert_called_once_with()
+        manager._context.close.assert_not_called()
+        manager._browser.new_context.assert_not_called()
+
+    @patch.dict("os.environ", {"BROWSER_ENGINE": "local_chrome"})
+    @patch("src.core.browser_manager._local_chrome_endpoint_ready", return_value=True)
+    @patch("src.core.browser_manager.sync_playwright")
+    def test_connects_over_cdp_and_detaches_without_closing_chrome(
+        self, mock_pw, _mock_ready
+    ):
+        playwright = MagicMock()
+        mock_pw.return_value.start.return_value = playwright
+        browser = MagicMock()
+        context = MagicMock()
+        page = MagicMock()
+        page.is_closed.return_value = False
+        context.new_page.return_value = page
+        browser.contexts = [context]
+        playwright.chromium.connect_over_cdp.return_value = browser
+
+        manager = BrowserManager()
+        assert manager.launch() is page
+        assert manager.engine == "local_chrome"
+        playwright.chromium.connect_over_cdp.assert_called_once_with(
+            "http://127.0.0.1:9222"
+        )
+
+        manager.close()
+
+        page.close.assert_called_once_with()
+        context.close.assert_not_called()
+        browser.close.assert_not_called()
+        playwright.stop.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------

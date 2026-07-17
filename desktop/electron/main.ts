@@ -415,13 +415,19 @@ function settingsForBackend(): NodeJS.ProcessEnv {
     }
   }
   const provider = stored.provider || "openai";
+  const browserEngine = stored.browserEngine || (stored.useCloakBrowser !== "false" ? "cloakbrowser" : "playwright");
   const env = withUtf8PythonEnvironment({
     ...process.env,
     DESKTOP_AGENT_TOKEN: backendToken,
     LLM_PROVIDER: provider,
     BROWSER_HEADLESS: stored.browserHeadless || "false",
     DESKTOP_AGENT_MAX_STEPS: stored.maxSteps || "20",
-    USE_CLOAKBROWSER: stored.useCloakBrowser || "true"
+    USE_CLOAKBROWSER: String(browserEngine === "cloakbrowser"),
+    BROWSER_ENGINE: browserEngine,
+    LOCAL_CHROME_PATH: stored.localChromePath || "",
+    LOCAL_CHROME_DEBUG_PORT: stored.localChromeDebugPort || "9222",
+    LOCAL_CHROME_USER_DATA: stored.localChromeUserData || "",
+    LOCAL_CHROME_AUTO_LAUNCH: "true"
   });
   if (provider === "anthropic") {
     env.ANTHROPIC_API_KEY = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -549,7 +555,10 @@ function registerIpc(): void {
   ipcMain.handle("pet:collapse", () => collapsePet());
   ipcMain.handle("pet:is-expanded", () => expanded);
   ipcMain.handle("pet:show-menu", () => showPetMenu());
-  ipcMain.handle("dashboard:open", (_event, section: unknown) => createDashboardWindow(normalizeDashboardSection(section)));
+  ipcMain.handle("dashboard:open", (_event, section: unknown) => {
+    createDashboardWindow(normalizeDashboardSection(section));
+    return true;
+  });
   ipcMain.handle("window:get-bounds", (event) => BrowserWindow.fromWebContents(event.sender)?.getBounds());
   ipcMain.handle(
     "pet:resize-expanded",
@@ -598,6 +607,8 @@ function registerIpc(): void {
   ipcMain.handle("settings:get", () => {
     const settings = readJson<Record<string, string>>(userFile("settings.json"), {});
     const maxSteps = Math.min(100, Math.max(5, Math.round(Number(settings.maxSteps || "20")) || 20));
+    const useCloakBrowser = settings.useCloakBrowser !== "false";
+    const browserEngine = settings.browserEngine || (useCloakBrowser ? "cloakbrowser" : "playwright");
     return {
       provider: settings.provider || "openai",
       baseUrl: settings.baseUrl || "https://api.openai.com/v1",
@@ -606,7 +617,11 @@ function registerIpc(): void {
       requestTimeout: Number(settings.requestTimeout || "60"),
       browserHeadless: settings.browserHeadless === "true",
       maxSteps,
-      useCloakBrowser: settings.useCloakBrowser !== "false",
+      useCloakBrowser,
+      browserEngine,
+      localChromePath: settings.localChromePath || "",
+      localChromeDebugPort: Number(settings.localChromeDebugPort || "9222"),
+      localChromeUserData: settings.localChromeUserData || "",
       apiKeyMasked: settings.apiKeyEncrypted ? "已安全保存" : ""
     };
   });
@@ -626,7 +641,16 @@ function registerIpc(): void {
     existing.maxSteps = String(
       Math.min(100, Math.max(5, Math.round(Number(incoming.maxSteps ?? 20)) || 20))
     );
-    existing.useCloakBrowser = String(incoming.useCloakBrowser !== false);
+    const browserEngine = ["cloakbrowser", "playwright", "local_chrome"].includes(String(incoming.browserEngine))
+      ? String(incoming.browserEngine)
+      : "cloakbrowser";
+    existing.browserEngine = browserEngine;
+    existing.useCloakBrowser = String(browserEngine === "cloakbrowser");
+    existing.localChromePath = String(incoming.localChromePath || "");
+    existing.localChromeDebugPort = String(
+      Math.min(65535, Math.max(1024, Math.round(Number(incoming.localChromeDebugPort || 9222)) || 9222))
+    );
+    existing.localChromeUserData = String(incoming.localChromeUserData || "");
     writeJson(userFile("settings.json"), existing);
     await restartBackend();
     return { ok: true, apiKeyMasked: existing.apiKeyEncrypted ? "已安全保存" : "" };
