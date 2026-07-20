@@ -407,7 +407,11 @@ button { color: inherit; }
 .toggle-row small { color: #748087; font-weight: 400; }
 .toggle-row input { width: 34px; height: 18px; accent-color: var(--theme-blue); }
 .field-help { color: var(--theme-text-muted); font-size: var(--theme-font-size-xs); font-weight: 400; }
-.save-settings { margin-top: 24px; }
+.settings-actions { display: flex; max-width: 620px; align-items: center; gap: 10px; margin-top: 24px; }
+.settings-actions .save-settings { margin-top: 0; }
+.connection-test-status { max-width: 620px; margin: 10px 0 0; color: var(--theme-text-muted); font-size: var(--theme-font-size-sm); }
+.connection-test-status.success { color: #16804a; }
+.connection-test-status.error { color: #b33434; }
 
 .skills-view { max-width: 960px; }
 .skill-search { display: grid; grid-template-columns: 20px minmax(0, 1fr); max-width: 620px; height: 42px; align-items: center; gap: 8px; margin-bottom: 20px; padding: 0 10px; color: var(--theme-text-muted); border: 1px solid #cbd4d8; border-radius: 6px; background: white; }

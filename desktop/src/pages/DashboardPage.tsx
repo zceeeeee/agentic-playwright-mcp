@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import {
   ArrowRight,
   Bot,
@@ -9,10 +9,12 @@ import {
   Info,
   KeyRound,
   ListTree,
+  LoaderCircle,
   LockKeyhole,
   MessageSquare,
   MonitorCog,
   Palette,
+  PlugZap,
   Save,
   Search,
   ScrollText,
@@ -26,6 +28,10 @@ import { AppearanceSettings } from "../components/AppearanceSettings";
 import type { DashboardSection } from "../types";
 import { filterAndGroupSkills, type SkillInfo } from "../utils/skillCatalog";
 import { BRAND } from "../branding";
+import {
+  apiConnectionTestReducer,
+  initialApiConnectionTestState
+} from "../utils/apiConnectionTestState";
 
 const navigation: Array<{ id: DashboardSection; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "聊天", icon: MessageSquare },
@@ -139,7 +145,16 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
   });
   const [saved, setSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [connectionTest, dispatchConnectionTest] = useReducer(
+    apiConnectionTestReducer,
+    initialApiConnectionTestState
+  );
   useEffect(() => { void desktopSettings.get().then(setSettings); }, []);
+
+  function updateTestedSetting(patch: Partial<DesktopSettings>) {
+    dispatchConnectionTest({ type: "edit" });
+    setSettings((current) => ({ ...current, ...patch }));
+  }
 
   async function save() {
     const result = await desktopSettings.save(settings);
@@ -149,7 +164,51 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
     await reconnect();
   }
 
+  async function testConnection() {
+    if (!settings.apiKey?.trim()) {
+      dispatchConnectionTest({
+        type: "fail",
+        message: "请输入当前 API Key 后再测试",
+        elapsedMs: 0
+      });
+      return;
+    }
+    if (!settings.baseUrl.trim()) {
+      dispatchConnectionTest({
+        type: "fail",
+        message: "请输入 Base URL 后再测试",
+        elapsedMs: 0
+      });
+      return;
+    }
+    if (!settings.model.trim()) {
+      dispatchConnectionTest({
+        type: "fail",
+        message: "请输入 Model 后再测试",
+        elapsedMs: 0
+      });
+      return;
+    }
+
+    dispatchConnectionTest({ type: "start" });
+    try {
+      const result = await desktopSettings.test(settings);
+      dispatchConnectionTest({
+        type: result.ok ? "succeed" : "fail",
+        message: result.message,
+        elapsedMs: result.elapsedMs
+      });
+    } catch {
+      dispatchConnectionTest({
+        type: "fail",
+        message: "连通测试失败，请重试",
+        elapsedMs: 0
+      });
+    }
+  }
+
   const title = initialSection === "api" ? "API 与模型配置" : "浏览器设置";
+  const testingConnection = connectionTest.status === "testing";
   return (
     <div className="page-view settings-view">
       <PageHeading title={title} description="配置保存在系统加密存储中，保存后 Agent 会自动重启。" />
@@ -157,15 +216,15 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
         <div className="settings-form">
           <section className="settings-section">
             <h2>服务连接</h2>
-            <label>API Provider<select value={settings.provider} onChange={(event) => setSettings({ ...settings, provider: event.target.value })}><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></label>
-            <label>API Key<span className="password-input-row"><input type={showApiKey ? "text" : "password"} value={settings.apiKey || ""} placeholder={settings.apiKeyMasked || "输入 API Key"} onChange={(event) => setSettings({ ...settings, apiKey: event.target.value })} /><button type="button" title={showApiKey ? "隐藏 API Key" : "显示 API Key"} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"} onClick={() => setShowApiKey((visible) => !visible)}>{showApiKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
-            <label>Base URL<input value={settings.baseUrl} onChange={(event) => setSettings({ ...settings, baseUrl: event.target.value })} /></label>
+            <label>API Provider<select disabled={testingConnection} value={settings.provider} onChange={(event) => updateTestedSetting({ provider: event.target.value })}><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></label>
+            <label>API Key<span className="password-input-row"><input disabled={testingConnection} type={showApiKey ? "text" : "password"} value={settings.apiKey || ""} placeholder={settings.apiKeyMasked || "输入 API Key"} onChange={(event) => updateTestedSetting({ apiKey: event.target.value })} /><button type="button" title={showApiKey ? "隐藏 API Key" : "显示 API Key"} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"} onClick={() => setShowApiKey((visible) => !visible)}>{showApiKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
+            <label>Base URL<input disabled={testingConnection} value={settings.baseUrl} onChange={(event) => updateTestedSetting({ baseUrl: event.target.value })} /></label>
           </section>
           <section className="settings-section">
             <h2>模型参数</h2>
-            <label>Model<input value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} /></label>
+            <label>Model<input disabled={testingConnection} value={settings.model} onChange={(event) => updateTestedSetting({ model: event.target.value })} /></label>
             <label>Temperature<div className="range-row"><input type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} /><output>{settings.temperature.toFixed(1)}</output></div></label>
-            <label>Request Timeout（秒）<input type="number" min="5" max="600" value={settings.requestTimeout} onChange={(event) => setSettings({ ...settings, requestTimeout: Number(event.target.value) })} /></label>
+            <label>Request Timeout（秒）<input disabled={testingConnection} type="number" min="5" max="600" value={settings.requestTimeout} onChange={(event) => updateTestedSetting({ requestTimeout: Number(event.target.value) })} /></label>
           </section>
         </div>
       ) : null}
@@ -177,7 +236,25 @@ function SettingsView({ initialSection }: { initialSection: "api" | "browser" })
           <button className="button-secondary" onClick={() => void apiRequest("/api/browser/close", { method: "POST" })}>关闭当前浏览器</button>
         </div>
       ) : null}
-      <button className="button-primary save-settings" onClick={() => void save()}><Save size={16} />{saved ? "已保存" : "保存设置"}</button>
+      <div className="settings-actions">
+        {initialSection === "api" ? (
+          <button className="button-secondary" disabled={testingConnection} onClick={() => void testConnection()}>
+            {testingConnection ? <LoaderCircle className="spin" size={16} /> : <PlugZap size={16} />}
+            {testingConnection ? "测试中" : "测试连通性"}
+          </button>
+        ) : null}
+        <button className="button-primary save-settings" onClick={() => void save()}><Save size={16} />{saved ? "已保存" : "保存设置"}</button>
+      </div>
+      {initialSection === "api" && connectionTest.status !== "idle" ? (
+        <p
+          className={`connection-test-status ${connectionTest.status}`}
+          role={connectionTest.status === "error" ? "alert" : "status"}
+          aria-live="polite"
+        >
+          {connectionTest.message}
+          {connectionTest.status === "success" ? `（${connectionTest.elapsedMs} ms）` : ""}
+        </p>
+      ) : null}
     </div>
   );
 }
