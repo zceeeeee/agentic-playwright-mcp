@@ -332,6 +332,7 @@ def test_skill_run_calls_registered_export_function():
             "font_color": None,
             "italic": None,
             "image_path": None,
+            "output_format": "both",
             "keep_open": True,
         }
     ]
@@ -400,6 +401,67 @@ def test_router_routes_wps_docx_pdf_path_and_font_request():
     assert '"宋体"' in decision.script
     assert '"14"' in decision.script
     assert "__param_output_dir, __param_docx_path, __param_pdf_path" in decision.script
+    assert "__agentic_prepare_wps_output_format" in decision.script
+    assert "output_format=__param_output_format" in decision.script
+
+
+def test_export_can_generate_word_only(tmp_path):
+    app = FakeApplication()
+
+    result = export_article_to_pdf(
+        title="Word only",
+        body="正文",
+        output_dir=str(tmp_path),
+        output_format="word",
+        keep_open=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["output_format"] == "word"
+    assert result["docx_path"] is not None
+    assert result["pdf_path"] is None
+    assert app.document is not None
+    assert app.document.saved is not None
+    assert app.document.exported is None
+
+
+def test_export_can_generate_pdf_only(tmp_path):
+    app = FakeApplication()
+
+    result = export_article_to_pdf(
+        title="PDF only",
+        body="正文",
+        output_dir=str(tmp_path),
+        output_format="pdf",
+        keep_open=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["output_format"] == "pdf"
+    assert result["docx_path"] is None
+    assert result["pdf_path"] is not None
+    assert app.document is not None
+    assert app.document.saved is None
+    assert app.document.exported is not None
+
+
+def test_export_defaults_to_word_and_pdf(tmp_path):
+    app = FakeApplication()
+
+    result = export_article_to_pdf(
+        title="Both",
+        body="正文",
+        output_dir=str(tmp_path),
+        keep_open=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["output_format"] == "both"
+    assert result["docx_path"] is not None
+    assert result["pdf_path"] is not None
+    assert app.document is not None
+    assert app.document.saved is not None
+    assert app.document.exported is not None
 
 
 def test_router_routes_wps_style_and_insert_image_request():

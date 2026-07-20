@@ -205,6 +205,8 @@ def _resolve_paths(
     pdf = (
         Path(normalized_pdf_path).expanduser()
         if normalized_pdf_path
+        else Path(normalized_docx_path).expanduser().with_suffix(".pdf")
+        if normalized_docx_path
         else base_dir / f"{base_name}.pdf"
     )
     docx.parent.mkdir(parents=True, exist_ok=True)
@@ -662,9 +664,10 @@ def export_article_to_pdf(
     font_color: int | str | None = None,
     italic: bool | str | None = None,
     image_path: str | None = None,
+    output_format: str | None = "both",
     dispatch_fn: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
-    """Create a WPS/Word document, apply basic article formatting, and export PDF."""
+    """Create a formatted WPS/Word document and save the requested output files."""
 
     markdown_data = _read_markdown_file(markdown_path)
     markdown_text = markdown_data[0] if markdown_data else None
@@ -684,6 +687,22 @@ def export_article_to_pdf(
     title_size = _int_or_default(title_font_size, 22)
     font_color_value = _font_color_value(font_color)
     italic_enabled = _is_italic(italic)
+    normalized_output_format = str(output_format or "both").strip().lower()
+    output_format_aliases = {
+        "pdf": "pdf",
+        "word": "word",
+        "doc": "word",
+        "docx": "word",
+        "both": "both",
+        "all": "both",
+        "两种": "both",
+        "两种形式": "both",
+        "pdf和word": "both",
+        "pdf 和 word": "both",
+    }
+    normalized_output_format = output_format_aliases.get(normalized_output_format)
+    if normalized_output_format is None:
+        raise ValueError("output_format must be one of: pdf, word, both")
 
     docx, pdf = _resolve_paths(title_text, output_dir, docx_path, pdf_path, file_name)
     app, provider = _dispatch_writer(dispatch_fn)
@@ -773,8 +792,14 @@ def export_article_to_pdf(
 
     inserted_image_path = _insert_image(selection, image_path)
 
-    _save_docx(doc, docx)
-    _export_pdf(doc, pdf)
+    saved_docx = None
+    saved_pdf = None
+    if normalized_output_format in {"word", "both"}:
+        _save_docx(doc, docx)
+        saved_docx = str(docx)
+    if normalized_output_format in {"pdf", "both"}:
+        _export_pdf(doc, pdf)
+        saved_pdf = str(pdf)
 
     if not keep_open:
         try:
@@ -789,8 +814,9 @@ def export_article_to_pdf(
         "success": True,
         "provider": provider,
         "title": title_text,
-        "docx_path": str(docx),
-        "pdf_path": str(pdf),
+        "docx_path": saved_docx,
+        "pdf_path": saved_pdf,
+        "output_format": normalized_output_format,
         "paragraph_count": paragraph_count,
         "heading_count": heading_count,
         "inline_style_count": inline_style_count,

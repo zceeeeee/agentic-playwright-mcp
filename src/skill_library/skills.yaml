@@ -92,7 +92,7 @@ skills:
   # ──────────────────────────────────────────────
 
   - id: "domain/wps_writer_export"
-    name: "WPS 写文章并导出 PDF"
+    name: "WPS 写文章并导出文件"
     type: "domain"
     platform: "wps"
     action: "export"
@@ -104,7 +104,7 @@ skills:
       - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,80}(?:pdf|导出|保存|路径)"
       - "(?:\\.md|markdown).{0,80}(?:wps|金山办公|word|文章|文档|转换)"
     url_patterns: []
-    description: "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题和正文，设置标题、字体、段落和编号样式，保存 docx 并导出 PDF"
+    description: "打开本机 WPS Writer（找不到时回退 Word），新建并格式化文字文档，可选择输出 PDF、Word 或同时输出两种格式"
     version: "1.0.0"
     examples:
       - "WPS写文章，标题是“测试标题”，内容是“测试正文”，最后导出PDF"
@@ -151,6 +151,14 @@ skills:
         extract_patterns:
           - '(?:PDF路径|pdf路径|导出路径|保存路径|路径|pdf_path)\s*(?:是|为|:|：)?\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.pdf)'
           - '(?:导出为|保存为)\s*["“]?([A-Za-z]:(?:[\\/])?[^"”\n]+?\.pdf)'
+      output_format:
+        type: string
+        required: false
+        default: "both"
+        description: "输出文件格式：PDF、Word，或同时输出 PDF 和 Word；默认同时输出两种格式"
+        extract_patterns:
+          - '(?:输出格式|导出格式|保存格式|output_format)\s*(?:是|为|:|：)?\s*(PDF和Word|PDF\s*和\s*Word|两种形式|两种|PDF|Word|DOCX?)'
+          - '(?:只|仅)(?:输出|导出|保存)\s*(PDF|Word|DOCX?)'
       file_name:
         type: string
         required: false

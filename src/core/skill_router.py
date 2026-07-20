@@ -455,6 +455,9 @@ class SkillRouter:
         output_dir_value = json.dumps(extracted.get("output_dir", "-1"), ensure_ascii=False)
         docx_path_value = json.dumps(extracted.get("docx_path", "-1"), ensure_ascii=False)
         pdf_path_value = json.dumps(extracted.get("pdf_path", "-1"), ensure_ascii=False)
+        output_format_value = json.dumps(
+            extracted.get("output_format", "-1"), ensure_ascii=False
+        )
         file_name_value = json.dumps(extracted.get("file_name", "-1"), ensure_ascii=False)
         font_name_value = json.dumps(extracted.get("font_name", "-1"), ensure_ascii=False)
         font_size_value = json.dumps(extracted.get("font_size", "-1"), ensure_ascii=False)
@@ -631,6 +634,24 @@ class SkillRouter:
             "    if lowered.endswith('.docx') or lowered.endswith('.doc'):\n"
             "        return '-1', answer, '-1'\n"
             "    return answer, '-1', '-1'\n"
+            "\n"
+            "def __agentic_prepare_wps_output_format(current):\n"
+            "    aliases = {\n"
+            "        'pdf': 'pdf',\n"
+            "        'word': 'word', 'doc': 'word', 'docx': 'word',\n"
+            "        'both': 'both', 'all': 'both',\n"
+            "        '两种': 'both', '两种形式': 'both',\n"
+            "        'pdf和word': 'both', 'pdf 和 word': 'both',\n"
+            "    }\n"
+            "    current_text = str(current or '').strip().lower()\n"
+            "    default_value = aliases.get(current_text, 'both')\n"
+            "    answer = panel_prompt(\n"
+            "        '请选择 WPS 输出格式：[PDF] [Word] [PDF 和 Word]（默认同时输出 PDF 和 Word）'\n"
+            "    )\n"
+            "    answer_text = str(answer or '').strip().lower()\n"
+            "    if not answer_text:\n"
+            "        return default_value\n"
+            "    return aliases.get(answer_text, default_value)\n"
         )
 
         return (
@@ -649,6 +670,7 @@ class SkillRouter:
             f"__param_body_font_name = __agentic_optional_input('正文字体', {body_font_name_value} if not __agentic_is_missing_param({body_font_name_value}) else __legacy_font_name, {body_font_name_default})\n"
             f"__param_body_font_size = __agentic_optional_input('正文字号', {body_font_size_value} if not __agentic_is_missing_param({body_font_size_value}) else __legacy_font_size, {body_font_size_default})\n"
             f"__param_output_dir, __param_docx_path, __param_pdf_path = __agentic_prepare_wps_save_path({output_dir_value}, {docx_path_value}, {pdf_path_value}, {default_output_dir_value})\n\n"
+            f"__param_output_format = __agentic_prepare_wps_output_format({output_format_value})\n\n"
             "# 自动调用\n"
             "run(\n"
             "    title=__param_title,\n"
@@ -656,6 +678,7 @@ class SkillRouter:
             "    output_dir=__param_output_dir,\n"
             "    docx_path=__param_docx_path,\n"
             "    pdf_path=__param_pdf_path,\n"
+            "    output_format=__param_output_format,\n"
             f"    file_name={file_name_value},\n"
             "    markdown_path=__wps_markdown_path,\n"
             "    body_format=__agentic_wps_body_format,\n"

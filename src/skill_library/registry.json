@@ -72,13 +72,13 @@
     },
     {
       "id": "wps_writer_export",
-      "name": "WPS 写文章并导出 PDF",
+      "name": "WPS 写文章并导出文件",
       "type": "domain",
       "triggers": ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "Markdown", "md", "转换", "写docx", "写文章", "导出PDF", "保存PDF", "插入图片", "字体颜色", "斜体"],
       "url_patterns": [],
       "file": "export/wps_writer_export.py",
       "function": "run",
-      "description": "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题、正文或 Markdown 文件，设置字体、颜色、斜体和本地插图，保存 docx 并导出 PDF"
+      "description": "打开本机 WPS Writer（找不到时回退 Word），新建文字文档，写入标题、正文或 Markdown 文件，设置字体、颜色、斜体和本地插图，可选择输出 PDF、Word 或两种格式"
     },
     {
       "id": "wechat_send_contact_file",

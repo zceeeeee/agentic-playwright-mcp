@@ -1,4 +1,4 @@
-"""WPS Writer article creation and PDF export skill."""
+"""WPS Writer article creation and configurable file export skill."""
 
 
 def _default_log(message):
@@ -41,11 +41,12 @@ def run(
     font_color="-1",
     italic="-1",
     image_path="-1",
+    output_format="both",
     keep_open=True,
     log_fn=None,
     export_fn=None,
 ):
-    """Create a WPS/Word article document, save it, and export it as PDF."""
+    """Create a WPS/Word article and save it in the requested formats."""
 
     logger = _resolve_log(log_fn)
     md_path = _value(markdown_path)
@@ -79,11 +80,14 @@ def run(
         font_color=_value(font_color),
         italic=_value(italic),
         image_path=_value(image_path),
+        output_format=_value(output_format) or "both",
         keep_open=keep_open,
     )
     if not result or not result.get("success"):
         raise RuntimeError("WPS Writer export failed")
 
-    logger(f"WPS document saved: {result.get('docx_path')}")
-    logger(f"WPS PDF exported: {result.get('pdf_path')}")
+    if result.get("docx_path"):
+        logger(f"WPS document saved: {result.get('docx_path')}")
+    if result.get("pdf_path"):
+        logger(f"WPS PDF exported: {result.get('pdf_path')}")
     return result

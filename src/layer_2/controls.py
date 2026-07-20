@@ -727,9 +727,10 @@ def wps_writer_export(
     font_color: int | str | None = None,
     italic: bool | str | None = None,
     image_path: str | None = None,
+    output_format: str | None = "both",
     keep_open: bool = True,
 ) -> dict:
-    """Create a WPS Writer/Word document and export it as PDF."""
+    """Create a WPS Writer/Word document in PDF, Word, or both formats."""
     from src.layer_1.wps_writer import export_article_to_pdf
 
     return export_article_to_pdf(
@@ -750,6 +751,7 @@ def wps_writer_export(
         font_color=font_color,
         italic=italic,
         image_path=image_path,
+        output_format=output_format,
         keep_open=keep_open,
     )
 
