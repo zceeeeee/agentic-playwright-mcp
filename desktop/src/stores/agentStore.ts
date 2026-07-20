@@ -467,6 +467,23 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   cancelCurrentTask: async (explicitTaskId) => {
     const taskId = explicitTaskId || get().currentTaskId;
     if (!taskId) return;
+    // 乐观更新：立即显示取消状态和消息，后端会在检查点自行停止
+    const conversationId = get().currentConversationId;
+    const optimisticCancel: ChatMessage = {
+      id: `optimistic_cancel_${Date.now()}`,
+      conversation_id: conversationId || "",
+      task_id: taskId,
+      role: "system",
+      type: "system",
+      content: "任务已取消",
+      created_at: new Date().toISOString()
+    };
+    cancelErrorVisualStateReset();
+    set((state) => ({
+      messages: [...state.messages, optimisticCancel],
+      currentTaskId: null,
+      visualState: "idle"
+    }));
     await apiRequest(`/api/tasks/${taskId}/cancel`, { method: "POST" });
     // 乐观更新：立即反馈，后端会在检查点自行停止
     cancelErrorVisualStateReset();
@@ -528,9 +545,13 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     if (event.type === "assistant_message") {
       const incoming = event.payload.message as ChatMessage;
       set((current) => {
-        const withoutOptimistic = incoming.role === "user"
-          ? current.messages.filter((message) => !(message.id.startsWith("optimistic_") && message.content === incoming.content))
-          : current.messages;
+        const withoutOptimistic = current.messages.filter((message) => {
+          // 过滤乐观用户消息
+          if (incoming.role === "user" && message.id.startsWith("optimistic_") && message.content === incoming.content) return false;
+          // 过滤乐观取消消息
+          if (message.id.startsWith("optimistic_cancel_") && incoming.role === "system" && message.content === incoming.content) return false;
+          return true;
+        });
         return { messages: dedupe([...withoutOptimistic, incoming]) };
       });
       return;
