@@ -125,6 +125,7 @@ export interface DesktopSettings {
   maxSteps: number;
   useCloakBrowser: boolean;
   exploreOcrEnabled: boolean;
+  exploreVisionEnabled: boolean;
 }
 
 export interface ApiConnectionTestResult {
