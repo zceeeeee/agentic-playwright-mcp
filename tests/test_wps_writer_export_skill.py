@@ -38,6 +38,42 @@ class FakeInlineShapes:
         self.pictures.append(path)
 
 
+class FakeCell:
+    def __init__(self) -> None:
+        self.Range = SimpleNamespace(Text="")
+
+
+class FakeTable:
+    def __init__(self, rows: int, columns: int) -> None:
+        self.cells = [
+            [FakeCell() for _ in range(columns)] for _ in range(rows)
+        ]
+        self.Borders = SimpleNamespace(Enable=0)
+        self.Range = SimpleNamespace(
+            End=100,
+            Font=SimpleNamespace(Name="", Size=0),
+        )
+        header_range = SimpleNamespace(Font=SimpleNamespace(Bold=0))
+        self.Rows = SimpleNamespace(Item=lambda index: SimpleNamespace(Range=header_range))
+        self.auto_fit = None
+
+    def Cell(self, row: int, column: int) -> FakeCell:  # noqa: N802
+        return self.cells[row - 1][column - 1]
+
+    def AutoFitBehavior(self, behavior: int) -> None:  # noqa: N802
+        self.auto_fit = behavior
+
+
+class FakeTables:
+    def __init__(self) -> None:
+        self.created: list[FakeTable] = []
+
+    def Add(self, selection_range, rows: int, columns: int) -> FakeTable:  # noqa: N802
+        table = FakeTable(rows, columns)
+        self.created.append(table)
+        return table
+
+
 class FakeSelection:
     def __init__(self) -> None:
         self.Font = SimpleNamespace(
@@ -48,7 +84,8 @@ class FakeSelection:
             FirstLineIndent=None,
             LineSpacingRule=None,
         )
-        self.Range = SimpleNamespace(ListFormat=FakeListFormat())
+        self.Tables = FakeTables()
+        self.Range = SimpleNamespace(ListFormat=FakeListFormat(), Tables=self.Tables)
         self.InlineShapes = FakeInlineShapes()
         self.typed: list[str] = []
         self.formatted: list[dict[str, object]] = []
@@ -69,6 +106,9 @@ class FakeSelection:
 
     def TypeParagraph(self) -> None:
         self.typed.append("\n")
+
+    def SetRange(self, start: int, end: int) -> None:  # noqa: N802
+        self.last_range = (start, end)
 
 
 class FakeDocument:
@@ -196,6 +236,61 @@ def test_export_article_to_pdf_applies_style_file_name_and_image(tmp_path):
     assert result["font_color"] == 255
     assert result["italic"] is True
     assert result["image_path"] == str(image_path.resolve())
+
+
+def test_export_article_inserts_ai_table_at_markdown_placeholder(tmp_path):
+    app = FakeApplication()
+    table_json = """{
+      "tables": [{
+        "placeholder": "[[WPS_TABLE_1]]",
+        "title": "央视主要频道",
+        "columns": ["频道", "定位"],
+        "rows": [["CCTV-1", "综合"], ["CCTV-13", "新闻"]],
+        "style": {"header_bold": true, "border": "grid", "auto_fit": true}
+      }]
+    }"""
+
+    result = export_article_to_pdf(
+        title="央视简介",
+        body="## 频道概览\n\n[[WPS_TABLE_1]]\n\n以上为主要频道。",
+        body_format="markdown",
+        table_json=table_json,
+        output_dir=str(tmp_path),
+        keep_open=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["table_count"] == 1
+    assert len(app.Selection.Tables.created) == 1
+    table = app.Selection.Tables.created[0]
+    assert table.Cell(1, 1).Range.Text == "频道"
+    assert table.Cell(1, 2).Range.Text == "定位"
+    assert table.Cell(2, 1).Range.Text == "CCTV-1"
+    assert table.Cell(3, 2).Range.Text == "新闻"
+    assert table.Borders.Enable == 1
+    assert table.auto_fit == 1
+    assert "[[WPS_TABLE_1]]" not in app.Selection.typed
+
+
+def test_export_article_appends_missing_table_placeholder(tmp_path):
+    app = FakeApplication()
+    table_json = (
+        '{"tables":[{"columns":["项目","说明"],'
+        '"rows":[["示例","内容"]]}]}'
+    )
+
+    result = export_article_to_pdf(
+        title="自动补位",
+        body="正文没有显式占位符。",
+        body_format="markdown",
+        table_json=table_json,
+        output_dir=str(tmp_path),
+        keep_open=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["table_count"] == 1
+    assert len(app.Selection.Tables.created) == 1
 
 
 def test_export_markdown_file_to_wps_applies_headings_and_inline_styles(tmp_path):
@@ -338,6 +433,7 @@ def test_skill_run_calls_registered_export_function():
             "font_color": None,
             "italic": None,
             "image_path": None,
+            "table_json": None,
             "output_format": "both",
             "keep_open": True,
         }
@@ -606,6 +702,35 @@ def test_wps_ai_body_passes_user_requirements_without_forced_styles():
     assert "用户未要求的格式不得添加" in decision.script
     assert "关键观点可加粗" not in decision.script
     assert "下划线使用 <u>文字</u>" not in decision.script
+
+
+def test_wps_ai_body_supports_single_table_requirement_prompt_and_json():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route(
+        "WPS写文章，标题是央视介绍，内容是介绍央视并生成主要频道表格"
+    )
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert "__agentic_wps_requests_table" in decision.script
+    assert "请输入表格内容、列名、数据或样式要求" in decision.script
+    assert "直接回车则由 AI 根据文章自由设计" in decision.script
+    assert "[[WPS_TABLE_1]]" in decision.script
+    assert "只返回严格 JSON" in decision.script
+    assert "__param_table_json = __agentic_prepare_wps_tables(__param_body)" in decision.script
+    assert "table_json=__param_table_json" in decision.script
+
+
+def test_wps_table_prompt_is_not_enabled_for_unrelated_ai_body():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("WPS写文章，标题是春天，内容是描写春天的散文")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert "if __agentic_wps_requests_table(topic):" in decision.script
+    assert "__agentic_wps_table_requested = False" in decision.script
 
 
 def test_router_routes_markdown_file_to_wps_article():

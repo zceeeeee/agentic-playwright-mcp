@@ -125,7 +125,7 @@ skills:
     type: "domain"
     platform: "wps"
     action: "export"
-    triggers: ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "Markdown", "md", "转换", "写文章", "导出PDF", "保存PDF", "插入图片", "字体颜色", "斜体"]
+    triggers: ["WPS", "wps", "金山办公", "金山文档", "金山文字", "WPS客户端", "docx", "Word文档", "Markdown", "md", "转换", "写文章", "导出PDF", "保存PDF", "插入图片", "插入表格", "生成表格", "字体颜色", "斜体"]
     trigger_patterns:
       - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,30}(?:写文章|写文档|新建文档|新建文字|生成文档|导出\\s*pdf|保存\\s*pdf|导出)"
       - "(?:写文章|写文档|新建文档|新建文字|生成文档|导出\\s*pdf|保存\\s*pdf).{0,30}(?:wps|金山办公|金山文档|金山文字|wps客户端)"
@@ -133,7 +133,7 @@ skills:
       - "(?:wps|金山办公|金山文档|金山文字|wps客户端).{0,80}(?:pdf|导出|保存|路径)"
       - "(?:\\.md|markdown).{0,80}(?:wps|金山办公|word|文章|文档|转换)"
     url_patterns: []
-    description: "打开本机 WPS Writer（找不到时回退 Word），新建并格式化文字文档，可选择输出 PDF、Word 或同时输出两种格式"
+    description: "打开本机 WPS Writer（找不到时回退 Word），新建并格式化文字文档，AI 正文模式可按要求生成并在合适位置插入表格，可选择输出 PDF、Word 或同时输出两种格式"
     version: "1.0.0"
     examples:
       - "WPS写文章，标题是“测试标题”，内容是“测试正文”，最后导出PDF"

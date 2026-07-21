@@ -727,6 +727,7 @@ def wps_writer_export(
     font_color: int | str | None = None,
     italic: bool | str | None = None,
     image_path: str | None = None,
+    table_json: str | dict | list | None = None,
     output_format: str | None = "both",
     keep_open: bool = True,
 ) -> dict:
@@ -751,6 +752,7 @@ def wps_writer_export(
         font_color=font_color,
         italic=italic,
         image_path=image_path,
+        table_json=table_json,
         output_format=output_format,
         keep_open=keep_open,
     )

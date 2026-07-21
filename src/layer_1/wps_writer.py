@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import uuid
@@ -75,6 +76,8 @@ MARKDOWN_HEADING_STYLES = {
     3: {"font": "仿宋_GB2312", "size": 16, "bold": True},
     4: {"font": "仿宋_GB2312", "size": 16, "bold": True},
 }
+
+WPS_TABLE_PLACEHOLDER_PATTERN = re.compile(r"^\s*\[\[WPS_TABLE_(\d+)\]\]\s*$")
 
 
 def _clean_text(value: str | None) -> str:
@@ -582,6 +585,159 @@ def _is_markdown_format(body_format: str | None) -> bool:
     return value in {"markdown", "md", "markdown格式", "带格式"}
 
 
+def _strip_json_fence(value: str) -> str:
+    text = _clean_text(value)
+    if not text.startswith("```"):
+        return text
+    first_newline = text.find("\n")
+    if first_newline >= 0:
+        text = text[first_newline + 1 :]
+    if text.rstrip().endswith("```"):
+        text = text.rstrip()[:-3]
+    return text.strip()
+
+
+def _normalize_table_specs(table_json: str | dict | list | None) -> list[dict[str, Any]]:
+    if table_json is None or table_json == "":
+        return []
+    payload: Any = table_json
+    if isinstance(payload, str):
+        text = _strip_json_fence(payload)
+        if not text or text == "-1":
+            return []
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"WPS table JSON is invalid: {exc}") from exc
+
+    tables = payload.get("tables", []) if isinstance(payload, dict) else payload
+    if not isinstance(tables, list):
+        raise ValueError("WPS table JSON must contain a tables list")
+    if len(tables) > 5:
+        raise ValueError("WPS table JSON supports at most 5 tables")
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw_table in enumerate(tables, start=1):
+        if not isinstance(raw_table, dict):
+            raise ValueError(f"WPS table {index} must be an object")
+        columns = raw_table.get("columns")
+        rows = raw_table.get("rows")
+        if not isinstance(columns, list) or not 1 <= len(columns) <= 12:
+            raise ValueError(f"WPS table {index} must have 1 to 12 columns")
+        if not isinstance(rows, list) or len(rows) > 100:
+            raise ValueError(f"WPS table {index} must have at most 100 rows")
+        normalized_rows: list[list[str]] = []
+        for row_index, row in enumerate(rows, start=1):
+            if not isinstance(row, list) or len(row) != len(columns):
+                raise ValueError(
+                    f"WPS table {index} row {row_index} does not match the column count"
+                )
+            normalized_rows.append(
+                ["" if cell is None else str(cell)[:1000] for cell in row]
+            )
+        placeholder = _clean_text(raw_table.get("placeholder"))
+        if not WPS_TABLE_PLACEHOLDER_PATTERN.match(placeholder):
+            placeholder = f"[[WPS_TABLE_{index}]]"
+        normalized.append(
+            {
+                "placeholder": placeholder,
+                "title": _clean_text(raw_table.get("title"))[:200],
+                "columns": [
+                    "" if column is None else str(column)[:200] for column in columns
+                ],
+                "rows": normalized_rows,
+                "style": raw_table.get("style")
+                if isinstance(raw_table.get("style"), dict)
+                else {},
+            }
+        )
+    return normalized
+
+
+def _ensure_table_placeholders(
+    markdown_text: str, table_specs: list[dict[str, Any]]
+) -> str:
+    result = markdown_text
+    for table in table_specs:
+        placeholder = table["placeholder"]
+        if placeholder not in result:
+            result = f"{result.rstrip()}\n\n{placeholder}\n"
+    return result
+
+
+def _set_table_cell_text(table: Any, row: int, column: int, value: str) -> None:
+    cell = table.Cell(row, column)
+    cell_range = getattr(cell, "Range", None)
+    if cell_range is None:
+        raise RuntimeError("WPS table cell does not expose Range")
+    try:
+        cell_range.Text = value
+    except Exception:
+        _call(cell_range, "InsertAfter", value)
+
+
+def _insert_table(
+    selection: Any,
+    table_spec: dict[str, Any],
+    *,
+    body_font: str,
+    body_size: int,
+) -> None:
+    title = table_spec.get("title")
+    if title:
+        _type_rich_paragraph(
+            selection,
+            str(title),
+            body_font,
+            body_size,
+            bold=True,
+            alignment=1,
+        )
+
+    columns = table_spec["columns"]
+    rows = table_spec["rows"]
+    table_container = getattr(selection, "Tables", None)
+    if table_container is None:
+        table_container = getattr(getattr(selection, "Range", None), "Tables", None)
+    if table_container is None or getattr(table_container, "Add", None) is None:
+        raise RuntimeError("WPS Writer selection does not support Tables.Add")
+
+    table = table_container.Add(selection.Range, len(rows) + 1, len(columns))
+    for column_index, value in enumerate(columns, start=1):
+        _set_table_cell_text(table, 1, column_index, value)
+    for row_index, row in enumerate(rows, start=2):
+        for column_index, value in enumerate(row, start=1):
+            _set_table_cell_text(table, row_index, column_index, value)
+
+    style = table_spec.get("style", {})
+    try:
+        table.Borders.Enable = 1
+    except Exception:
+        pass
+    try:
+        table.Rows.Item(1).Range.Font.Bold = -1
+    except Exception:
+        pass
+    try:
+        table.Range.Font.Name = body_font
+        table.Range.Font.Size = body_size
+    except Exception:
+        pass
+    if style.get("auto_fit", True):
+        try:
+            table.AutoFitBehavior(1)
+        except Exception:
+            pass
+
+    table_range = getattr(table, "Range", None)
+    table_end = getattr(table_range, "End", None)
+    if table_end is not None and getattr(selection, "SetRange", None) is not None:
+        selection.SetRange(table_end, table_end)
+    else:
+        _call(selection, "MoveRight", 1, 1)
+    _call(selection, "TypeParagraph")
+
+
 def _render_markdown(
     selection: Any,
     markdown_text: str,
@@ -590,16 +746,32 @@ def _render_markdown(
     body_size: int,
     font_color: int | None = None,
     base_italic: bool = False,
+    table_specs: list[dict[str, Any]] | None = None,
 ) -> dict[str, int]:
     paragraph_count = 0
     heading_count = 0
     inline_style_count = 0
+    table_count = 0
     list_item_pattern = re.compile(r"^\s*(?:\d+[.)、]|[-*•])\s+(.+)$")
+    table_lookup = {
+        table["placeholder"]: table for table in (table_specs or [])
+    }
 
     for raw_line in markdown_text.splitlines():
         line = raw_line.strip()
         if not line:
             _call(selection, "TypeParagraph")
+            continue
+
+        table_spec = table_lookup.get(line)
+        if table_spec is not None:
+            _insert_table(
+                selection,
+                table_spec,
+                body_font=body_font,
+                body_size=body_size,
+            )
+            table_count += 1
             continue
 
         heading = re.match(r"^\s{0,3}(#{1,5})\s+(.+?)\s*#*\s*$", raw_line)
@@ -647,6 +819,7 @@ def _render_markdown(
         "paragraph_count": paragraph_count,
         "heading_count": heading_count,
         "inline_style_count": inline_style_count,
+        "table_count": table_count,
     }
 
 
@@ -831,6 +1004,7 @@ def export_article_to_pdf(
     font_color: int | str | None = None,
     italic: bool | str | None = None,
     image_path: str | None = None,
+    table_json: str | dict | list | None = None,
     output_format: str | None = "both",
     dispatch_fn: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
@@ -839,7 +1013,8 @@ def export_article_to_pdf(
     markdown_data = _read_markdown_file(markdown_path)
     markdown_text = markdown_data[0] if markdown_data else None
     normalized_markdown_path = markdown_data[1] if markdown_data else None
-    body_is_markdown = _is_markdown_format(body_format)
+    table_specs = _normalize_table_specs(table_json)
+    body_is_markdown = _is_markdown_format(body_format) or bool(table_specs)
     markdown_title = _first_markdown_heading(markdown_text) if markdown_text else None
 
     title_text = _clean_text(title) or markdown_title or "未命名文档"
@@ -882,6 +1057,7 @@ def export_article_to_pdf(
     paragraph_count = 0
     heading_count = 0
     inline_style_count = 0
+    table_count = 0
     if markdown_text is not None:
         inline_style_count += _type_document_title(
             selection,
@@ -897,6 +1073,7 @@ def export_article_to_pdf(
             if markdown_title
             else markdown_text
         )
+        markdown_body = _ensure_table_placeholders(markdown_body, table_specs)
         markdown_result = _render_markdown(
             selection,
             markdown_body,
@@ -904,10 +1081,12 @@ def export_article_to_pdf(
             body_size=body_size,
             font_color=font_color_value,
             base_italic=italic_enabled,
+            table_specs=table_specs,
         )
         paragraph_count += markdown_result["paragraph_count"]
         heading_count += markdown_result["heading_count"]
         inline_style_count += markdown_result["inline_style_count"]
+        table_count += markdown_result["table_count"]
     elif body_is_markdown:
         inline_style_count += _type_document_title(
             selection,
@@ -918,6 +1097,7 @@ def export_article_to_pdf(
         )
         paragraph_count += 1
         heading_count += 1
+        body_text = _ensure_table_placeholders(body_text, table_specs)
         markdown_result = _render_markdown(
             selection,
             body_text,
@@ -925,10 +1105,12 @@ def export_article_to_pdf(
             body_size=body_size,
             font_color=font_color_value,
             base_italic=italic_enabled,
+            table_specs=table_specs,
         )
         paragraph_count += markdown_result["paragraph_count"]
         heading_count += markdown_result["heading_count"]
         inline_style_count += markdown_result["inline_style_count"]
+        table_count += markdown_result["table_count"]
     else:
         _type_document_title(
             selection,
@@ -991,6 +1173,7 @@ def export_article_to_pdf(
         "paragraph_count": paragraph_count,
         "heading_count": heading_count,
         "inline_style_count": inline_style_count,
+        "table_count": table_count,
         "font_name": body_font,
         "font_size": body_size,
         "title_font_name": title_font,

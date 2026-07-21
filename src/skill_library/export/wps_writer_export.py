@@ -41,6 +41,7 @@ def run(
     font_color="-1",
     italic="-1",
     image_path="-1",
+    table_json="-1",
     output_format="both",
     keep_open=True,
     log_fn=None,
@@ -80,6 +81,7 @@ def run(
         font_color=_value(font_color),
         italic=_value(italic),
         image_path=_value(image_path),
+        table_json=_value(table_json),
         output_format=_value(output_format) or "both",
         keep_open=keep_open,
     )
