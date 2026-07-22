@@ -218,6 +218,10 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   reconnect: async () => {
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     socket?.close();
     socket = null;
     await refreshBackendConfig();
