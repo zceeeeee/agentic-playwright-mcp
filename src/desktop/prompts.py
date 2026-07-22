@@ -89,7 +89,7 @@ def parse_desktop_prompt(
     skill_name, parameter_name = _extract_context(question)
     asks_for_input = bool(
         field_defs
-        or re.search(r"请输入|请提供|请描述|请手动输入|不能为空|输入后再继续", question)
+        or re.search(r"请输入|请提供|请描述|请手动输入|请手动完成|不能为空|输入后再继续|等待您的输入", question)
     )
     confirms_value = bool(
         re.search(r"请确认技能|沿用当前值|如需修改请输入新值", question)
