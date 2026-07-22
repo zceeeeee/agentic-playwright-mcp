@@ -141,6 +141,10 @@ function markTasksSuperseded(messages: ChatMessage[], currentTaskId: string | nu
 }
 
 async function connectEvents(handle: (event: BackendEvent) => void, setConnected: (value: boolean) => void) {
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (socket) socket.close();
   socket = await eventSocket();
   socket.onopen = () => setConnected(true);

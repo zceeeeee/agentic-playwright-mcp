@@ -285,6 +285,11 @@ class VisionRouter:
             len(targets),
             len(ocr_result.words),
         )
+        for t in targets:
+            logger.debug(
+                "OCR target: ref=%s text=%r x=%.3f y=%.3f w=%.3f h=%.3f",
+                t.ref, t.description, t.x, t.y, t.width, t.height,
+            )
         return snapshot
 
     def _make_vision_module(self, module_type):
