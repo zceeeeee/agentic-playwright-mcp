@@ -82,6 +82,14 @@ def _refs(nodes):
     return result
 
 
+def _roles(nodes):
+    result = []
+    for node in nodes:
+        result.append(node.role)
+        result.extend(_roles(node.children))
+    return result
+
+
 def test_ref_assignment_only_interactive_roles():
     gen = RefGenerator()
     assert gen.generate("heading") is None
@@ -117,6 +125,35 @@ def test_dom_explorer_aria_summary_returns_dict():
 
     assert summary["version"] == "snapshot_v1"
     assert summary["interactive_count"] == 2
+
+
+def test_snapshot_traverses_display_contents_container():
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 800, "height": 600})
+        page.set_content(
+            """
+            <main>
+              <div style="display: contents">
+                <input type="search" placeholder="Filter by name">
+              </div>
+            </main>
+            """
+        )
+        generator = SnapshotGenerator()
+
+        snapshot = generator.snapshot(page, mode=SnapshotMode.COMPACT)
+        deep_snapshot = generator.force_deep_scan(
+            page,
+            mode=SnapshotMode.COMPACT,
+        )
+        browser.close()
+
+    assert snapshot.interactive_count == 1
+    assert deep_snapshot.interactive_count == 1
+    assert "searchbox" in _roles(snapshot.nodes)
 
 
 # ---------------------------------------------------------------------------

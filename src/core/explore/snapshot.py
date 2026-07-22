@@ -94,6 +94,7 @@ _ARIA_EXTRACTION_JS_FALLBACK = r"""
     const style = window.getComputedStyle(el);
     if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
     if (Number(style.opacity) === 0) return false;
+    if (style.display === 'contents') return true;
     const rect = el.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) return false;
     if (rect.bottom < 0 || rect.right < 0) return false;
@@ -290,6 +291,7 @@ _ARIA_DEEP_SCAN_JS = r"""
     const style = window.getComputedStyle(el);
     if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
     if (Number(style.opacity) === 0) return false;
+    if (style.display === 'contents') return true;
     const rect = el.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) return false;
     if (rect.bottom < 0 || rect.right < 0) return false;
