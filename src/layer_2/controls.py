@@ -769,6 +769,7 @@ def wps_document_rewrite(
     document_path: str,
     markdown_text: str,
     keep_open: bool = True,
+    table_json: str | dict | list | None = None,
 ) -> dict:
     """Back up and rewrite an existing local document from Markdown."""
     from src.layer_1.wps_writer import rewrite_wps_document
@@ -776,6 +777,7 @@ def wps_document_rewrite(
     return rewrite_wps_document(
         document_path,
         markdown_text,
+        table_json=table_json,
         keep_open=keep_open,
     )
 

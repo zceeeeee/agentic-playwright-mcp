@@ -86,7 +86,9 @@ def test_wps_polish_then_formats_and_rewrites_markdown():
 
     assert len(prompts) == 2
     assert "润色" in prompts[0]
+    assert "不得添加图片、配图建议或任何图片占位符" in prompts[0]
     assert "标题居中，重点使用红色" in prompts[1]
+    assert "不得添加图片、配图建议或任何图片占位符" in prompts[1]
     assert rewrites == [
         (
             r"D:\docs\报告.docx",
@@ -97,6 +99,47 @@ def test_wps_polish_then_formats_and_rewrites_markdown():
     assert result["modified"] is True
     assert result["polished"] is True
     assert result["reformatted"] is True
+
+
+def test_wps_polish_generates_and_inserts_table_when_ai_adds_placeholder():
+    answers = iter(["yes", "no"])
+    prompts = []
+    rewrites = []
+
+    def generate(prompt):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "# 调研报告\n\n主要数据如下。\n\n[[WPS_TABLE_1]]\n\n结论。"
+        return (
+            '{"tables":[{"placeholder":"[[WPS_TABLE_1]]",'
+            '"title":"调研数据","columns":["项目","结果"],'
+            '"rows":[["样本数","100"]],'
+            '"style":{"header_bold":true,"border":"grid","auto_fit":true}}]}'
+        )
+
+    result = run(
+        document_path=r"D:\docs\报告.docx",
+        read_fn=lambda path: {"success": True, "text": "调研报告\n样本数为100。"},
+        rewrite_fn=lambda path, markdown, **kwargs: rewrites.append(
+            (path, markdown, kwargs)
+        )
+        or {
+            "success": True,
+            "document_path": path,
+            "backup_path": r"D:\docs\报告.backup.docx",
+            "table_count": 1,
+        },
+        prompt_fn=lambda question: next(answers),
+        generate_fn=generate,
+    )
+
+    assert len(prompts) == 2
+    assert "是否能明显提升可读性" in prompts[0]
+    assert "严格 JSON" in prompts[1]
+    assert rewrites[0][1].count("[[WPS_TABLE_1]]") == 1
+    assert '"columns":["项目","结果"]' in rewrites[0][2]["table_json"]
+    assert rewrites[0][2]["keep_open"] is True
+    assert result["table_inserted"] is True
 
 
 def test_wps_polish_source_runs_inside_script_engine():

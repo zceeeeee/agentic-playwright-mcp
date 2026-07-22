@@ -314,6 +314,11 @@ button { color: inherit; }
 .choice-list button small { color: #68767d; font-size: 11px; line-height: 16px; }
 .prompt-input { margin-top: 9px; }
 .input-choice-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 9px; }
+.prompt-checkbox-group { margin: 0 0 10px; padding: 9px; border: 1px solid #d9cd9d; border-radius: 6px; background: rgba(255, 255, 255, .55); }
+.prompt-checkbox-group legend { padding: 0 4px; color: #514b35; font-size: 11px; font-weight: 700; }
+.prompt-checkbox-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 10px; }
+.prompt-checkbox-options label { display: flex; align-items: center; gap: 6px; margin: 0; color: #3b3a31; font-size: 12px; font-weight: 500; cursor: pointer; }
+.prompt-checkbox-options input { width: 15px; height: 15px; margin: 0; accent-color: var(--theme-blue); cursor: pointer; }
 .default-value-button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
 .prompt-input label { display: block; margin-bottom: 5px; color: #514b35; font-size: 11px; font-weight: 600; }
 .required-indicator { color: inherit; }

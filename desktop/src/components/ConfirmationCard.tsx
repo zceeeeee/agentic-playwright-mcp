@@ -10,6 +10,7 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
   const cancelTask = useAgentStore((state) => state.cancelCurrentTask);
   const [inputValue, setInputValue] = useState("");
   const [comment, setComment] = useState("");
+  const [checkedValues, setCheckedValues] = useState<Record<string, string[]>>({});
   const [submitting, setSubmitting] = useState(false);
   const [requiredCancelArmed, setRequiredCancelArmed] = useState(false);
   const pending = confirmation.status === "pending";
@@ -20,6 +21,35 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
     () => confirmation.options || confirmation.actions?.filter((action) => action.id.startsWith("option_")) || [],
     [confirmation.actions, confirmation.options]
   );
+  const checkboxGroups = useMemo(
+    () => (confirmation.fields || []).filter((field) => {
+      const type = String(field.type || "").toLowerCase();
+      return type === "checkbox_group" || type === "checkbox-group" || type === "multiselect";
+    }),
+    [confirmation.fields]
+  );
+
+  function withCheckedRequirements(value: string) {
+    const requirements = checkboxGroups.flatMap((field) => {
+      const name = String(field.name || field.label || "options");
+      return checkedValues[name] || [];
+    });
+    const base = value.trim();
+    if (!requirements.length) return base;
+    return `${base}${base ? "\n" : ""}附加要求：${requirements.join("；")}`;
+  }
+
+  function toggleCheckedValue(fieldName: string, value: string) {
+    setCheckedValues((current) => {
+      const selected = current[fieldName] || [];
+      return {
+        ...current,
+        [fieldName]: selected.includes(value)
+          ? selected.filter((item) => item !== value)
+          : [...selected, value],
+      };
+    });
+  }
 
   async function choose(option: ConfirmationOption) {
     if (!pending || submitting) return;
@@ -39,7 +69,12 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
     }
     setSubmitting(true);
     try {
-      await approve(confirmation.confirmation_id, inputValue.trim(), actionId, comment);
+      await approve(
+        confirmation.confirmation_id,
+        withCheckedRequirements(inputValue),
+        actionId,
+        comment
+      );
     } finally {
       setSubmitting(false);
     }
@@ -52,7 +87,9 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
       try {
         await approve(
           confirmation.confirmation_id,
-          confirmation.default_value ?? confirmation.current_value ?? "",
+          withCheckedRequirements(
+            confirmation.default_value ?? confirmation.current_value ?? ""
+          ),
           confirmation.prompt_type === "confirm_value" ? "keep" : "default"
         );
       } finally {
@@ -153,10 +190,40 @@ export function ConfirmationCard({ confirmation }: { confirmation: ConfirmationR
           {hasDefaultValue ? (
             <div className="input-choice-row">
               <button className="button-secondary default-value-button" disabled={submitting} onClick={() => void useDefaultOrCancelTask()}>
-                <Check size={16} />使用默认值 {confirmation.default_value}
+                <Check size={16} />{confirmation.default_label || `使用默认值 ${confirmation.default_value}`}
               </button>
             </div>
           ) : null}
+          {checkboxGroups.map((field) => {
+            const fieldName = String(field.name || field.label || "options");
+            const fieldOptions = Array.isArray(field.options) ? field.options : [];
+            return (
+              <fieldset className="prompt-checkbox-group" key={fieldName}>
+                <legend>{String(field.label || "可选附加要求")}</legend>
+                <div className="prompt-checkbox-options">
+                  {fieldOptions.map((rawOption, index) => {
+                    const option = typeof rawOption === "object" && rawOption !== null
+                      ? rawOption as Record<string, unknown>
+                      : { label: String(rawOption), value: String(rawOption) };
+                    const label = String(option.label || option.value || "");
+                    const value = String(option.value || option.label || "");
+                    const checked = (checkedValues[fieldName] || []).includes(value);
+                    return (
+                      <label key={`${fieldName}-${index}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={submitting}
+                          onChange={() => toggleCheckedValue(fieldName, value)}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            );
+          })}
           <label htmlFor={`prompt-${confirmation.confirmation_id}`}>
             {confirmation.input_label || "输入内容"}
             <span className={requiredCancelArmed ? "required-indicator required-alert" : "required-indicator"}>

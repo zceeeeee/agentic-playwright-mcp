@@ -61,7 +61,11 @@ def _is_wps_desktop_task(content: str) -> bool:
     )
     actions = (
         "写文章",
+        "写文字",
         "写文档",
+        "创建文章",
+        "生成文章",
+        "新建文字",
         "新建文档",
         "创建文档",
         "生成文档",

@@ -67,6 +67,12 @@ def parse_desktop_prompt(
         if label and label not in option_labels:
             option_labels.append(label)
     for field in field_defs:
+        if str(field.get("type", "")).lower() in {
+            "checkbox_group",
+            "checkbox-group",
+            "multiselect",
+        }:
+            continue
         for item in field.get("options") or []:
             label = str(item.get("label", item.get("value", ""))) if isinstance(item, dict) else str(item)
             if label and label not in option_labels:
@@ -86,6 +92,7 @@ def parse_desktop_prompt(
     default_value = field_default if field_default is not None else (
         current_value if current_value is not None else None
     )
+    default_label = str(primary_field.get("default_label") or "").strip() or None
     skill_name, parameter_name = _extract_context(question)
     asks_for_input = bool(
         field_defs
@@ -106,6 +113,13 @@ def parse_desktop_prompt(
 
     clean_message = _OPTION_PATTERN.sub("", question)
     clean_message = re.sub(r"\s+", " ", clean_message).strip(" ：:，,。")
+    clean_message = clean_message.replace(
+        "直接回车则沿用当前值",
+        "不想改动请输入“无”",
+    ).replace(
+        "直接回车使用默认/当前值",
+        "不想改动请输入“无”",
+    )
 
     if title:
         display_title = title
@@ -153,8 +167,9 @@ def parse_desktop_prompt(
         "input_label": parameter_name or "输入内容",
         "input_required": prompt_type == "input" and field_required,
         "default_value": default_value,
+        "default_label": default_label,
         "input_placeholder": (
-            "输入新值；留空可沿用当前值"
+            "输入新值；不想改动请输入“无”"
             if prompt_type == "confirm_value"
             else f"请输入{parameter_name or '所需信息'}"
         ),

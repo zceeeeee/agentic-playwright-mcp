@@ -24,6 +24,8 @@ def test_only_wechat_ui_actions_are_desktop_only() -> None:
 
 def test_wps_execution_tasks_are_desktop_only() -> None:
     assert _is_wps_desktop_task("WPS写文章，标题是季度总结")
+    assert _is_wps_desktop_task("WPS写文字")
+    assert _is_wps_desktop_task("用金山文字新建文字")
     assert _is_wps_desktop_task("用WPS导出PDF")
     assert _is_wps_desktop_task(r'润色Word文档"D:\docs\报告.docx"')
     assert _is_desktop_only_task("WPS写文章，标题是季度总结")

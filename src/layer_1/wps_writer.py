@@ -78,6 +78,13 @@ MARKDOWN_HEADING_STYLES = {
 }
 
 WPS_TABLE_PLACEHOLDER_PATTERN = re.compile(r"^\s*\[\[WPS_TABLE_(\d+)\]\]\s*$")
+AI_IMAGE_PLACEHOLDER_PATTERN = re.compile(
+    r"^\s*(?:"
+    r"\[(?:图片|配图|插图)\s*\d*\s*[:：][^\]]*\]"
+    r"|【(?:图片|配图|插图)\s*\d*\s*[:：][^】]*】"
+    r")\s*$",
+    re.IGNORECASE,
+)
 
 
 def _clean_text(value: str | None) -> str:
@@ -395,7 +402,13 @@ def _markdown_inline_segments(text: str) -> list[dict[str, Any]]:
     """Parse supported Markdown and inline HTML into nested style segments."""
 
     patterns = (
-        ("underline", re.compile(r"<u\b[^>]*>(.*?)</u\s*>", re.IGNORECASE | re.DOTALL)),
+        (
+            "underline",
+            re.compile(
+                r"<\s*u(?:\s+[^>]*)?\s*>(.*?)<\s*/\s*u\s*>",
+                re.IGNORECASE | re.DOTALL,
+            ),
+        ),
         (
             "span_color",
             re.compile(
@@ -762,6 +775,8 @@ def _render_markdown(
         if not line:
             _call(selection, "TypeParagraph")
             continue
+        if AI_IMAGE_PLACEHOLDER_PATTERN.fullmatch(line):
+            continue
 
         table_spec = table_lookup.get(line)
         if table_spec is not None:
@@ -855,6 +870,7 @@ def rewrite_wps_document(
     document_path: str,
     markdown_text: str,
     *,
+    table_json: str | dict | list | None = None,
     keep_open: bool = True,
     visible: bool = True,
     dispatch_fn: Callable[[str], Any] | None = None,
@@ -865,6 +881,7 @@ def rewrite_wps_document(
     markdown = _clean_text(markdown_text)
     if not markdown:
         raise ValueError("Formatted Markdown content is required")
+    table_specs = _normalize_table_specs(table_json)
 
     backup_path = _document_backup_path(path)
     shutil.copy2(path, backup_path)
@@ -874,6 +891,7 @@ def rewrite_wps_document(
     markdown_body = (
         _without_first_markdown_heading(markdown) if markdown_title else markdown
     )
+    markdown_body = _ensure_table_placeholders(markdown_body, table_specs)
 
     app, provider = _dispatch_writer(dispatch_fn)
     _set_attr(app, "Visible", bool(visible))
@@ -902,6 +920,7 @@ def rewrite_wps_document(
             body_size=16,
             font_color=None,
             base_italic=False,
+            table_specs=table_specs,
         )
         _call(doc, "Save")
 
@@ -916,6 +935,7 @@ def rewrite_wps_document(
             "inline_style_count": (
                 render_result["inline_style_count"] + inline_style_count
             ),
+            "table_count": render_result["table_count"],
             "keep_open": keep_open,
         }
         if not keep_open:

@@ -186,6 +186,8 @@ def test_missing_and_existing_zhihu_values_get_different_controls() -> None:
     assert missing["default_value"] == "-1"
     assert existing["prompt_type"] == "confirm_value"
     assert existing["current_value"] == "测试标题"
+    assert "不想改动请输入“无”" in existing["message"]
+    assert existing["input_placeholder"] == "输入新值；不想改动请输入“无”"
     assert [action["id"] for action in existing["actions"]] == ["keep", "replace"]
 
 
@@ -200,6 +202,23 @@ def test_optional_prompt_exposes_its_default_value() -> None:
     assert prompt["default_value"] == "无需备注"
 
 
+def test_optional_prompt_exposes_custom_default_button_label() -> None:
+    prompt = parse_desktop_prompt(
+        "请输入 WPS 正文字数：",
+        fields=[
+            {
+                "name": "正文字数",
+                "required": False,
+                "default_value": "800",
+                "default_label": "默认800",
+            }
+        ],
+    )
+
+    assert prompt["default_value"] == "800"
+    assert prompt["default_label"] == "默认800"
+
+
 def test_optional_prompt_field_default_is_not_replaced_by_detected_value() -> None:
     prompt = parse_desktop_prompt(
         "请输入 WPS 的「标题字体」。当前值：黑体。",
@@ -210,6 +229,31 @@ def test_optional_prompt_field_default_is_not_replaced_by_detected_value() -> No
     assert prompt["input_required"] is False
     assert prompt["current_value"] == "黑体"
     assert prompt["default_value"] == "宋体"
+
+
+def test_checkbox_group_fields_keep_prompt_as_text_input() -> None:
+    fields = [
+        {
+            "name": "wps_topic",
+            "type": "textarea",
+            "required": True,
+        },
+        {
+            "name": "wps_content_options",
+            "type": "checkbox_group",
+            "options": ["部分字体加粗", "部分字体下划线"],
+        },
+    ]
+
+    prompt = parse_desktop_prompt(
+        "请输入 WPS 文章主题或内容要求，并按需勾选附加要求：",
+        fields=fields,
+    )
+
+    assert prompt["prompt_type"] == "input"
+    assert prompt["input_required"] is True
+    assert prompt["options"] == []
+    assert prompt["fields"] == fields
 
 
 def test_url_prompt_using_provide_is_rendered_as_input() -> None:

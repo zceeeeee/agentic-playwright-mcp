@@ -49,6 +49,35 @@ def _generate_markdown(source_text, instruction, generate_fn):
     return "\n\n".join(parts)
 
 
+def _normalize_table_placeholder(markdown):
+    placeholder = "[[WPS_TABLE_1]]"
+    if placeholder not in markdown:
+        return markdown
+    before, after = markdown.split(placeholder, 1)
+    after = after.replace(placeholder, "")
+    return before.rstrip() + "\n\n" + placeholder + "\n\n" + after.lstrip()
+
+
+def _generate_table_json(markdown, generate_fn):
+    prompt = (
+        "下面是一篇已经润色的 WPS 文档，其中 [[WPS_TABLE_1]] 表示需要插入真实表格的位置。\n"
+        "请结合全文生成该表格的数据。只返回严格 JSON，不要使用 Markdown 代码块，不要解释。\n"
+        "JSON 必须采用以下结构："
+        '{"tables":[{"placeholder":"[[WPS_TABLE_1]]",'
+        '"title":"表格标题","columns":["列1","列2"],'
+        '"rows":[["值1","值2"]],'
+        '"style":{"header_bold":true,"border":"grid","auto_fit":true}}]}。\n'
+        "要求：只生成一个表格；列数 2 到 8；数据行不超过 20；"
+        "每行列数必须与 columns 一致；只能使用原文已有信息或明确标注为概括，"
+        "不得编造精确数据。\n\n"
+        f"文档内容：\n{markdown}"
+    )
+    table_json = _strip_markdown_fence(generate_fn(prompt))
+    if '"tables"' not in table_json or "[[WPS_TABLE_1]]" not in table_json:
+        raise RuntimeError("LLM returned invalid WPS table JSON")
+    return table_json
+
+
 def run(
     document_path="-1",
     keep_open=True,
@@ -107,15 +136,21 @@ def run(
     reformat = _is_yes(prompt("是否需要 AI 修改文档格式？[yes] [no]（默认 no）"))
 
     markdown = source_text
+    table_json = "-1"
     if polish:
         markdown = _generate_markdown(
             markdown,
             (
                 "请润色下面的中文文档：改善语句、衔接和用词，纠正病句与错别字，"
                 "但不得虚构事实、改变原意或删除关键信息。保留标题和段落结构。"
+                "同时判断把原文中的信息整理成一个表格是否能明显提升可读性。"
+                "仅在确实适合插入表格时，在最合适的位置单独输出一行 "
+                "[[WPS_TABLE_1]]；不要输出 Markdown 表格。若不适合则不要输出占位符。"
+                "当前模型不支持生成图片；不得添加图片、配图建议或任何图片占位符。"
             ),
             generate,
         )
+        markdown = _normalize_table_placeholder(markdown)
 
     format_requirements = ""
     if reformat:
@@ -137,10 +172,16 @@ def run(
                 "请在不改变文字内容和顺序的前提下，将文档转换为完整 Markdown。"
                 "使用 #、##、### 表示标题层级，使用 **粗体**、*斜体*、<u>下划线</u> "
                 "和 <span style=\"color: ...\">彩色文字</span> 表达需要的行内格式。"
+                "如果正文中存在 [[WPS_TABLE_1]]，必须原样保留且不能移动。"
+                "不得添加图片、配图建议或任何图片占位符。"
                 f"用户格式要求：{format_requirements}"
             ),
             generate,
         )
+
+    if polish and "[[WPS_TABLE_1]]" in markdown:
+        markdown = _normalize_table_placeholder(markdown)
+        table_json = _generate_table_json(markdown, generate)
 
     if not polish and not reformat:
         logger("No WPS document changes requested")
@@ -152,12 +193,21 @@ def run(
         }
 
     logger("Backing up and rewriting the WPS document")
-    result = rewriter(path, markdown, keep_open=keep_open)
+    if table_json == "-1":
+        result = rewriter(path, markdown, keep_open=keep_open)
+    else:
+        result = rewriter(
+            path,
+            markdown,
+            table_json=table_json,
+            keep_open=keep_open,
+        )
     if not result or not result.get("success"):
         raise RuntimeError("WPS document rewrite failed")
     result["modified"] = True
     result["polished"] = polish
     result["reformatted"] = reformat
+    result["table_inserted"] = table_json != "-1"
     result["format_requirements"] = format_requirements
     logger(f"WPS document updated: {result.get('document_path')}")
     logger(f"Original document backup: {result.get('backup_path')}")

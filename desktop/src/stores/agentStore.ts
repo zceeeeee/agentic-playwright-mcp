@@ -579,6 +579,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         parameter_name: event.payload.parameter_name,
         current_value: event.payload.current_value,
         default_value: event.payload.default_value,
+        default_label: event.payload.default_label,
         input_label: event.payload.input_label,
         input_required: event.payload.input_required,
         input_placeholder: event.payload.input_placeholder,

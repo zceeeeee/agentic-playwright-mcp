@@ -78,7 +78,7 @@
       "url_patterns": [],
       "file": "export/wps_document_polish.py",
       "function": "run",
-      "description": "读取已有 WPS/Word 文档，按需使用 AI 润色文字或生成带格式 Markdown，备份后写回原文件"
+      "description": "读取已有 WPS/Word 文档，按需使用 AI 润色文字或生成带格式 Markdown，并可由 AI 判断和插入结构化表格，备份后写回原文件"
     },
     {
       "id": "wps_writer_export",

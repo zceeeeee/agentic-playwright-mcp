@@ -77,6 +77,7 @@ export interface ConfirmationRequest {
   parameter_name?: string;
   current_value?: string | null;
   default_value?: string | null;
+  default_label?: string | null;
   input_label?: string;
   input_required?: boolean;
   input_placeholder?: string;

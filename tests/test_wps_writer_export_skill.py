@@ -12,6 +12,7 @@ from src.layer_1.wps_writer import (
     PDF_FORMAT,
     _resolve_paths,
     export_article_to_pdf,
+    rewrite_wps_document,
 )
 from src.skill_library.export.wps_writer_export import run
 
@@ -110,6 +111,12 @@ class FakeSelection:
     def SetRange(self, start: int, end: int) -> None:  # noqa: N802
         self.last_range = (start, end)
 
+    def WholeStory(self) -> None:  # noqa: N802
+        self.whole_story_selected = True
+
+    def Delete(self) -> None:
+        self.deleted = True
+
 
 class FakeDocument:
     def __init__(self) -> None:
@@ -127,6 +134,9 @@ class FakeDocument:
         self.save_calls += 1
         self.Saved = True
 
+    def Activate(self) -> None:
+        self.activated = True
+
     def ExportAsFixedFormat(self, path: str, fmt: int) -> None:
         self.exported = (path, fmt)
 
@@ -140,6 +150,11 @@ class FakeDocuments:
 
     def Add(self) -> FakeDocument:
         self.app.document = FakeDocument()
+        return self.app.document
+
+    def Open(self, path: str) -> FakeDocument:
+        self.app.document = FakeDocument()
+        self.app.opened_path = path
         return self.app.document
 
 class FakeApplication:
@@ -293,6 +308,36 @@ def test_export_article_appends_missing_table_placeholder(tmp_path):
     assert len(app.Selection.Tables.created) == 1
 
 
+def test_rewrite_existing_document_inserts_ai_table(tmp_path):
+    app = FakeApplication()
+    document_path = tmp_path / "report.docx"
+    document_path.write_bytes(b"fake docx")
+    table_json = (
+        '{"tables":[{"placeholder":"[[WPS_TABLE_1]]",'
+        '"columns":["项目","结果"],"rows":[["样本数","100"]]}]}'
+    )
+
+    result = rewrite_wps_document(
+        str(document_path),
+        "# 调研报告\n\n数据如下。\n\n[[WPS_TABLE_1]]\n\n结论。",
+        table_json=table_json,
+        keep_open=True,
+        visible=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["table_count"] == 1
+    assert result["backup_path"] != str(document_path)
+    assert Path(result["backup_path"]).exists()
+    assert len(app.Selection.Tables.created) == 1
+    table = app.Selection.Tables.created[0]
+    assert table.Cell(1, 1).Range.Text == "项目"
+    assert table.Cell(2, 2).Range.Text == "100"
+    assert "[[WPS_TABLE_1]]" not in app.Selection.typed
+    assert app.document is not None
+    assert app.document.save_calls == 1
+
+
 def test_export_markdown_file_to_wps_applies_headings_and_inline_styles(tmp_path):
     app = FakeApplication()
     md_path = tmp_path / "tmp.md"
@@ -396,6 +441,56 @@ def test_export_markdown_supports_nested_underline_and_font_colors(tmp_path):
     assert blue["underline"] == 1
 
 
+def test_export_markdown_accepts_ai_spaced_underline_tags(tmp_path):
+    app = FakeApplication()
+
+    result = export_article_to_pdf(
+        title="世界杯",
+        body="故事发生在**< u >*英雄加冕的舞台*< /u >**。",
+        body_format="markdown",
+        output_dir=str(tmp_path),
+        keep_open=True,
+        visible=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["success"] is True
+    styled = next(
+        item for item in app.Selection.formatted if item["text"] == "英雄加冕的舞台"
+    )
+    assert styled["bold"] == -1
+    assert styled["italic"] == -1
+    assert styled["underline"] == 1
+    assert "< u >" not in app.Selection.typed
+    assert "< /u >" not in app.Selection.typed
+
+
+def test_export_markdown_removes_ai_image_description_placeholders(tmp_path):
+    app = FakeApplication()
+
+    result = export_article_to_pdf(
+        title="世界杯",
+        body=(
+            "第一段正文。\n\n"
+            "[图片3：身着各国球衣的中国球迷群体]\n\n"
+            "【配图：球场全景】\n\n"
+            "第二段正文。"
+        ),
+        body_format="markdown",
+        output_dir=str(tmp_path),
+        keep_open=True,
+        visible=False,
+        dispatch_fn=lambda prog_id: app,
+    )
+
+    assert result["success"] is True
+    rendered = "".join(app.Selection.typed)
+    assert "第一段正文" in rendered
+    assert "第二段正文" in rendered
+    assert "身着各国球衣" not in rendered
+    assert "球场全景" not in rendered
+
+
 def test_skill_run_calls_registered_export_function():
     calls = []
     logs = []
@@ -479,6 +574,8 @@ def test_router_routes_wps_writer_export_to_wps_skill():
     assert '"测试正文"' in decision.script
     assert "__agentic_prepare_wps_title" in decision.script
     assert "__agentic_prepare_wps_body" in decision.script
+    assert "__agentic_optional_input('正文字数', '-1', '800', '默认800')" in decision.script
+    assert "__agentic_optional_input('标题字数限制', '-1', '20', '默认20')" in decision.script
     assert "body_format=__agentic_wps_body_format" in decision.script
     assert "使用默认值 {default}" in decision.script
     assert "'标题字体'," in decision.script and "方正小标宋简体" in decision.script
@@ -486,6 +583,36 @@ def test_router_routes_wps_writer_export_to_wps_skill():
     assert "'正文字体'," in decision.script and "仿宋_GB2312" in decision.script
     assert "'正文字号'," in decision.script and '"16"' in decision.script
     assert "wps_writer_export" in decision.script
+
+
+def test_wps_ai_topic_prompt_offers_checkbox_requirements():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("WPS写文章")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wps_writer_export"
+    assert "def __agentic_wps_topic_input" in decision.script
+    assert "'type': 'checkbox_group'" in decision.script
+    for label in (
+        "部分字体加粗",
+        "部分字体下划线",
+        "应用不同颜色的字",
+        "多级标题",
+        "插入表格",
+        "部分字体斜体",
+    ):
+        assert label in decision.script
+    assert "当前模型不支持生成图片" in decision.script
+    assert "任何图片占位符" in decision.script
+    assert "只生成文章正文，不要输出文章标题" in decision.script
+    assert "__agentic_strip_generated_body_title" in decision.script
+    assert "__agentic_ensure_generated_body_colors" in decision.script
+    assert "#C00000" in decision.script
+    assert "#1F4E79" in decision.script
+    assert "#548235" in decision.script
+    assert "需要插入图片，并在正文中预留合适位置" not in decision.script
+    assert "topic = __agentic_wps_topic_input(current)" in decision.script
 
 
 def test_router_routes_wps_docx_pdf_path_and_font_request():
@@ -715,7 +842,8 @@ def test_wps_ai_body_supports_single_table_requirement_prompt_and_json():
     assert decision.skill.id == "domain/wps_writer_export"
     assert "__agentic_wps_requests_table" in decision.script
     assert "请输入表格内容、列名、数据或样式要求" in decision.script
-    assert "直接回车则由 AI 根据文章自由设计" in decision.script
+    assert "如无额外要求请输入“无”" in decision.script
+    assert "table_answer.lower() in {'无', '无要求', '没有', 'none', 'no'}" in decision.script
     assert "[[WPS_TABLE_1]]" in decision.script
     assert "只返回严格 JSON" in decision.script
     assert "__param_table_json = __agentic_prepare_wps_tables(__param_body)" in decision.script
