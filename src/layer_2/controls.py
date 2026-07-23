@@ -797,6 +797,21 @@ def wechat_follow_official_account(
     )
 
 
+def wechat_like_moment(
+    author_name: str | None = None,
+    target: str = "first",
+    launch_path: str | None = None,
+) -> dict:
+    """Like the first WeChat moment or an author's newest moment."""
+    from src.layer_1.wechat_client import like_moment
+
+    return like_moment(
+        author_name=author_name,
+        target=target,
+        launch_path=launch_path,
+    )
+
+
 def taobao_collect_products(keyword: str, max_items: int = 20) -> dict:
     """Extract Taobao products and build the structured desktop result."""
     from src.layer_3.taobao_results import (
@@ -897,6 +912,7 @@ def get_controls_exports() -> Dict[str, Any]:
         "wps_document_rewrite": wps_document_rewrite,
         "taobao_collect_products": taobao_collect_products,
         "wechat_follow_official_account": wechat_follow_official_account,
+        "wechat_like_moment": wechat_like_moment,
         "wechat_send_official_account_message": wechat_send_official_account_message,
         "wechat_send_contact_message": wechat_send_contact_message,
         "wechat_send_contact_file": wechat_send_contact_file,

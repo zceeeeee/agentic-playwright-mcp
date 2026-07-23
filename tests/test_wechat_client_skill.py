@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tomllib
 import types
 from pathlib import Path
 
@@ -167,6 +168,16 @@ class FakeImageLocator:
         self.first_green_text_calls: list[tuple[object, str]] = []
         self.ocr_matches: list[object | None] = []
         self.ocr_calls: list[tuple[object, str]] = []
+        self.ocr_find_matches: list[object | None] = []
+        self.ocr_find_calls: list[tuple[object, str]] = []
+        self.moment_author_matches: list[object | None] = []
+        self.moment_author_calls: list[tuple[object, str]] = []
+        self.moment_action_matches: list[object | None] = []
+        self.moment_action_calls: list[object] = []
+        self.moment_menu_matches: list[object | None] = []
+        self.moment_menu_calls: list[object] = []
+        self.moment_states: list[str | None] = []
+        self.moment_state_calls: list[object] = []
 
     def click(self, template_name, *, region=None, threshold=0.0):
         self.calls.append((template_name, region, threshold))
@@ -211,6 +222,36 @@ class FakeImageLocator:
         self.ocr_calls.append((region, text))
         if self.ocr_matches:
             return self.ocr_matches.pop(0)
+        return None
+
+    def find_ocr_text(self, *, region=None, text=""):
+        self.ocr_find_calls.append((region, text))
+        if self.ocr_find_matches:
+            return self.ocr_find_matches.pop(0)
+        return None
+
+    def find_moment_author(self, *, region=None, text=""):
+        self.moment_author_calls.append((region, text))
+        if self.moment_author_matches:
+            return self.moment_author_matches.pop(0)
+        return None
+
+    def find_first_moment_action(self, *, region=None):
+        self.moment_action_calls.append(region)
+        if self.moment_action_matches:
+            return self.moment_action_matches.pop(0)
+        return None
+
+    def find_moment_like_menu(self, *, region=None):
+        self.moment_menu_calls.append(region)
+        if self.moment_menu_matches:
+            return self.moment_menu_matches.pop(0)
+        return None
+
+    def find_moment_like_state(self, *, region=None):
+        self.moment_state_calls.append(region)
+        if self.moment_states:
+            return self.moment_states.pop(0)
         return None
 
 
@@ -419,6 +460,171 @@ def test_wechat_screen_locator_finds_green_rectangle_button():
     assert 115 <= match.y <= 145
 
 
+def test_wechat_moment_author_locator_uses_ocr(monkeypatch):
+    locator = ScreenImageLocator()
+    expected = ImageMatch(320, 240, 1.0, "ocr_text:张三")
+    calls = []
+
+    def find_ocr_text(*, region=None, text=""):
+        calls.append((region, text))
+        return expected
+
+    monkeypatch.setattr(locator, "find_ocr_text", find_ocr_text)
+
+    match = locator.find_moment_author(
+        text="张三",
+        region=(100, 50, 600, 800),
+    )
+
+    assert match == ImageMatch(320, 240, 1.0, "moment_author:张三")
+    assert calls == [((100, 50, 600, 800), "张三")]
+
+
+def test_wechat_ocr_uses_windows_ocr_when_tesseract_is_unavailable(
+    monkeypatch,
+):
+    np = pytest.importorskip("numpy")
+    from src.core.ocr import OcrResult, OcrWord
+
+    image = np.full((100, 200, 3), 255, dtype=np.uint8)
+    locator = ScreenImageLocator()
+    calls = []
+
+    class FakeWindowsOcr:
+        async def recognize(
+            self,
+            screenshot_bytes,
+            viewport_width=0,
+            viewport_height=0,
+        ):
+            calls.append(
+                (
+                    bool(screenshot_bytes),
+                    viewport_width,
+                    viewport_height,
+                )
+            )
+            return OcrResult(
+                words=[
+                    OcrWord(
+                        text="瑞幸首席官",
+                        x=0.2,
+                        y=0.3,
+                        width=0.4,
+                        height=0.1,
+                    )
+                ],
+                viewport_width=viewport_width,
+                viewport_height=viewport_height,
+            )
+
+    monkeypatch.setattr(locator, "_load_pytesseract", lambda: None)
+    monkeypatch.setattr(
+        locator,
+        "_capture_region",
+        lambda _region: (image, 100, 50),
+    )
+    monkeypatch.setattr(
+        "src.core.ocr.get_ocr_module",
+        lambda language="zh-CN": FakeWindowsOcr(),
+    )
+
+    match = locator.find_ocr_text(
+        region=(100, 50, 200, 100),
+        text="瑞幸首席官",
+    )
+
+    assert match == ImageMatch(
+        180,
+        85,
+        1.0,
+        "windows_ocr_text:瑞幸首席官",
+    )
+    assert calls == [(True, 200, 100)]
+
+
+def test_windows_ocr_runtime_is_installed_with_default_dependencies():
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = project["project"]["dependencies"]
+
+    assert any(
+        dependency.startswith("winrt-Windows.Media.Ocr")
+        for dependency in dependencies
+    )
+
+
+def test_wechat_moment_action_locator_uses_template_and_returns_topmost(
+    monkeypatch,
+):
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    template = cv2.imdecode(
+        np.frombuffer(Path("pic/beforeLike.png").read_bytes(), dtype=np.uint8),
+        cv2.IMREAD_COLOR,
+    )
+    template = cv2.cvtColor(template, cv2.COLOR_BGR2RGB)
+    template_h, template_w = template.shape[:2]
+    image = np.full((800, 1200, 3), 20, dtype=np.uint8)
+    target_left = 1000 - template_w // 2
+    image[500 : 500 + template_h, target_left : target_left + template_w] = template
+    image[220 : 220 + template_h, target_left : target_left + template_w] = template
+
+    locator = ScreenImageLocator()
+    monkeypatch.setattr(
+        locator,
+        "_capture_region",
+        lambda _region: (image, 0, 0),
+    )
+
+    match = locator.find_first_moment_action(region=(0, 0, 1200, 800))
+
+    assert match is not None
+    assert match.template_name == "beforeLike.png"
+    assert abs(match.x - 1000) <= 2
+    assert abs(match.y - (220 + template_h // 2)) <= 2
+
+
+def test_wechat_moment_like_menu_uses_like_template(monkeypatch):
+    locator = ScreenImageLocator()
+    expected = ImageMatch(850, 744, 0.95, "like.png")
+    calls = []
+
+    def find(template_name, *, region=None, threshold=0.0):
+        calls.append((template_name, region, threshold))
+        return expected
+
+    monkeypatch.setattr(locator, "find", find)
+
+    match = locator.find_moment_like_menu(region=(0, 680, 1200, 140))
+
+    assert match == expected
+    assert calls == [("like.png", (0, 680, 1200, 140), 0.8)]
+
+
+@pytest.mark.parametrize(
+    ("visible_label", "expected"),
+    [("取消", "already_liked"), ("赞", "can_like")],
+)
+def test_wechat_moment_like_state_uses_menu_text(
+    monkeypatch,
+    visible_label,
+    expected,
+):
+    locator = ScreenImageLocator()
+
+    def find_ocr_text(*, region=None, text=""):
+        if text == visible_label:
+            return ImageMatch(400, 500, 1.0, f"ocr_text:{text}")
+        return None
+
+    monkeypatch.setattr(locator, "find_ocr_text", find_ocr_text)
+
+    assert (
+        locator.find_moment_like_state(region=(100, 50, 500, 600))
+        == expected
+    )
+
+
 def test_follow_official_account_searches_service_account_and_follows():
     fake = FakeWechatAutomation()
 
@@ -432,6 +638,174 @@ def test_follow_official_account_searches_service_account_and_follows():
         ("search", "火眼审阅"),
         ("follow", None),
     ]
+
+
+def test_wechat_opens_independent_moments_window(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    entry = FakeUiElement("朋友圈", control_type="Button")
+    main = FakeUiElement(
+        "微信",
+        [entry],
+        process_name="Weixin.exe",
+        width=1000,
+        height=800,
+    )
+    moments = FakeUiElement(
+        "朋友圈",
+        process_name="Weixin.exe",
+        width=700,
+        height=900,
+    )
+    desktop = FakeDesktop([main, moments])
+    automation = PywinautoWechatAutomation()
+    automation.desktop = desktop
+    automation.window = main
+    automation.window_manager = WeChatWindowManager(
+        desktop,
+        window_rect_provider=lambda: (0, 0, 960, 1040),
+    )
+
+    automation.open_moments()
+
+    assert entry.clicked is True
+    assert automation.window is moments
+
+
+def test_wechat_likes_first_moment_and_verifies(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    locator = FakeImageLocator()
+    locator.moment_action_matches = [
+        ImageMatch(1000, 744, 1.0, "beforeLike.png")
+    ]
+    locator.moment_menu_matches = [
+        ImageMatch(850, 744, 1.0, "like.png"),
+        None,
+    ]
+    automation = PywinautoWechatAutomation(image_locator=locator)
+    automation.window = FakeUiElement(
+        "朋友圈",
+        process_name="Weixin.exe",
+        width=653,
+        height=825,
+        left=0,
+        top=0,
+    )
+    monkeypatch.setattr(automation, "open_moments", lambda: None)
+
+    result = automation.like_moment(target="first")
+
+    assert result["status"] == "liked"
+    assert result["target"] == "first"
+    assert locator.xy_clicks == [(1000, 744), (750, 744)]
+
+
+def test_wechat_already_liked_moment_does_not_toggle_like(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    locator = FakeImageLocator()
+    locator.moment_action_matches = [
+        ImageMatch(1000, 744, 1.0, "beforeLike.png")
+    ]
+    locator.moment_menu_matches = [None]
+    locator.moment_states = ["already_liked"]
+    automation = PywinautoWechatAutomation(image_locator=locator)
+    automation.window = FakeUiElement(
+        "朋友圈",
+        process_name="Weixin.exe",
+        width=653,
+        height=825,
+    )
+    monkeypatch.setattr(automation, "open_moments", lambda: None)
+
+    result = automation.like_moment(target="first")
+
+    assert result["status"] == "already_liked"
+    assert locator.xy_clicks == [(1000, 744)]
+    assert locator.ocr_find_calls == []
+
+
+def test_wechat_likes_newest_moment_by_author(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    locator = FakeImageLocator()
+    locator.moment_author_matches = [
+        ImageMatch(210, 360, 1.0, "moment_author:张三")
+    ]
+    locator.moment_action_matches = [
+        ImageMatch(1000, 744, 1.0, "beforeLike.png")
+    ]
+    locator.moment_menu_matches = [
+        ImageMatch(850, 744, 1.0, "like.png"),
+        None,
+    ]
+    automation = PywinautoWechatAutomation(image_locator=locator)
+    automation.window = FakeUiElement(
+        "朋友圈",
+        process_name="Weixin.exe",
+        width=653,
+        height=825,
+    )
+    monkeypatch.setattr(automation, "open_moments", lambda: None)
+
+    result = automation.like_moment(author_name="张三", target="author")
+
+    assert result["status"] == "liked"
+    assert result["author_name"] == "张三"
+    author_region = locator.moment_author_calls[0][0]
+    action_region = locator.moment_action_calls[0]
+    assert action_region[1] >= author_region[1]
+
+
+def test_wechat_moment_author_search_has_bounded_scrolling(monkeypatch):
+    monkeypatch.setattr(wechat_module.time, "sleep", lambda _seconds: None)
+    locator = FakeImageLocator()
+    locator.moment_author_matches = [None, None, None]
+    automation = PywinautoWechatAutomation(image_locator=locator)
+    automation.window = FakeUiElement(
+        "朋友圈",
+        process_name="Weixin.exe",
+        width=653,
+        height=825,
+    )
+    monkeypatch.setattr(automation, "open_moments", lambda: None)
+    keys = []
+    monkeypatch.setattr(automation, "_send_keys", keys.append)
+
+    with pytest.raises(RuntimeError, match="张三"):
+        automation.like_moment(
+            author_name="张三",
+            target="author",
+            max_scrolls=2,
+        )
+
+    assert keys == ["{PGDN}", "{PGDN}"]
+
+
+def test_wechat_like_moment_function_delegates_to_automation():
+    class FakeMomentAutomation:
+        def __init__(self):
+            self.calls = []
+
+        def open(self):
+            self.calls.append(("open",))
+
+        def like_moment(self, *, author_name=None, target="first"):
+            self.calls.append(("like", author_name, target))
+            return {
+                "success": True,
+                "status": "liked",
+                "author_name": author_name,
+                "target": target,
+            }
+
+    automation = FakeMomentAutomation()
+
+    result = wechat_module.like_moment(
+        author_name="张三",
+        target="author",
+        automation=automation,
+    )
+
+    assert result["status"] == "liked"
+    assert automation.calls == [("open",), ("like", "张三", "author")]
 
 
 def test_wechat_clicks_parent_row_when_service_account_type_is_sibling():
@@ -1398,6 +1772,55 @@ def test_wechat_send_source_runs_inside_script_engine():
     assert result.success is True
     assert calls[0]["account_name"] == "火眼审阅"
     assert calls[0]["message"] == "你好呀"
+
+
+def test_wechat_like_moment_source_runs_inside_script_engine():
+    source = Path(
+        "src/skill_library/others/wechat_like_moment.py"
+    ).read_text(encoding="utf-8")
+    calls = []
+    engine = ScriptEngine()
+    engine.register_functions(
+        {
+            "wechat_like_moment": lambda **kwargs: calls.append(kwargs)
+            or {"success": True, "status": "liked"},
+            "log": lambda message: None,
+        }
+    )
+
+    result = engine.execute(
+        source + '\nresult = run(author_name="张三", target="author")\n'
+    )
+
+    assert result.success is True
+    assert calls == [
+        {
+            "author_name": "张三",
+            "target": "author",
+            "launch_path": None,
+        }
+    ]
+
+
+def test_router_routes_first_moment_like_typo_alias():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("给朋友圈的第一天点赞")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wechat_like_moment"
+    assert "# 自动调用\nrun()" in decision.script
+
+
+def test_router_extracts_moment_author():
+    router = SkillRouter(library_dir="src/skill_library")
+
+    decision = router.route("给朋友圈张三发的内容点赞")
+
+    assert decision.skill is not None
+    assert decision.skill.id == "domain/wechat_like_moment"
+    assert '__param_author_name = "张三"' in decision.script
+    assert "run(author_name=__param_author_name)" in decision.script
 
 
 def test_router_routes_wechat_follow_official_account():

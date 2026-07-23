@@ -18,6 +18,8 @@ def test_only_wechat_ui_actions_are_desktop_only() -> None:
     assert _is_wechat_desktop_task("微信给张三发送你好")
     assert _is_wechat_desktop_task('微信给张三发送文件"D:\\tmp\\a.txt"')
     assert _is_wechat_desktop_task("微信关注火眼审阅公众号")
+    assert _is_wechat_desktop_task("给朋友圈的第一条点赞")
+    assert _is_wechat_desktop_task("给朋友圈张三发的内容点赞")
     assert not _is_wechat_desktop_task("微信聊天记录怎么恢复")
     assert not _is_wechat_desktop_task("微信查看张三最近的聊天记录")
 
@@ -66,6 +68,7 @@ def test_wechat_ui_task_does_not_launch_browser(tmp_path: Path) -> None:
     assert agent_class.call_args.kwargs["desktop_only"] is True
     assert "wechat_send_contact_message" in get_controls_exports()
     assert "wechat_send_contact_file" in get_controls_exports()
+    assert "wechat_like_moment" in get_controls_exports()
     assert "wechat_read_contact_history" not in get_controls_exports()
     service.shutdown()
 

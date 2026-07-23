@@ -25,6 +25,10 @@ def _is_wechat_desktop_task(content: str) -> bool:
     normalized = content.strip().lower()
     if any(term in normalized for term in ("怎么", "如何", "安全吗", "恢复方法")):
         return False
+    if "朋友圈" in normalized and any(
+        term in normalized for term in ("点赞", "点个赞", "赞一下")
+    ):
+        return True
     ui_actions = (
         "发送",
         "发消息",

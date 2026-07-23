@@ -48,13 +48,6 @@ dependencies = [
     "pyperclip>=1.8.2",
     "pywinauto>=0.6.8; platform_system == 'Windows'",
     "pywin32>=306; platform_system == 'Windows'",
-]
-
-[project.optional-dependencies]
-stealth = [
-    "cloakbrowser>=0.3.0",
-]
-ocr = [
     "winrt-Windows.Media.Ocr>=1.0.0; platform_system == 'Windows'",
     "winrt-Windows.Graphics.Imaging>=1.0.0; platform_system == 'Windows'",
     "winrt-Windows.Storage.Streams>=1.0.0; platform_system == 'Windows'",
@@ -62,6 +55,12 @@ ocr = [
     "winrt-Windows.Foundation>=1.0.0; platform_system == 'Windows'",
     "winrt-Windows.Foundation.Collections>=1.0.0; platform_system == 'Windows'",
 ]
+
+[project.optional-dependencies]
+stealth = [
+    "cloakbrowser>=0.3.0",
+]
+ocr = []
 dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.12.0",

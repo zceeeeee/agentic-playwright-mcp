@@ -269,6 +269,37 @@ skills:
   # 微信客户端
   # ──────────────────────────────────────────────
 
+  - id: "domain/wechat_like_moment"
+    name: "微信朋友圈点赞"
+    type: "domain"
+    platform: "wechat"
+    action: "like"
+    triggers: ["微信", "wechat", "朋友圈", "点赞", "点个赞", "第一条", "第一天"]
+    trigger_patterns:
+      - '^(?=.*朋友圈)(?=.*(?:点赞|点个赞|赞一下)).*$'
+    url_patterns: []
+    description: "打开微信朋友圈，给第一条动态或指定发布者最新的一条动态点赞"
+    version: "1.0.0"
+    examples:
+      - "给朋友圈张三发的内容点赞"
+      - "给朋友圈的第一条点赞"
+      - "给朋友圈的第一天点赞"
+    params:
+      author_name:
+        type: string
+        required: false
+        confirm: false
+        default: "-1"
+        description: "朋友圈动态发布者名称；不指定时处理第一条动态"
+        extract_patterns:
+          - '(?:微信)?(?:给|为)?朋友圈(?:里|中|的)?\s*["“]?(.+?)["”]?\s*发(?:布)?的(?:内容|动态|朋友圈)?\s*(?:点个?赞|点赞|赞一下)'
+      target:
+        type: string
+        required: false
+        confirm: false
+        default: "first"
+        description: "目标模式：first 或 author"
+
   - id: "domain/wechat_send_contact_file"
     name: "微信联系人发送文件"
     type: "domain"
@@ -1182,6 +1213,10 @@ sources:
 
   - id: "domain/wechat_send_contact_message"
     file: "send/wechat_send_contact_message.py"
+    entry: "run"
+
+  - id: "domain/wechat_like_moment"
+    file: "others/wechat_like_moment.py"
     entry: "run"
 
   - id: "domain/wechat_send_contact_file"

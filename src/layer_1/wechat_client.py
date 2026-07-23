@@ -42,6 +42,8 @@ WECHAT_SEND_BUTTON_TEMPLATE = "wechatSendGreen.png"
 WECHAT_ATTACHMENT_TEMPLATE = "wechatAttachment.png"
 WECHAT_TASKBAR_LOGO_TEMPLATE = "wechatLogo.png"
 WECHAT_SEARCH_TEMPLATE = "搜一搜.png"
+WECHAT_MOMENT_ACTION_TEMPLATE = "beforeLike.png"
+WECHAT_MOMENT_LIKE_TEMPLATE = "like.png"
 WECHAT_EXE_CANDIDATES = (
     r"C:\Program Files\Tencent\WeChat\WeChat.exe",
     r"C:\Program Files (x86)\Tencent\WeChat\WeChat.exe",
@@ -61,6 +63,13 @@ SEARCH_RESULT_WINDOW_DETECT_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_SETTLE_SECONDS = 5.0
 SEARCH_ACCOUNTS_TAB_TIMEOUT = 10.0
 FOLLOW_CONFIRM_SECONDS = 20.0
+MOMENTS_WINDOW_TITLE = "朋友圈"
+MOMENTS_ENTRY_REL = (0.032, 0.25)
+MOMENTS_MENU_SIZE = (250, 90)
+DEFAULT_MOMENTS_MAX_SCROLLS = 8
+MOMENTS_ACTION_X = 1000
+MOMENTS_LIKE_X = 750
+MOMENTS_ACTION_X_TOLERANCE = 120
 WECHAT_FOLLOW_BUTTON_RGB = (0x55, 0xBC, 0x7A)
 ATTACHMENT_BUTTON_NAMES = ("发送文件", "文件", "添加", "更多", "Send file", "File")
 FILE_DIALOG_TITLES = ("打开", "Open")
@@ -412,14 +421,11 @@ class ScreenImageLocator:
         region: tuple[int, int, int, int] | str | None = None,
         text: str = "",
     ) -> ImageMatch | None:
-        """Find visible text with optional Tesseract OCR."""
+        """Find visible text with Windows OCR, then optional Tesseract."""
         target = re.sub(r"\s+", "", str(text or ""))
         if not target:
             return None
 
-        pytesseract = self._load_pytesseract()
-        if pytesseract is None:
-            return None
         capture = self._capture_region(region)
         if capture is None:
             return None
@@ -427,6 +433,18 @@ class ScreenImageLocator:
         if crop.size == 0:
             return None
 
+        windows_match = self._find_with_windows_ocr(
+            crop=crop,
+            left=left,
+            top=top,
+            target=target,
+        )
+        if windows_match is not None:
+            return windows_match
+
+        pytesseract = self._load_pytesseract()
+        if pytesseract is None:
+            return None
         try:
             from pytesseract import Output  # type: ignore[import-not-found]
         except Exception:
@@ -496,6 +514,249 @@ class ScreenImageLocator:
             return None
         _exact, _y, _x, match = min(candidates, key=lambda item: (not item[0], item[1], item[2]))
         return match
+
+    @staticmethod
+    def _find_with_windows_ocr(
+        *,
+        crop: Any,
+        left: int,
+        top: int,
+        target: str,
+    ) -> ImageMatch | None:
+        try:
+            import asyncio
+            import io
+            from concurrent.futures import ThreadPoolExecutor
+
+            from PIL import Image
+
+            from src.core.ocr import get_ocr_module
+
+            ocr = get_ocr_module(language="zh-CN")
+            if ocr is None:
+                return None
+
+            image = Image.fromarray(crop)
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            screenshot_bytes = buffer.getvalue()
+            height, width = crop.shape[:2]
+
+            def recognize() -> Any:
+                return asyncio.run(
+                    ocr.recognize(
+                        screenshot_bytes,
+                        viewport_width=width,
+                        viewport_height=height,
+                    )
+                )
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                result = recognize()
+            else:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    result = executor.submit(recognize).result(timeout=15)
+        except Exception as exc:
+            logger.debug("Windows OCR text lookup failed: %s", exc)
+            return None
+
+        words = list(getattr(result, "words", []) or [])
+        candidates: list[tuple[bool, float, float, ImageMatch]] = []
+        for start in range(len(words)):
+            combined = ""
+            selected = []
+            for word in words[start : start + 8]:
+                normalized = re.sub(
+                    r"\s+",
+                    "",
+                    str(getattr(word, "text", "") or ""),
+                )
+                if not normalized:
+                    continue
+                combined += normalized
+                selected.append(word)
+                if target not in combined:
+                    continue
+
+                x1 = min(float(item.x) for item in selected)
+                y1 = min(float(item.y) for item in selected)
+                x2 = max(float(item.x + item.width) for item in selected)
+                y2 = max(float(item.y + item.height) for item in selected)
+                exact = combined == target
+                candidates.append(
+                    (
+                        exact,
+                        y1,
+                        x1,
+                        ImageMatch(
+                            x=left + round((x1 + x2) * width / 2),
+                            y=top + round((y1 + y2) * height / 2),
+                            score=1.0 if exact else 0.8,
+                            template_name=f"windows_ocr_text:{target}",
+                        ),
+                    )
+                )
+                break
+
+        if not candidates:
+            return None
+        _exact, _y, _x, match = min(
+            candidates,
+            key=lambda item: (not item[0], item[1], item[2]),
+        )
+        return match
+
+    def find_moment_author(
+        self,
+        *,
+        region: tuple[int, int, int, int] | str | None = None,
+        text: str = "",
+    ) -> ImageMatch | None:
+        """Find a Moments author name using the shared OCR path."""
+
+        target = re.sub(r"\s+", "", str(text or ""))
+        if not target:
+            return None
+        match = self.find_ocr_text(region=region, text=target)
+        if match is None:
+            return None
+        return ImageMatch(
+            x=match.x,
+            y=match.y,
+            score=match.score,
+            template_name=f"moment_author:{target}",
+        )
+
+    def find_first_moment_action(
+        self,
+        *,
+        region: tuple[int, int, int, int] | str | None = None,
+    ) -> ImageMatch | None:
+        """Find the topmost beforeLike.png match near the fixed action x."""
+
+        cv2 = self._load_cv2()
+        np = self._load_numpy()
+        if cv2 is None or np is None:
+            return None
+        template_path = self.pic_dir / WECHAT_MOMENT_ACTION_TEMPLATE
+        if not template_path.exists():
+            return None
+        capture = self._capture_region(region)
+        if capture is None:
+            return None
+        crop, left, top = capture
+        if crop.size == 0:
+            return None
+
+        try:
+            template_bytes = np.frombuffer(
+                template_path.read_bytes(),
+                dtype=np.uint8,
+            )
+            template = cv2.imdecode(template_bytes, cv2.IMREAD_COLOR)
+            if template is None:
+                return None
+            template_h, template_w = template.shape[:2]
+            if crop.shape[0] < template_h or crop.shape[1] < template_w:
+                return None
+            crop_gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+            template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+            scores = cv2.matchTemplate(
+                crop_gray,
+                template_gray,
+                cv2.TM_CCOEFF_NORMED,
+            )
+            threshold_mask = np.where(scores >= 0.8, 255, 0).astype(np.uint8)
+            contours, _ = cv2.findContours(
+                threshold_mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+        except Exception:
+            return None
+
+        candidates: list[tuple[int, float, ImageMatch]] = []
+        for contour in contours:
+            x, y, width, height = cv2.boundingRect(contour)
+            score_crop = scores[y : y + height, x : x + width]
+            if score_crop.size == 0:
+                continue
+            _, score, _, max_loc = cv2.minMaxLoc(score_crop)
+            match_left = x + max_loc[0]
+            match_top = y + max_loc[1]
+            match_x = left + match_left + template_w // 2
+            match_y = top + match_top + template_h // 2
+            if abs(match_x - MOMENTS_ACTION_X) > MOMENTS_ACTION_X_TOLERANCE:
+                continue
+            candidates.append(
+                (
+                    match_y,
+                    -float(score),
+                    ImageMatch(
+                        x=match_x,
+                        y=match_y,
+                        score=float(score),
+                        template_name=WECHAT_MOMENT_ACTION_TEMPLATE,
+                    ),
+                )
+            )
+
+        if not candidates:
+            return None
+        _y, _negative_score, match = min(
+            candidates,
+            key=lambda item: (item[0], item[1]),
+        )
+        return match
+
+    def find_moment_like_menu(
+        self,
+        *,
+        region: tuple[int, int, int, int] | str | None = None,
+    ) -> ImageMatch | None:
+        """Find the opened Moments like menu from like.png."""
+
+        return self.find(
+            WECHAT_MOMENT_LIKE_TEMPLATE,
+            region=region,
+            threshold=0.8,
+        )
+
+    def find_moment_like_state(
+        self,
+        *,
+        region: tuple[int, int, int, int] | str | None = None,
+    ) -> str | None:
+        """Return the visible Moments menu state without changing it."""
+
+        if self.find_ocr_text(region=region, text="取消") is not None:
+            return "already_liked"
+        if self.find_ocr_text(region=region, text="赞") is not None:
+            return "can_like"
+
+        cv2 = self._load_cv2()
+        np = self._load_numpy()
+        if cv2 is None or np is None:
+            return None
+        capture = self._capture_region(region)
+        if capture is None:
+            return None
+        crop, _left, _top = capture
+        if crop.size == 0:
+            return None
+        try:
+            red_mask = cv2.inRange(
+                crop,
+                np.array([170, 35, 45], dtype=np.uint8),
+                np.array([255, 145, 165], dtype=np.uint8),
+            )
+            if cv2.countNonZero(red_mask) >= 12:
+                return "already_liked"
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _load_pytesseract() -> Any | None:
@@ -1206,6 +1467,178 @@ class PywinautoWechatAutomation:
         if self._wait_for_main_window(timeout=self.wait_timeout):
             return
         raise RuntimeError("Unable to find WeChat window after launch")
+
+    def open_moments(self) -> None:
+        """Open and activate the independent WeChat Moments window."""
+
+        self._require_window()
+        if self._element_text(self.window).strip() == MOMENTS_WINDOW_TITLE:
+            self._normalize_current_window()
+            return
+
+        entry = self.locator.find_by_name(
+            self.window,
+            MOMENTS_WINDOW_TITLE,
+            exact=True,
+            timeout=0.8,
+        )
+        opened = False
+        if entry is not None:
+            try:
+                self.locator.click(entry)
+                opened = True
+            except Exception:
+                opened = False
+        if not opened and not self._click_window_relative(*MOMENTS_ENTRY_REL):
+            raise RuntimeError("Unable to click the WeChat Moments entry")
+
+        desktop = self._get_desktop(create=False)
+        manager = self._get_window_manager(create=False)
+        deadline = time.time() + min(max(self.wait_timeout, 3.0), 10.0)
+        while time.time() < deadline:
+            candidates = (
+                manager.list_windows(title_hint=MOMENTS_WINDOW_TITLE)
+                if manager is not None
+                else self._iter_wechat_windows(
+                    desktop,
+                    title_hint=MOMENTS_WINDOW_TITLE,
+                )
+            )
+            for candidate in candidates:
+                if self._element_text(candidate).strip() != MOMENTS_WINDOW_TITLE:
+                    continue
+                self.window = (
+                    manager.normalize(candidate, app_ex=False)
+                    if manager is not None
+                    else candidate
+                )
+                if manager is not None:
+                    manager.normalize_all(active_window=self.window)
+                else:
+                    try:
+                        self.window.set_focus()
+                    except Exception:
+                        pass
+                return
+            time.sleep(0.25)
+        raise RuntimeError("Unable to find the independent WeChat Moments window")
+
+    def like_moment(
+        self,
+        *,
+        author_name: str | None = None,
+        target: str = "first",
+        max_scrolls: int = DEFAULT_MOMENTS_MAX_SCROLLS,
+    ) -> dict[str, Any]:
+        """Like the first visible moment or an author's newest visible moment."""
+
+        self.open_moments()
+        self._require_window()
+        self._normalize_current_window()
+        window_region = self._current_window_region()
+        if window_region is None:
+            raise RuntimeError("Unable to determine the WeChat Moments window bounds")
+
+        author = str(author_name or "").strip()
+        if author == "-1":
+            author = ""
+        mode = "author" if author else str(target or "first").strip().lower()
+        if mode in {"第一条", "第一天", "1"}:
+            mode = "first"
+        if mode not in {"first", "author"}:
+            raise ValueError("WeChat Moments target must be 'first' or 'author'")
+        if mode == "author" and not author:
+            raise ValueError("WeChat Moments author target requires author_name")
+
+        action_region = window_region
+        if mode == "author":
+            author_match = None
+            scroll_limit = max(0, int(max_scrolls))
+            for attempt in range(scroll_limit + 1):
+                author_match = self.image_locator.find_moment_author(
+                    region=window_region,
+                    text=author,
+                )
+                if author_match is not None:
+                    break
+                if attempt < scroll_limit:
+                    self._send_keys("{PGDN}")
+                    time.sleep(0.6)
+            if author_match is None:
+                raise RuntimeError(
+                    f"Unable to find WeChat Moments posts by author: {author}"
+                )
+
+            left, top, width, height = window_region
+            action_top = max(top, author_match.y - 24)
+            action_region = (
+                left,
+                action_top,
+                width,
+                max(1, top + height - action_top),
+            )
+
+        action = self.image_locator.find_first_moment_action(region=action_region)
+        if action is None:
+            target_label = author if mode == "author" else "the first visible post"
+            raise RuntimeError(
+                f"Unable to find the Moments action button for {target_label}"
+            )
+        if not self._click_screen_point(MOMENTS_ACTION_X, action.y):
+            raise RuntimeError("Unable to open the WeChat Moments action menu")
+
+        left, top, width, height = window_region
+        menu_top = max(top, action.y - MOMENTS_MENU_SIZE[1])
+        menu_region = (
+            left,
+            menu_top,
+            width,
+            max(
+                1,
+                min(MOMENTS_MENU_SIZE[1] * 2, top + height - menu_top),
+            ),
+        )
+
+        like_match = None
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            like_match = self.image_locator.find_moment_like_menu(
+                region=menu_region,
+            )
+            if like_match is not None:
+                break
+            state = self.image_locator.find_moment_like_state(
+                region=menu_region,
+            )
+            if state == "already_liked":
+                return {
+                    "success": True,
+                    "status": "already_liked",
+                    "author_name": author or None,
+                    "target": mode,
+                }
+            time.sleep(0.2)
+        if like_match is None:
+            raise RuntimeError("Unable to detect like.png after opening the menu")
+        if not self._click_screen_point(MOMENTS_LIKE_X, like_match.y):
+            raise RuntimeError("Unable to click the WeChat Moments like action")
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            if (
+                self.image_locator.find_moment_like_menu(region=menu_region)
+                is None
+            ):
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError("like.png remained visible after clicking 赞")
+        return {
+            "success": True,
+            "status": "liked",
+            "author_name": author or None,
+            "target": mode,
+        }
 
     def search_official_account(self, account_name: str) -> None:
         self._require_window()
@@ -3181,6 +3614,29 @@ def follow_official_account(
         "follow_clicked": followed,
         "message": sent_message,
     }
+
+
+def like_moment(
+    author_name: str | None = None,
+    *,
+    target: str = "first",
+    launch_path: str | None = None,
+    automation: Any | None = None,
+) -> dict[str, Any]:
+    """Like a WeChat Moments post without toggling an existing like off."""
+
+    author = str(author_name or "").strip()
+    if author == "-1":
+        author = ""
+    mode = "author" if author else str(target or "first").strip().lower()
+    if mode in {"第一条", "第一天", "1"}:
+        mode = "first"
+    client = automation or PywinautoWechatAutomation(launch_path=launch_path)
+    client.open()
+    return client.like_moment(
+        author_name=author or None,
+        target=mode,
+    )
 
 
 def send_official_account_message(
