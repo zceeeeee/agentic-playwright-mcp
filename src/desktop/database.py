@@ -77,10 +77,26 @@ class DesktopDatabase:
           resolved_at TEXT,
           FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS task_stats (
+          task_id TEXT PRIMARY KEY,
+          conversation_id TEXT,
+          duration_ms REAL DEFAULT 0,
+          text_prompt_tokens INTEGER DEFAULT 0,
+          text_completion_tokens INTEGER DEFAULT 0,
+          text_total_tokens INTEGER DEFAULT 0,
+          text_reasoning_tokens INTEGER DEFAULT 0,
+          text_cache_read_tokens INTEGER DEFAULT 0,
+          vision_total_tokens INTEGER DEFAULT 0,
+          step_count INTEGER DEFAULT 0,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
         CREATE INDEX IF NOT EXISTS idx_messages_conversation
           ON messages(conversation_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_tasks_conversation
           ON tasks(conversation_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_task_stats_created
+          ON task_stats(created_at);
         """
         with self._lock, self._connect() as connection:
             connection.executescript(schema)
@@ -310,4 +326,85 @@ class DesktopDatabase:
                    WHERE task_id = ? AND status = 'pending'""",
                 (utc_now(), task_id),
             )
+
+    # ------------------------------------------------------------------
+    # Token / cost statistics
+    # ------------------------------------------------------------------
+
+    def save_task_stats(
+        self,
+        task_id: str,
+        conversation_id: str,
+        stats: dict[str, Any],
+    ) -> None:
+        """Persist token/cost statistics for a completed task."""
+        now = utc_now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """INSERT OR REPLACE INTO task_stats
+                   (task_id, conversation_id, duration_ms,
+                    text_prompt_tokens, text_completion_tokens, text_total_tokens,
+                    text_reasoning_tokens, text_cache_read_tokens,
+                    vision_total_tokens, step_count, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task_id,
+                    conversation_id,
+                    stats.get("duration_ms", 0),
+                    stats.get("text_prompt_tokens", 0),
+                    stats.get("text_completion_tokens", 0),
+                    stats.get("text_total_tokens", 0),
+                    stats.get("text_reasoning_tokens", 0),
+                    stats.get("text_cache_read_tokens", 0),
+                    stats.get("vision_total_tokens", 0),
+                    stats.get("step_count", 0),
+                    now,
+                ),
+            )
+
+    def get_stats_summary(self) -> dict[str, Any]:
+        """Return aggregate token/cost statistics across all tasks."""
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """SELECT
+                     COUNT(*) AS task_count,
+                     COALESCE(SUM(duration_ms), 0) AS total_duration_ms,
+                     COALESCE(SUM(text_prompt_tokens), 0) AS total_text_prompt,
+                     COALESCE(SUM(text_completion_tokens), 0) AS total_text_completion,
+                     COALESCE(SUM(text_total_tokens), 0) AS total_text_tokens,
+                     COALESCE(SUM(text_reasoning_tokens), 0) AS total_text_reasoning,
+                     COALESCE(SUM(text_cache_read_tokens), 0) AS total_text_cache_read,
+                     COALESCE(SUM(vision_total_tokens), 0) AS total_vision_tokens,
+                     COALESCE(SUM(step_count), 0) AS total_steps
+                   FROM task_stats"""
+            ).fetchone()
+        data = dict(row) if row else {}
+        total_all = data.get("total_text_tokens", 0) + data.get("total_vision_tokens", 0)
+        task_count = data.get("task_count", 0) or 1
+        return {
+            "task_count": data.get("task_count", 0),
+            "total_duration_ms": data.get("total_duration_ms", 0),
+            "total_text_prompt": data.get("total_text_prompt", 0),
+            "total_text_completion": data.get("total_text_completion", 0),
+            "total_text_tokens": data.get("total_text_tokens", 0),
+            "total_text_reasoning": data.get("total_text_reasoning", 0),
+            "total_text_cache_read": data.get("total_text_cache_read", 0),
+            "total_vision_tokens": data.get("total_vision_tokens", 0),
+            "total_all_tokens": total_all,
+            "total_steps": data.get("total_steps", 0),
+            "avg_tokens_per_task": round(total_all / task_count),
+        }
+
+    def get_stats_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return per-task stats for the most recent tasks."""
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """SELECT s.*, t.status, t.conversation_id AS task_conversation_id
+                   FROM task_stats s
+                   LEFT JOIN tasks t ON t.id = s.task_id
+                   ORDER BY s.created_at DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return self._rows(rows)
 
