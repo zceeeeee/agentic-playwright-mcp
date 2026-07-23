@@ -377,6 +377,20 @@ class DesktopTaskService:
                 metadata={"final_url": result.final_url, **result.artifacts},
             )
             self.database.update_task(control.task_id, "success")
+
+            # 保存 token 消耗统计
+            stats = {
+                "duration_ms": result.total_duration_ms,
+                "text_prompt_tokens": result.text_tokens.prompt_tokens if result.text_tokens else 0,
+                "text_completion_tokens": result.text_tokens.completion_tokens if result.text_tokens else 0,
+                "text_total_tokens": result.text_tokens.total_tokens if result.text_tokens else 0,
+                "text_reasoning_tokens": result.text_tokens.reasoning_tokens if result.text_tokens else 0,
+                "text_cache_read_tokens": result.text_tokens.cache_read_tokens if result.text_tokens else 0,
+                "vision_total_tokens": result.vision_tokens.total_tokens if result.vision_tokens else 0,
+                "step_count": result.step_count,
+            }
+            self.database.save_task_stats(control.task_id, control.conversation_id, stats)
+
             self.events.publish(
                 "assistant_message",
                 task_id=control.task_id,
@@ -387,7 +401,7 @@ class DesktopTaskService:
                 "task_succeeded",
                 task_id=control.task_id,
                 conversation_id=control.conversation_id,
-                payload={"summary": "任务已经完成", "result": summary},
+                payload={"summary": "任务已经完成", "result": summary, "stats": stats},
             )
             self.events.publish(
                 "agent_state_changed",

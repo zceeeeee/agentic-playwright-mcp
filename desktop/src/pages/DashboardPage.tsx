@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useState } from "react";
 import {
   ArrowRight,
+  BarChart3,
   Bot,
   Eye,
   EyeOff,
@@ -25,6 +26,7 @@ import { useAgentStore } from "../stores/agentStore";
 import type { DesktopSettings } from "../types";
 import { ChatPanel } from "../components/ChatPanel";
 import { AppearanceSettings } from "../components/AppearanceSettings";
+import { ConsoleView } from "../components/ConsoleView";
 import type { DashboardSection } from "../types";
 import { filterAndGroupSkills, type SkillInfo } from "../utils/skillCatalog";
 import { BRAND } from "../branding";
@@ -36,6 +38,7 @@ import {
 const navigation: Array<{ id: DashboardSection; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "聊天", icon: MessageSquare },
   { id: "history", label: "历史任务", icon: History },
+  { id: "console", label: "控制台", icon: BarChart3 },
   { id: "appearance", label: "外观与皮肤", icon: Palette },
   { id: "api", label: "API 与模型", icon: KeyRound },
   { id: "skills", label: "技能管理", icon: ListTree },
@@ -79,6 +82,7 @@ export function DashboardPage() {
       <section className="dashboard-content">
         {section === "chat" ? <ChatPanel dashboard /> : null}
         {section === "history" ? <HistoryView onOpenConversation={() => setSection("chat")} /> : null}
+        {section === "console" ? <ConsoleView /> : null}
         {section === "appearance" ? <AppearanceSettings /> : null}
         {section === "api" || section === "browser" ? <SettingsView initialSection={section} /> : null}
         {section === "skills" ? <SkillsView onImportCommand={(command) => {

@@ -257,6 +257,16 @@ def create_app(
     def close_browser() -> dict[str, bool]:
         return {"closed": service.close_browser()}
 
+    @app.get("/api/stats", dependencies=[auth])
+    def stats_summary() -> dict[str, Any]:
+        """Return aggregate token/cost statistics across all tasks."""
+        return database.get_stats_summary()
+
+    @app.get("/api/stats/history", dependencies=[auth])
+    def stats_history(limit: int = 50) -> list[dict[str, Any]]:
+        """Return per-task stats for the most recent tasks."""
+        return database.get_stats_history(limit)
+
     @app.websocket("/api/events")
     async def event_socket(websocket: WebSocket) -> None:
         supplied = websocket.query_params.get("token")

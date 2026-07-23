@@ -28,6 +28,7 @@ export type {
 export type DashboardSection =
   | "chat"
   | "history"
+  | "console"
   | "appearance"
   | "api"
   | "models"

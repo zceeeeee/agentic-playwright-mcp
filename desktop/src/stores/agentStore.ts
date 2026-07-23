@@ -145,7 +145,10 @@ async function connectEvents(handle: (event: BackendEvent) => void, setConnected
     window.clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  if (socket) socket.close();
+  if (socket) {
+    socket.onclose = null;  // prevent old socket's onclose from scheduling a reconnect
+    socket.close();
+  }
   socket = await eventSocket();
   socket.onopen = () => setConnected(true);
   socket.onmessage = (message) => {
@@ -226,7 +229,10 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       window.clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    socket?.close();
+    if (socket) {
+      socket.onclose = null;
+      socket.close();
+    }
     socket = null;
     await refreshBackendConfig();
     set({ backendConnected: false });
