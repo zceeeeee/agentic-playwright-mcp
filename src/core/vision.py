@@ -8,6 +8,12 @@ import os
 from dataclasses import dataclass, field
 
 from src.core.browser_manager import get_browser_manager
+from src.core.token_tracker import (
+    TokenUsage,
+    get_token_tracker,
+    parse_anthropic_usage,
+    parse_openai_usage,
+)
 
 
 @dataclass
@@ -53,6 +59,12 @@ class VisionModule:
         self._base_url = base_url or self._get_base_url()
         self._model = model or self._get_model()
         self._timeout = timeout or float(os.getenv("VISION_TIMEOUT", "60"))
+        self._last_usage: TokenUsage | None = None
+
+    @property
+    def last_usage(self) -> TokenUsage | None:
+        """Token usage from the most recent vision API call."""
+        return self._last_usage
 
     def analyze_page(self, question: str | None = None) -> PageAnalysis:
         page = get_browser_manager().get_page()
@@ -203,7 +215,11 @@ class VisionModule:
             timeout=self._timeout,
         )
         response.raise_for_status()
-        return response.json()["content"][0]["text"]
+        data = response.json()
+        self._last_usage = parse_anthropic_usage(data)
+        self._last_usage.vision_tokens = self._last_usage.total_tokens
+        get_token_tracker().record(self._last_usage, is_vision=True)
+        return data["content"][0]["text"]
 
     def _call_openai(self, prompt: str, b64_image: str) -> str:
         import httpx
@@ -235,7 +251,11 @@ class VisionModule:
             timeout=self._timeout,
         )
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        data = response.json()
+        self._last_usage = parse_openai_usage(data)
+        self._last_usage.vision_tokens = self._last_usage.total_tokens
+        get_token_tracker().record(self._last_usage, is_vision=True)
+        return data["choices"][0]["message"]["content"]
 
     def _parse_response(self, raw_response: str) -> PageAnalysis:
         analysis = PageAnalysis(raw_response=raw_response)

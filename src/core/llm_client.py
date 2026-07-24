@@ -32,6 +32,13 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict
 
+from src.core.token_tracker import (
+    TokenUsage,
+    get_token_tracker,
+    parse_anthropic_usage,
+    parse_openai_usage,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,6 +112,7 @@ class LLMClient:
         self._config = config or LLMConfig.from_env()
         self._http_client: Any = None  # 延迟初始化的 httpx.Client
         self._cancelled = False
+        self._last_usage: TokenUsage | None = None
 
     @property
     def available(self) -> bool:
@@ -131,6 +139,11 @@ class LLMClient:
         # Keep unknown OpenAI-compatible models disabled. In particular,
         # mimo-v2.5-pro is text-only and must never be inferred as visual.
         return model.startswith(("gpt-4o", "gpt-4.1", "gpt-5"))
+
+    @property
+    def last_usage(self) -> TokenUsage | None:
+        """Token usage from the most recent API call."""
+        return self._last_usage
 
     # -------------------------------------------------------------------
     # 接口 1: 自由文本对话
@@ -285,6 +298,8 @@ class LLMClient:
             # If content is empty, try reasoning_content.
             # The caller (chat_json / chat_json_with_retry) handles
             # extracting JSON from mixed reasoning+JSON text.
+            self._last_usage = parse_openai_usage(data)
+            get_token_tracker().record(self._last_usage)
             return content_text or reasoning_text
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
@@ -338,6 +353,8 @@ class LLMClient:
             )
             response.raise_for_status()
             data = response.json()
+            self._last_usage = parse_openai_usage(data)
+            get_token_tracker().record(self._last_usage)
             return data["choices"][0]["message"]["content"]
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
@@ -380,6 +397,8 @@ class LLMClient:
             )
             response.raise_for_status()
             data = response.json()
+            self._last_usage = parse_anthropic_usage(data)
+            get_token_tracker().record(self._last_usage)
             # Anthropic 返回格式: {"content": [{"type": "text", "text": "..."}]}
             return data["content"][0]["text"]
         except httpx.HTTPStatusError as exc:

@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 from src.core.browser_manager import get_browser_manager
 from src.core.dom_explorer import summarize_page
+from src.core.token_tracker import TokenUsage, get_token_tracker
 from src.core.event_bus import (
     EVENT_AGENT_ACT,
     EVENT_AGENT_HEAL,
@@ -137,6 +138,9 @@ class AgentStep:
     mode: str = ""
     actions: list[Any] = field(default_factory=list)
     snapshot: Any | None = None
+    # --- cost tracking ---
+    token_usage: TokenUsage | None = None
+    duration_ms: float = 0.0
 
 
 @dataclass
@@ -152,6 +156,40 @@ class AgentTaskResult:
     sub_tasks: list[str] = field(default_factory=list)
     sub_results: list["AgentTaskResult"] = field(default_factory=list)
     artifacts: dict[str, Any] = field(default_factory=dict)
+    # --- cost tracking ---
+    total_duration_ms: float = 0.0
+    text_tokens: TokenUsage | None = None
+    vision_tokens: TokenUsage | None = None
+    step_count: int = 0
+
+    def format_cost_summary(self) -> str:
+        """Format a human-readable cost summary line."""
+        parts = []
+        # Duration
+        if self.total_duration_ms > 0:
+            secs = self.total_duration_ms / 1000
+            parts.append(f"耗时: {secs:.1f}s")
+        # Text tokens
+        if self.text_tokens and self.text_tokens.total_tokens > 0:
+            t = self.text_tokens
+            parts.append(
+                f"文本 tokens: {t.total_tokens:,} "
+                f"(prompt: {t.prompt_tokens:,}, completion: {t.completion_tokens:,})"
+            )
+        # Vision tokens
+        if self.vision_tokens and self.vision_tokens.total_tokens > 0:
+            parts.append(f"视觉 tokens: {self.vision_tokens.total_tokens:,}")
+        # Total
+        all_tokens = 0
+        if self.text_tokens:
+            all_tokens += self.text_tokens.total_tokens
+        if self.vision_tokens:
+            all_tokens += self.vision_tokens.total_tokens
+        if all_tokens > 0:
+            parts.append(f"总 tokens: {all_tokens:,}")
+        if self.step_count > 0:
+            parts.append(f"步数: {self.step_count}")
+        return " | ".join(parts) if parts else "无 LLM 调用"
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +331,17 @@ class AgentLoop:
                 outputs.append(f"  {sub_result.output}")
         combined.output = "\n".join(outputs)
 
+        # 汇总消耗
+        combined.total_duration_ms = sum(r.total_duration_ms for r in combined.sub_results)
+        combined.step_count = sum(r.step_count for r in combined.sub_results)
+        combined.text_tokens = TokenUsage()
+        combined.vision_tokens = TokenUsage()
+        for r in combined.sub_results:
+            if r.text_tokens:
+                combined.text_tokens += r.text_tokens
+            if r.vision_tokens:
+                combined.vision_tokens += r.vision_tokens
+
         logger.info(
             "Multi-command finished: success=%s sub_tasks=%d/%d",
             combined.success,
@@ -400,6 +449,9 @@ class AgentLoop:
         self._task_artifacts = {}
         state = AgentState.PLAN if self._desktop_only else AgentState.OBSERVE
         step_number = 0
+        task_start = time.monotonic()
+        tracker = get_token_tracker()
+        tracker.reset()
         pending_script: str | None = None  # PLAN 阶段生成的脚本，传递给 ACT
         pending_actions: list[Any] | None = None
         pending_mode: str = ""
@@ -456,6 +508,7 @@ class AgentLoop:
                         task=task,
                         timestamp=time.time(),
                     )
+                    step_start = time.monotonic()
 
                     try:
                         if state == AgentState.OBSERVE:
@@ -497,6 +550,11 @@ class AgentLoop:
                             exc_info=True,
                         )
 
+                    # 记录步耗时和 token 消耗
+                    step.duration_ms = (time.monotonic() - step_start) * 1000
+                    step.token_usage = tracker.total
+                    tracker.snapshot_step(step_number, state.value)
+
                     result.steps.append(step)
 
                     # 发射步事件
@@ -513,6 +571,10 @@ class AgentLoop:
             result.success = state == AgentState.DONE
             result.artifacts = dict(self._task_artifacts)
             result.final_url = bm.get_page().url if bm.is_alive() else ""
+            result.total_duration_ms = (time.monotonic() - task_start) * 1000
+            result.text_tokens = TokenUsage(**tracker.text.to_dict())
+            result.vision_tokens = TokenUsage(**tracker.vision.to_dict())
+            result.step_count = step_number
 
             if result.steps:
                 result.output = "\n".join(
@@ -949,6 +1011,10 @@ class AgentLoop:
                 page = bm.get_page()
                 if explore_agent.is_blank_page(getattr(page, "url", "")):
                     entry_url = explore_agent.resolve_initial_entry_url(task)
+                    if not entry_url:
+                        # _ENTRYPOINTS 未命中，通过搜索引擎查找目标站点
+                        logger.info("PLAN: llm_explore entry not in table, trying search")
+                        entry_url = explore_agent._resolve_entry_url_via_search(task)
                     if entry_url:
                         logger.info("PLAN: llm_explore navigating blank page to %s", entry_url)
                         explore_agent._goto_initial_entry_url(entry_url)

@@ -351,8 +351,11 @@ def run_task(task: str, max_steps: int = 20) -> str:
         parts.append("\nExecution steps:")
         for step in result.steps:
             status = "✓" if step.success else "✗"
+            cost = ""
+            if step.token_usage and step.token_usage.total_tokens > 0:
+                cost = f" [{step.token_usage.total_tokens:,} tokens, {step.duration_ms:.0f}ms]"
             parts.append(
-                f"  {status} Step {step.step_number} [{step.state}]: {step.result}"
+                f"  {status} Step {step.step_number} [{step.state}]: {step.result}{cost}"
             )
 
     if result.output:
@@ -363,6 +366,11 @@ def run_task(task: str, max_steps: int = 20) -> str:
 
     if result.error:
         parts.append(f"\nError: {result.error}")
+
+    # 消耗摘要
+    cost_summary = result.format_cost_summary()
+    if cost_summary:
+        parts.append(f"\nCost: {cost_summary}")
 
     return "\n".join(parts)
 
