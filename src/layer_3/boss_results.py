@@ -346,44 +346,87 @@ def _ocr_salary_from_card(page: Any, card_index: int) -> str:
         Salary text extracted via OCR, or empty string if failed.
     """
     import asyncio
+    import logging
 
     from src.core.ocr import get_ocr_module
 
+    logger = logging.getLogger(__name__)
+
     ocr = get_ocr_module()
     if ocr is None:
+        logger.warning("BOSS OCR[%d]: ocr module is None", card_index)
         return ""
 
-    # Find the salary element — 匹配 li.job-card-box 内的 .job-salary
-    salary_el = page.locator(
-        "li.job-card-box .job-salary, "
-        ".job-card-box .job-salary, "
-        ".job-card-wrap .job-salary, "
-        "[class*='job-salary']"
-    ).nth(card_index)
+    # 先用 JS 直接定位第 N 个卡片内的薪资元素，取其 bounding box
+    # 这比 page.locator().nth() 更可靠
+    box_info = page.evaluate("""(index) => {
+        const cards = document.querySelectorAll('li.job-card-box');
+        if (index >= cards.length) return null;
+        const card = cards[index];
+        const salaryEl = card.querySelector('.job-salary, [class*="job-salary"]');
+        if (!salaryEl) return {found: false, card_text: (card.innerText || '').substring(0, 100)};
+        const rect = salaryEl.getBoundingClientRect();
+        return {
+            found: true,
+            x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+            text: (salaryEl.innerText || '').substring(0, 50),
+            visible: rect.width > 0 && rect.height > 0,
+        };
+    }""", card_index)
 
+    if not box_info:
+        logger.warning("BOSS OCR[%d]: card not found", card_index)
+        return ""
+
+    if not box_info.get("found"):
+        logger.info("BOSS OCR[%d]: no .job-salary in card, card_text=%r",
+                     card_index, box_info.get("card_text", ""))
+        return ""
+
+    if not box_info.get("visible"):
+        logger.info("BOSS OCR[%d]: salary element not visible (w=%s h=%s)",
+                     card_index, box_info.get("width"), box_info.get("height"))
+        return ""
+
+    logger.info("BOSS OCR[%d]: salary box=(%s,%s,%s,%s) text=%r",
+                card_index,
+                box_info.get("x"), box_info.get("y"),
+                box_info.get("width"), box_info.get("height"),
+                box_info.get("text"))
+
+    # 用坐标截图（更可靠，不依赖 Playwright locator 的索引逻辑）
     try:
-        if not salary_el.is_visible(timeout=2000):
-            return ""
-        screenshot_bytes = salary_el.screenshot()
-    except Exception:
+        x = box_info["x"]
+        y = box_info["y"]
+        w = box_info["width"]
+        h = box_info["height"]
+        screenshot_bytes = page.screenshot(
+            clip={"x": x, "y": y, "width": w, "height": h}
+        )
+    except Exception as exc:
+        logger.warning("BOSS OCR[%d]: screenshot failed: %s", card_index, exc)
         return ""
 
     if not screenshot_bytes:
+        logger.warning("BOSS OCR[%d]: screenshot is empty", card_index)
         return ""
+
+    logger.info("BOSS OCR[%d]: screenshot %d bytes, running OCR...", card_index, len(screenshot_bytes))
 
     try:
         result = asyncio.run(ocr.recognize(screenshot_bytes))
     except RuntimeError:
-        # asyncio.run() 不能在已运行的事件循环中调用（Playwright 场景）
-        # 用新线程运行独立事件循环
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(asyncio.run, ocr.recognize(screenshot_bytes))
             result = future.result(timeout=10)
-    except Exception:
+    except Exception as exc:
+        logger.warning("BOSS OCR[%d]: recognize failed: %s", card_index, exc)
         return ""
 
     text = (result.raw_text or "").strip()
+    logger.info("BOSS OCR[%d]: result text=%r", card_index, text)
+
     # Match salary patterns: "15-25K", "2-4万·13薪", "面议" etc.
     salary_match = re.search(
         r"(\d+(?:\.\d+)?)\s*[-~]\s*(\d+(?:\.\d+)?)\s*[Kk万千](?:\s*[·.]\s*\d+\s*薪)?",
@@ -416,6 +459,9 @@ def enrich_boss_salaries(page: Any, jobs: list[dict[str, Any]]) -> list[dict[str
     Returns:
         The same list with salary fields updated in-place.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     if page is None or not hasattr(page, "locator"):
         return jobs
 
@@ -427,6 +473,7 @@ def enrich_boss_salaries(page: Any, jobs: list[dict[str, Any]]) -> list[dict[str
         if salary and not needs_ocr and re.search(r"\d", salary):
             continue
 
+        logger.info("BOSS enrich[%d]: salary=%r needs_ocr=%s → triggering OCR", i, salary, needs_ocr)
         ocr_salary = _ocr_salary_from_card(page, i)
         if ocr_salary:
             job["salary"] = ocr_salary
