@@ -1348,7 +1348,7 @@ class SkillRouter:
             f"{chr(10).join(param_lines)}\n\n"
             f"{auth_wait}"
             f"# 自动调用\n"
-            f"{('__result__ = ' if skill.id == 'domain/taobao_search' else '')}run({args_str})"
+            f"{('__result__ = ' if skill.id in {'domain/taobao_search', 'domain/boss_search'} else '')}run({args_str})"
         )
 
     @staticmethod
@@ -1687,8 +1687,8 @@ class SkillRouter:
 
         if ptype == "keyword":
             direct_patterns = [
-                r"(?:在|用|打开)?\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?\s*(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+)$",
-                r"(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+?)\s*(?:用|在|到)\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?[。.!！?？\s]*$",
+                r"(?:在|用|打开)?\s*(?:boss直聘|BOSS直聘|直聘|zhipin|百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?\s*(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*([^，,。.;；!！?？]+)$",
+                r"(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*([^，,。.;；!！?？]+?)\s*(?:用|在|到)\s*(?:boss直聘|BOSS直聘|直聘|zhipin|百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?[。.!！?？\s]*$",
             ]
             for pattern in direct_patterns:
                 match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
@@ -1708,6 +1708,7 @@ class SkillRouter:
             )
             # 去掉已知站点名（包含大小写和常见变体）
             site_names = [
+                "BOSS直聘", "boss直聘", "Boss直聘", "直聘", "zhipin", "Zhipin",
                 "哔哩哔哩", "xiaohongshu", "小红书", "bilibili", "youtube",
                 "amazon", "google", "doubao", "douyin", "outlook", "douban",
                 "taobao", "csnd", "csdn", "github", "gmail", "zhihu",
@@ -1746,8 +1747,8 @@ class SkillRouter:
         # 提取关键词（去掉常见的动作词和站点名）
         # 注意：长词必须排在短词前面，否则 "搜索" 中的 "搜" 会先被匹配
         direct_patterns = [
-            r"(?:在|用|打开)?\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?\s*(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+)$",
-            r"(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*(.+?)\s*(?:用|在|到)\s*(?:百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?[。.!！?？\s]*$",
+            r"(?:在|用|打开)?\s*(?:boss直聘|BOSS直聘|直聘|zhipin|百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?\s*(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*([^，,。.;；!！?？]+)$",
+            r"(?:搜索|搜|查找|查询|查|找|问|问答|search)\s*([^，,。.;；!！?？]+?)\s*(?:用|在|到)\s*(?:boss直聘|BOSS直聘|直聘|zhipin|百度|baidu|google|谷歌|bing|必应|小红书|xiaohongshu|xhs|rednote|知乎|zhihu|github|amazon|亚马逊|youtube|油管|bilibili|B站|b站|哔哩哔哩|哔哩|微博|weibo|淘宝|taobao|豆包|doubao|csdn|csnd)(?:上)?[。.!！?？\s]*$",
         ]
         for pattern in direct_patterns:
             match = re.search(pattern, task, re.IGNORECASE | re.DOTALL)
@@ -1767,6 +1768,7 @@ class SkillRouter:
             flags=re.IGNORECASE,
         )
         site_names = [
+            "BOSS直聘", "boss直聘", "Boss直聘", "直聘", "zhipin", "Zhipin",
             "哔哩哔哩", "xiaohongshu", "小红书", "bilibili", "youtube",
             "amazon", "google", "doubao", "douyin", "outlook", "douban",
             "taobao", "csnd", "csdn", "github", "gmail", "zhihu",

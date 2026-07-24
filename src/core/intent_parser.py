@@ -68,6 +68,7 @@ _KNOWN_SITES = {
     "github": "GitHub",
     "gmail": "Gmail/谷歌邮箱",
     "outlook": "Outlook/微软邮箱",
+    "boss": "BOSS直聘",
 }
 
 

@@ -1,0 +1,159 @@
+name: boss
+base_url: https://www.zhipin.com
+locators:
+  # ── 搜索框 ──
+  search_input:
+    css:
+      - ".search-input-box input"
+      - "input.i-input"
+      - "input[placeholder*='搜索']"
+      - "input[placeholder*='职位']"
+      - ".search-box input"
+      - "#search-input"
+    xpath:
+      - "//input[contains(@placeholder,'搜索')]"
+      - "//input[contains(@placeholder,'职位')]"
+
+  # ── 搜索按钮 ──
+  search_button:
+    css:
+      - ".btn-search"
+      - "button.btn-search"
+      - ".search-box .btn"
+      - "button[type='submit']"
+    xpath:
+      - "//button[contains(@class,'search')]"
+
+  # ── 城市选择器 ──
+  city_selector:
+    css:
+      - ".city-name"
+      - ".location-name"
+      - ".search-condition-box .city"
+      - ".city-sel"
+    xpath:
+      - "//span[contains(@class,'city')]"
+
+  # ── 城市搜索框（弹窗内）──
+  city_search_input:
+    css:
+      - ".city-panel input"
+      - ".search-city input"
+      - "input[placeholder*='城市']"
+      - "input[placeholder*='搜索城市']"
+    xpath:
+      - "//input[contains(@placeholder,'城市')]"
+
+  # ── 职位卡片 ──
+  job_card:
+    css:
+      - ".job-card-wrapper"
+      - ".job-list .job-card"
+      - ".search-job-result .job-card-body"
+      - "[class*='job-card']"
+    xpath:
+      - "//div[contains(@class,'job-card')]"
+
+  # ── 职位标题 ──
+  job_title:
+    css:
+      - ".job-name"
+      - ".job-title"
+      - ".job-card-wrapper .job-name"
+      - "[class*='job-name']"
+    xpath:
+      - "//span[contains(@class,'job-name')]"
+      - "//a[contains(@class,'job-name')]"
+
+  # ── 公司名称 ──
+  company_name:
+    css:
+      - ".company-name"
+      - ".company-name a"
+      - ".job-card-wrapper .company-name"
+      - "[class*='company-name']"
+    xpath:
+      - "//a[contains(@class,'company-name')]"
+
+  # ── 薪资 ──
+  salary:
+    css:
+      - ".salary"
+      - ".job-limit .salary"
+      - ".job-card-wrapper .salary"
+      - "[class*='salary']"
+    xpath:
+      - "//span[contains(@class,'salary')]"
+
+  # ── 地点/区域 ──
+  job_area:
+    css:
+      - ".job-area"
+      - ".job-limit .info-desc"
+      - ".job-card-wrapper .job-area"
+      - "[class*='job-area']"
+    xpath:
+      - "//span[contains(@class,'job-area')]"
+
+  # ── 经验/学历要求 ──
+  job_tag:
+    css:
+      - ".tag-list"
+      - ".job-limit .tag-list"
+      - ".job-card-wrapper .tag-list"
+      - "[class*='tag-list']"
+    xpath:
+      - "//div[contains(@class,'tag-list')]"
+
+  # ── 下一页按钮 ──
+  next_page:
+    css:
+      - ".ui-icon-arrow-right"
+      - ".pagination .next"
+      - "a.next"
+      - ".ui-pager li:last-child"
+      - "[class*='arrow-right']"
+    xpath:
+      - "//a[contains(@class,'next')]"
+      - "//li[contains(@class,'next')]"
+
+  # ── 分页器 ──
+  pagination:
+    css:
+      - ".pagination"
+      - ".ui-pager"
+      - ".search-job-result .pagination"
+      - "[class*='pager']"
+    xpath:
+      - "//div[contains(@class,'pager')]"
+      - "//ul[contains(@class,'pagination')]"
+
+  # ── 登录弹窗 ──
+  login_dialog:
+    css:
+      - ".dialog-con"
+      - ".login-dialog"
+      - ".modal-dialog"
+      - "[class*='login-dialog']"
+    xpath:
+      - "//div[contains(@class,'dialog')]"
+
+  # ── 搜索结果列表容器 ──
+  job_list_container:
+    css:
+      - ".job-list-box"
+      - ".search-job-result"
+      - ".job-list"
+      - "[class*='job-list']"
+    xpath:
+      - "//div[contains(@class,'job-list')]"
+
+  # ── 无搜索结果提示 ──
+  no_result:
+    css:
+      - ".empty-content"
+      - ".no-result"
+      - ".search-empty"
+      - "[class*='empty']"
+    xpath:
+      - "//div[contains(@class,'empty')]"

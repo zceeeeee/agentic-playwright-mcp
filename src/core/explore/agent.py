@@ -30,6 +30,7 @@ from src.core.explore.snapshot import SnapshotGenerator
 from src.core.explore.vision_router import VisionBudgetExceeded, VisionRouter
 from src.core.intent_parser import LLMIntentParser
 from src.core.llm_utils import chat_json_with_retry
+from src.core.token_tracker import get_token_tracker
 from src.logging import get_logger
 
 logger = get_logger(__name__)
@@ -53,6 +54,7 @@ _ENTRYPOINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("weibo", "https://weibo.com/", ("weibo", "微博")),
     ("taobao", "https://www.taobao.com/", ("taobao", "淘宝")),
     ("jd", "https://www.jd.com/", ("jd", "京东")),
+    ("boss", "https://www.zhipin.com/", ("boss", "boss直聘", "BOSS直聘", "直聘", "zhipin")),
 )
 
 _PLATFORM_ACTION_WORDS = (

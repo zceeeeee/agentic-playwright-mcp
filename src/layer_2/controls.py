@@ -682,7 +682,7 @@ def save_cookies(domain: str) -> str:
 
 
 def load_cookies(domain: str) -> str:
-    """加载指定站点的 cookie / localStorage（需重启 context）。
+    """加载指定站点的 cookie / localStorage（自动启动浏览器）。
 
     Args:
         domain: 站点名（对应 domains/{domain}.yaml）。
@@ -697,9 +697,7 @@ def load_cookies(domain: str) -> str:
         return f"未找到 {domain} 的登录状态"
 
     bm = get_browser_manager()
-    if not bm.is_alive():
-        return "加载失败: 浏览器未启动"
-
+    # 浏览器未启动时自动启动并加载 cookies
     bm.launch_with_domain(domain)
     return f"已加载 {domain} 的登录状态"
 
@@ -826,6 +824,110 @@ def taobao_collect_products(keyword: str, max_items: int = 20) -> dict:
     return build_taobao_search_result(keyword, products, max_products=5)
 
 
+def boss_collect_jobs(keyword: str, max_pages: int = 5) -> dict:
+    """Collect BOSS Zhipin jobs via infinite scroll.
+
+    BOSS 直聘使用无限滚动加载，没有翻页按钮。
+    ``max_pages`` 按 "每页 4 个卡片" 换算为目标卡片数（max_pages * 4），
+    通过反复滚动页面触发懒加载，直到达到目标数量或无新卡片加载。
+
+    Args:
+        keyword: Search keyword (pure keyword without city prefix).
+        max_pages: 逻辑页数，默认 5（实际目标 5*4=20 个卡片）。
+
+    Returns:
+        Structured dict with ``type: "boss_job_search"``.
+    """
+    from src.layer_3.boss_results import (
+        BossResultError,
+        build_boss_search_result,
+        enrich_boss_salaries,
+        extract_boss_jobs,
+    )
+
+    page = get_browser_manager().get_page()
+    last_debug_info: dict = {}
+
+    # 目标卡片数：每 "页" 4 个卡片
+    target_count = max_pages * 4
+    # 去重集合：用 title|company 作为唯一键
+    seen_keys: set[str] = set()
+    all_jobs: list[dict] = []
+    # 连续无新增卡片的轮次上限
+    max_empty_rounds = 3
+    empty_rounds = 0
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    for scroll_round in range(50):  # 最多滚动 50 轮，防止死循环
+        # 滚动到底部触发懒加载
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(1500)
+
+        try:
+            jobs, debug_info = extract_boss_jobs(page, max_items=target_count * 2)
+            last_debug_info = debug_info
+        except BossResultError as exc:
+            logger.warning("BOSS scroll round %d extract failed: %s", scroll_round + 1, exc)
+            empty_rounds += 1
+            if empty_rounds >= max_empty_rounds:
+                break
+            continue
+
+        # 去重：只保留新卡片
+        new_count = 0
+        for job in jobs:
+            key = str(job.get("title", "")) + "|" + str(job.get("company", ""))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                all_jobs.append(job)
+                new_count += 1
+
+        if new_count == 0:
+            empty_rounds += 1
+            if empty_rounds >= max_empty_rounds:
+                logger.info("BOSS: %d consecutive rounds with no new cards, stopping", max_empty_rounds)
+                break
+        else:
+            empty_rounds = 0
+            logger.info("BOSS scroll round %d: +%d new cards, total %d/%d",
+                        scroll_round + 1, new_count, len(all_jobs), target_count)
+
+        # 已达目标数量
+        if len(all_jobs) >= target_count:
+            logger.info("BOSS: reached target %d cards", target_count)
+            break
+
+    # OCR 补全薪资（只对前 target_count 个）
+    all_jobs = enrich_boss_salaries(page, all_jobs[:target_count])
+
+    result = build_boss_search_result(keyword, all_jobs[:target_count])
+    # 附加调试信息（供脚本层 log 输出）
+    if last_debug_info:
+        result["debug_classes"] = last_debug_info.get("debug_classes", [])
+        result["debug_log"] = last_debug_info.get("debug_log", [])
+        result["body_text_preview"] = last_debug_info.get("body_text_preview", "")
+    return result
+
+
+def build_boss_search_url(keyword: str) -> tuple[str, str, str]:
+    """Build the BOSS Zhipin search URL from a keyword string.
+
+    Parses the city from the keyword (e.g. "深圳的AI产品经理"),
+    constructs the search URL, and returns (url, city, pure_keyword).
+
+    Args:
+        keyword: Search keyword string, may include city prefix.
+
+    Returns:
+        (url, city_name, pure_keyword) tuple.
+    """
+    from src.layer_3.boss_results import build_boss_search_url as _build
+
+    return _build(keyword)
+
+
 def wechat_send_official_account_message(
     account_name: str,
     message: str,
@@ -911,6 +1013,8 @@ def get_controls_exports() -> Dict[str, Any]:
         "wps_document_read": wps_document_read,
         "wps_document_rewrite": wps_document_rewrite,
         "taobao_collect_products": taobao_collect_products,
+        "boss_collect_jobs": boss_collect_jobs,
+        "build_boss_search_url": build_boss_search_url,
         "wechat_follow_official_account": wechat_follow_official_account,
         "wechat_like_moment": wechat_like_moment,
         "wechat_send_official_account_message": wechat_send_official_account_message,

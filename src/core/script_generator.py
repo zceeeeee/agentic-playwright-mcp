@@ -61,6 +61,7 @@ class ScriptGenerator:
         "jd": {"url": "https://www.jd.com", "name": "京东"},
         "pdd": {"url": "https://www.pinduoduo.com", "name": "拼多多"},
         "weather": {"url": "https://www.weather.com.cn", "name": "天气网"},
+        "boss": {"url": "https://www.zhipin.com", "name": "BOSS直聘"},
     }
 
     # URL 直接搜索的网站（不需要填写表单）

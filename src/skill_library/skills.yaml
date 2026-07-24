@@ -938,6 +938,41 @@ skills:
         required: true
         description: "搜索关键词"
 
+  # ──────────────────────────────────────────────
+  # 招聘平台
+  # ──────────────────────────────────────────────
+
+  - id: "domain/boss_search"
+    name: "BOSS直聘搜索"
+    type: "domain"
+    platform: "boss"
+    action: "search"
+    triggers: ["boss", "BOSS", "boss直聘", "BOSS直聘", "直聘", "zhipin", "招聘", "求职", "职位", "找工作", "岗位"]
+    trigger_patterns:
+      - "(?:在|用|打开)?\\s*(?:boss直聘|BOSS直聘|boss|BOSS|直聘|zhipin)(?:上)?\\s*(?:搜索|搜|查找|查询|查|找|search)\\s*(?:全国|北京|上海|广州|深圳|杭州|成都|南京|武汉|西安|苏州|长沙|天津|重庆|郑州|东莞|青岛|合肥|厦门|昆明|大连|珠海|佛山|宁波)?(?:的|地)?\\s*(.+)"
+      - "(?:搜索|搜|查找|查询|查|找|search)\\s*(.+?)\\s*(?:用|在|到)\\s*(?:boss直聘|BOSS直聘|boss|BOSS|直聘|zhipin)(?:上)?$"
+      - "(?:在|去|到)?\\s*(?:boss直聘|BOSS直聘|boss|BOSS|直聘|zhipin)(?:上)?\\s*(?:找|搜索|搜)\\s*(?:全国|北京|上海|广州|深圳|杭州|成都|南京|武汉|西安|苏州|长沙|天津|重庆|郑州|东莞|青岛|合肥|厦门|昆明|大连|珠海|佛山|宁波)?(?:的|地)?\\s*(.+)"
+      - "(?:招聘|求职|找工作|岗位).{0,20}(?:搜索|搜|查找)"
+    url_patterns: ["zhipin.com"]
+    description: "在 BOSS 直聘搜索职位，支持多页数据采集、LLM 分析总结和 PDF 报告导出"
+    version: "2.0.0"
+    examples:
+      - "在BOSS直聘搜索AI产品经理"
+      - "BOSS直聘搜索深圳的Java开发岗位"
+      - "在直聘上找一下Python工程师"
+      - "帮我在zhipin搜索数据分析师"
+      - "在BOSS直聘搜索深圳地区的AI产品经理岗位，分析前5页的内容进行总结，导出一份PDF报告"
+    params:
+      keyword:
+        type: keyword
+        required: true
+        description: "搜索内容，包含城市+职位，如'深圳的AI产品经理'、'北京Java开发'、'产品经理'（无城市则默认全国）"
+      max_pages:
+        type: number
+        required: false
+        default: 5
+        description: "采集页数，默认 5"
+
   - id: "domain/taobao_search"
     name: "淘宝搜索"
     type: "domain"
@@ -1382,6 +1417,10 @@ sources:
 
   - id: "domain/xiaohongshu_search"
     file: "search/xiaohongshu_search.py"
+    entry: "run"
+
+  - id: "domain/boss_search"
+    file: "search/boss_search.py"
     entry: "run"
 
   - id: "domain/taobao_search"

@@ -107,6 +107,8 @@ class GenericLoginGuard:
             return "gmail"
         if host == "taobao.com" or host.endswith(".taobao.com"):
             return "taobao"
+        if host == "zhipin.com" or host.endswith(".zhipin.com"):
+            return "boss"
         labels = [part for part in host.split(".") if part and part != "www"]
         return labels[0] if labels else "default"
 
@@ -195,6 +197,8 @@ class GenericLoginGuard:
             )
             has_session = bool(cookies.get("cookie2") or cookies.get("unb"))
             return has_identity and has_session
+        if domain == "boss":
+            return bool(cookies.get("wt2") or cookies.get("wbp_cst"))
 
         auth_words = (
             "auth",
@@ -481,6 +485,7 @@ class GenericLoginGuard:
             deadline = time.monotonic() + max(1, timeout_seconds)
             known_domains = {
                 "bilibili",
+                "boss",
                 "douyin",
                 "github",
                 "gmail",

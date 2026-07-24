@@ -387,6 +387,9 @@ class ScriptEngine:
                 )
                 has_session = bool(cookies.get("cookie2") or cookies.get("unb"))
                 return has_identity and has_session
+            if domain == "boss":
+                # wt2 = 用户会话, wbp_cst = 认证 token
+                return bool(cookies.get("wt2") or cookies.get("wbp_cst"))
             auth_words = (
                 "auth",
                 "login",
